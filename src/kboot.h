@@ -26,6 +26,11 @@ int kboot_set_uboot(const char *name, const char *value);
 int kboot_prepare_dt(void *fdt);
 int kboot_boot(void *kernel);
 
+/* Boot-args RAM range and boot framebuffer base, for the kboot_* SoC helpers */
+u64 kboot_ram_base(void);
+u64 kboot_ram_size(void);
+u64 kboot_fb_base(void);
+
 // from rust/usb4.rs
 u64 rust_usb4_router_uuid(void);
 

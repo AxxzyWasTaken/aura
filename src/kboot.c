@@ -51,6 +51,21 @@ extern const char *const m1n1_version;
 
 int dt_set_gpu(void *dt);
 
+u64 kboot_ram_base(void)
+{
+    return cur_boot_args.phys_base;
+}
+
+u64 kboot_ram_size(void)
+{
+    return cur_boot_args.mem_size;
+}
+
+u64 kboot_fb_base(void)
+{
+    return cur_boot_args.video.base;
+}
+
 #define DT_ALIGN 16384
 
 #define bail(...)                                                                                  \

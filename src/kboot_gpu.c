@@ -3,9 +3,11 @@
 #include "kboot.h"
 #include "adt.h"
 #include "assert.h"
+#include "exception.h"
 #include "firmware.h"
 #include "malloc.h"
 #include "math.h"
+#include "mcc.h"
 #include "pmgr.h"
 #include "soc.h"
 #include "utils.h"
@@ -490,6 +492,1153 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
     return 0;
 }
 
+/*
+ * T6030 (M3 Pro, AGX G15S) support.
+ *
+ * This targets the 14.8.3 GPU firmware. Values marked TODO are not confirmed on
+ * hardware yet.
+ *
+ * Boot safety comes first: this boot.bin boots every kernel on the machine, so nothing in here may
+ * fail kboot. dt_set_gpu_t6030() therefore
+ * - marks the gpu node disabled before it does anything else,
+ * - positively identifies the loaded GPU firmware as the 14.8.3 ABI before it touches any GPU
+ *   register (drm/asahi only accepts apple,firmware-compat = <14 8 3> for G15),
+ * - length/range checks every ADT input (no ADT_GETPROP: it copies before checking the length),
+ * - touches no GPU hardware and leaves the node disabled unless boot.bin carries the opt-in config
+ *   line chosen.asahi,t6030-gpu=1 (m1n1 cannot tell which kernel will boot, so this is per
+ *   boot.bin); without it, it only runs and logs the firmware/ADT/DT checks (dry run),
+ * - runs the ID/core-mask register and leakage fuse reads under an exception guard that also
+ *   catches asynchronous SErrors (the PMGR power-on is unguarded, as everywhere else in m1n1; a
+ *   read that stalls the bus without faulting cannot be caught by any guard),
+ * - checks the uat-* regions against everything dt_set_memory() later bails on,
+ * - adds the description of the loaded firmware segments (fw-text/fw-data, see g15_get_fw_segs())
+ *   completely or not at all; the GPU setup does not depend on it,
+ * - enables the uat-* regions and then the gpu node only after every step has succeeded,
+ * - on any failure removes the firmware segment description, disables the node again, zeroes
+ *   apple,firmware-compat, powers the GPU back off if it was powered on here, and returns 0.
+ *
+ * apple,firmware-version is the version of the loaded GPU firmware image (14.8.3), not os_firmware
+ * as on the other SoCs: iBoot reports 14.8.3 as 14.7. drm/asahi only puts it in crash dumps.
+ *
+ * Differences from the t602x path:
+ * - No CS/AFR clock domains: no apple,cs-opp / apple,afr-opp.
+ * - One 15-bit leakage fuse instead of per-cluster fuse fields, and a banded max-power formula
+ *   instead of calc_power_t600x().
+ * - The OPP table is rebuilt from the runtime ADT, because the pstate count is not known statically
+ *   (iBoot fills in the perf-state properties at boot).
+ * - hw-cal-a/hw-cal-b/globals stay disabled: m1n1's Rust initdata has no G15 layouts, and drm/asahi
+ *   only uses these blobs as an optional debug cross-check (gpu.rs load_hwdata_blob(), which falls
+ *   back to an empty blob).
+ */
+#define G15S_ID_GEN            7        // ID_VERSION[31:24]
+#define G15S_ID_VARIANT        3        // ID_VERSION[23:16], 3 = G15S
+#define G15S_CORES_PER_CLUSTER 10       // G15S core mask layout: 10 slots per MGPU
+#define G15S_MAX_CORES         20       // max total cores for G15S, max-power divisor
+#define T6030_MAX_CLUSTERS     2        // 20 core slots / 10 per MGPU (drm/asahi max_num_clusters)
+#define G15_SGX_ID_VERSION     0xd04000 // = Fender+0x4000
+#define G15_SGX_CORE_MASK      0xe01500 // 3 words, third masked to 16 bits
+#define T6030_LEAK_FUSE        0x3642c81a8 // efuse page 0x3642c8000 + 0x1a8
+#define G15S_PWR_CLAMP         70000.0f    // I_static + I_dynamic clamp
+
+/* Sanity bounds for ADT perf states. Anything outside them disables the GPU. */
+#define G15_PS_MIN_MV 400
+#define G15_PS_MAX_MV 1500
+#define G15_PS_MIN_HZ 100000000u
+#define G15_PS_MAX_HZ 3000000000u
+
+struct g15_region {
+    const char *adt_name;
+    const char *dt_path;
+    u64 base;
+    u64 size;
+};
+
+/*
+ * The t602x UAT regions plus gfx-shared-l2-region. On G15 iBoot puts the second-level table of the
+ * firmware's TTBR1 tree there (j516s: 0x108fff74000, right below gfx-shared-region), so it has to be
+ * in the kernel's linear map like the other page-table pages (first armed boot oopsed in
+ * UatPageTable::map_pages reading 0x108fff76000).
+ */
+#define G15_NUM_REGIONS 4
+static const struct g15_region g15_region_names[G15_NUM_REGIONS] = {
+    {"gfx-handoff", "/reserved-memory/uat-handoff", 0, 0},
+    {"gfx-shared-region", "/reserved-memory/uat-pagetables", 0, 0},
+    {"gpu-region", "/reserved-memory/uat-ttbs", 0, 0},
+    {"gfx-shared-l2-region", "/reserved-memory/uat-pagetables-l2", 0, 0},
+};
+
+static int g15_guard_begin(void)
+{
+    int before = exc_count;
+    exc_guard = GUARD_MARK | GUARD_SILENT;
+    return before;
+}
+
+/* Returns -1 if a synchronous abort or an SError was taken since g15_guard_begin() */
+static int g15_guard_end(int before)
+{
+    /* Let any asynchronous SError from the guarded accesses arrive while the guard is armed */
+    sysop("dsb sy");
+    sysop("isb");
+    exc_guard = GUARD_OFF;
+    return exc_count == before ? 0 : -1;
+}
+
+static int g15_adt_u32(int node, const char *name, u32 *val)
+{
+    u32 len = 0;
+    const void *p = adt_getprop(adt, node, name, &len);
+    if (!p || len != sizeof(*val))
+        return -1;
+    memcpy(val, p, sizeof(*val));
+    return 0;
+}
+
+static int g15_adt_u64(int node, const char *name, u64 *val)
+{
+    u32 len = 0;
+    const void *p = adt_getprop(adt, node, name, &len);
+    if (!p || len != sizeof(*val))
+        return -1;
+    memcpy(val, p, sizeof(*val));
+    return 0;
+}
+
+/*
+ * Perf states: T tables x N+1 entries of {u32 Hz, u32 mV}.
+ *
+ * The pstate count and the table count must come from the ADT and agree with each other: a stale
+ * count could otherwise reshape the table into a different one that still passes every value check.
+ * - perf-state-count (= N + 1, what upstream m1n1 uses) and gpu-num-perf-states (= N) must agree
+ *   when both are set.
+ * - If only gpu-num-perf-states is set, perf-state-table-count must be present too (nothing is
+ *   derived from a fallback count).
+ * - A missing perf-state-table-count is derived from the length only when the count came from
+ *   perf-state-count.
+ */
+static int g15_get_pstates(int sgx, u32 *count_out, u32 *tables_out, const struct perf_state **out)
+{
+    u32 count = 0, n = 0, tables = 0, len = 0;
+    bool have_count = !g15_adt_u32(sgx, "perf-state-count", &count) && count;
+    bool have_n = !g15_adt_u32(sgx, "gpu-num-perf-states", &n) && n;
+    bool have_tables = !g15_adt_u32(sgx, "perf-state-table-count", &tables) && tables;
+
+    if (have_count && have_n && count != n + 1)
+        bail("ADT: GPU: perf-state-count %u disagrees with gpu-num-perf-states %u\n", count, n);
+    if (!have_count) {
+        if (!have_n || !have_tables)
+            bail("ADT: GPU: no usable perf-state-count (gpu-num-perf-states %u, tables %u)\n", n,
+                 tables);
+        if (n >= MAX_PSTATES)
+            bail("ADT: GPU: gpu-num-perf-states %u too large\n", n);
+        count = n + 1; // N pstates plus the off state
+    }
+    if (count < 2 || count > MAX_PSTATES)
+        bail("ADT: GPU: invalid perf-state-count (%u)\n", count);
+
+    const struct perf_state *ps = adt_getprop(adt, sgx, "perf-states", &len);
+    if (!ps || !len || len % (sizeof(*ps) * count))
+        bail("ADT: GPU: invalid or missing perf-states (len %u, count %u)\n", len, count);
+
+    if (!have_tables)
+        tables = len / (sizeof(*ps) * count);
+    if (!tables || tables > T6030_MAX_CLUSTERS || len != sizeof(*ps) * count * tables)
+        bail("ADT: GPU: unexpected perf-state tables (count %u, tables %u, len %u)\n", count, tables,
+             len);
+
+    for (u32 t = 0; t < tables; t++) {
+        for (u32 i = 0; i < count; i++) {
+            u32 hz = ps[t * count + i].freq;
+            u32 mv = ps[t * count + i].volt;
+
+            /*
+             * pstate 0 is the off state (j516s runtime ADT: 0 Hz / 125 mV), so it is not checked.
+             * Zero voltages in later tables are back-filled.
+             */
+            if (i == 0)
+                continue;
+            if (mv && (mv < G15_PS_MIN_MV || mv > G15_PS_MAX_MV))
+                bail("ADT: GPU: perf state %u/%u has bad voltage %u mV\n", t, i, mv);
+            if (t != 0)
+                continue;
+            if (!mv || hz < G15_PS_MIN_HZ || hz > G15_PS_MAX_HZ)
+                bail("ADT: GPU: perf state %u has bad values (%u Hz, %u mV)\n", i, hz, mv);
+        }
+    }
+
+    /*
+     * The ADT order is not strictly increasing in frequency (j516s: 1182 MHz twice, 1312 MHz
+     * before 1242 MHz) and must be kept as-is, since the firmware indexes pstates by position.
+     * drm/asahi only relies on the last pstate being the fastest (perf_max_pstate).
+     */
+    for (u32 i = 1; i < count - 1; i++)
+        if (ps[i].freq > ps[count - 1].freq)
+            bail("ADT: GPU: perf state %u (%u Hz) is above the last one (%u Hz)\n", i, ps[i].freq,
+                 ps[count - 1].freq);
+
+    /* A perf-states-sram table is not used: SRAM follows max(core, 789 mV) */
+    if (adt_getprop(adt, sgx, "perf-states-sram", NULL))
+        printf("ADT: GPU: note: perf-states-sram present but unused on G15S\n");
+
+    *count_out = count;
+    *tables_out = tables;
+    *out = ps;
+    return 0;
+}
+
+static int g15_get_region(void *dt, int sgx, struct g15_region *r)
+{
+    char prop[64];
+
+    snprintf(prop, sizeof(prop), "%s-base", r->adt_name);
+    if (g15_adt_u64(sgx, prop, &r->base) || !r->base)
+        bail("ADT: GPU: missing or invalid %s\n", prop);
+
+    snprintf(prop, sizeof(prop), "%s-size", r->adt_name);
+    if (g15_adt_u64(sgx, prop, &r->size) || !r->size)
+        bail("ADT: GPU: missing or invalid %s\n", prop);
+
+    /*
+     * The UAT maps these with 16K pages and the TTBAT base must be 16K aligned; the
+     * kernel needs at least one 16K page for each (mmu.rs). dt_set_memory() also refuses to boot
+     * (any kernel) on an enabled reserved-memory region that is not page aligned, see
+     * g15_check_regions().
+     */
+    if ((r->base & (SZ_16K - 1)) || (r->size & (SZ_16K - 1)) || r->size < SZ_16K ||
+        (r->base & (get_page_size() - 1)) || (r->size & (get_page_size() - 1)) ||
+        r->base + r->size < r->base)
+        bail("ADT: GPU: bad %s region 0x%lx+0x%lx\n", r->adt_name, r->base, r->size);
+
+    /* The node must already have a 2+2 cell reg so that setting it later cannot fail */
+    int node = fdt_path_offset(dt, r->dt_path);
+    int len;
+    if (node < 0 || !fdt_getprop(dt, node, "reg", &len) || len != 2 * sizeof(fdt64_t))
+        bail("FDT: GPU: %s missing or has an unexpected reg\n", r->dt_path);
+
+    printf("ADT: GPU: %s 0x%lx+0x%lx -> %s\n", r->adt_name, r->base, r->size, r->dt_path);
+    return 0;
+}
+
+/*
+ * Upper bound on the reserved-memory regions dt_set_memory() may add to /memory (MAX_MEM_REGIONS in
+ * kboot.c, including the usable-RAM region), with headroom for the nodes that later kboot steps add.
+ */
+#define G15_MEM_REGIONS_LIMIT    32
+#define G15_MEM_REGIONS_HEADROOM 8
+
+/*
+ * The uat-* regions are enabled reserved-memory nodes without no-map, so dt_set_memory() runs later
+ * in the same kboot and adds them to /memory. It fails kboot (for every kernel, after this code has
+ * already returned) if such a region straddles the usable-RAM boundary, is not page aligned, or if it
+ * runs out of memory regions. Everything that could make it fail is checked here, so a bad region
+ * only disables the GPU:
+ * - each region lies entirely outside usable RAM [phys_base, phys_base + mem_size). Later kboot
+ *   steps only shrink usable RAM from the top, which keeps this true. iBoot carves the GPU regions
+ *   out of the top of DRAM, so inside usable RAM would be unexpected anyway (and could overlap m1n1
+ *   or the kernel).
+ * - each region lies inside DRAM, if the ADT gives the DRAM range.
+ * - the regions do not overlap each other.
+ * - dt_set_memory() will not run out of regions.
+ */
+static int g15_check_regions(void *dt, const struct g15_region *regions)
+{
+    u64 ram_min = kboot_ram_base();
+    u64 ram_max = kboot_ram_base() + kboot_ram_size();
+    u64 dram_base = 0, dram_size = 0;
+
+    int chosen = adt_path_offset(adt, "/chosen");
+    bool have_dram = chosen >= 0 && !g15_adt_u64(chosen, "dram-base", &dram_base) &&
+                     !g15_adt_u64(chosen, "dram-size", &dram_size) && dram_size &&
+                     dram_base + dram_size > dram_base;
+
+    for (int i = 0; i < G15_NUM_REGIONS; i++) {
+        const struct g15_region *r = &regions[i];
+        u64 end = r->base + r->size;
+
+        if (!(end <= ram_min || r->base >= ram_max))
+            bail("ADT: GPU: %s 0x%lx..0x%lx is not outside usable RAM 0x%lx..0x%lx\n", r->adt_name,
+                 r->base, end, ram_min, ram_max);
+        if (have_dram && (r->base < dram_base || end > dram_base + dram_size))
+            bail("ADT: GPU: %s 0x%lx..0x%lx is outside DRAM 0x%lx+0x%lx\n", r->adt_name, r->base,
+                 end, dram_base, dram_size);
+
+        for (int j = 0; j < i; j++) {
+            if (r->base < regions[j].base + regions[j].size && regions[j].base < end)
+                bail("ADT: GPU: %s overlaps %s\n", r->adt_name, regions[j].adt_name);
+        }
+    }
+
+    /* Same selection as dt_set_memory(): enabled, mapped, and outside usable RAM */
+    int used = 1 + G15_NUM_REGIONS;
+    int resv = fdt_path_offset(dt, "/reserved-memory");
+    if (resv >= 0) {
+        int node;
+        fdt_for_each_subnode(node, dt, resv)
+        {
+            int len;
+            const char *status = fdt_getprop(dt, node, "status", NULL);
+            if (status && !strcmp(status, "disabled"))
+                continue;
+            if (fdt_getprop(dt, node, "no-map", NULL))
+                continue;
+            const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+            if (!reg || len < (int)(2 * sizeof(fdt64_t)))
+                continue;
+            u64 start = fdt64_ld(&reg[0]);
+            if (start < ram_min || start >= ram_max)
+                used++;
+        }
+    }
+    if (used + G15_MEM_REGIONS_HEADROOM > G15_MEM_REGIONS_LIMIT)
+        bail("FDT: GPU: too many reserved-memory regions (%d) to add the UAT regions\n", used);
+
+    return 0;
+}
+
+/* Address of the reg entry called `name` of the gpu node (2+2 cells, identity-mapped /soc) */
+static int g15_dt_reg_by_name(void *dt, int gpu, const char *name, u64 *addr)
+{
+    int parent = fdt_parent_offset(dt, gpu);
+    if (parent < 0 || fdt_address_cells(dt, parent) != 2 || fdt_size_cells(dt, parent) != 2)
+        bail("FDT: GPU: unexpected gpu parent cells\n");
+
+    int idx = fdt_stringlist_search(dt, gpu, "reg-names", name);
+    if (idx < 0)
+        bail("FDT: GPU: no %s in reg-names\n", name);
+
+    int len;
+    const fdt64_t *reg = fdt_getprop(dt, gpu, "reg", &len);
+    if (!reg || len < 0 || (size_t)len < (idx + 1) * 2 * sizeof(fdt64_t))
+        bail("FDT: GPU: gpu reg too short\n");
+
+    *addr = fdt64_ld(&reg[idx * 2]);
+    return 0;
+}
+
+/*
+ * Read the GPU ID, the core masks and the leakage fuse. The DT sgx/asc bases must match the ADT, so
+ * that we probe the same block the kernel will use.
+ */
+/* Set once dt_set_gpu_t6030_inner() has started to power on the GPU */
+static bool g15_powered;
+
+static int g15_read_hw(void *dt, int gpu, u32 *core_count, u32 *enabled_cores, float *leak)
+{
+    int sgx_path[8], asc_path[8];
+    u64 sgx_base, sgx_size, asc_base, dt_sgx, dt_asc;
+
+    if (adt_path_offset_trace(adt, "/arm-io/sgx", sgx_path) < 0)
+        bail("ADT: GPU: Failed to get sgx\n");
+    if (adt_get_reg(adt, sgx_path, "reg", 0, &sgx_base, &sgx_size) < 0)
+        bail("ADT: GPU: Failed to get sgx reg 0\n");
+    if (adt_path_offset_trace(adt, "/arm-io/gfx-asc", asc_path) < 0)
+        bail("ADT: GPU: Failed to get gfx-asc\n");
+    if (adt_get_reg(adt, asc_path, "reg", 0, &asc_base, NULL) < 0)
+        bail("ADT: GPU: Failed to get gfx-asc reg 0\n");
+
+    if (g15_dt_reg_by_name(dt, gpu, "sgx", &dt_sgx) || g15_dt_reg_by_name(dt, gpu, "asc", &dt_asc))
+        return -1;
+    if (dt_sgx != sgx_base || dt_asc != asc_base)
+        bail("FDT: GPU: DT sgx/asc 0x%lx/0x%lx do not match ADT 0x%lx/0x%lx\n", dt_sgx, dt_asc,
+             sgx_base, asc_base);
+    if (!sgx_base || sgx_size < G15_SGX_CORE_MASK + 12)
+        bail("ADT: GPU: sgx reg 0 too small (0x%lx)\n", sgx_size);
+
+    /*
+     * PMGR power-on, unguarded like every other pmgr_adt_power_enable() caller in m1n1: these are
+     * the regular PMGR PS registers (the polls are bounded), and a GUARD_MARK fault in the middle of
+     * the read-modify-write would corrupt registers instead of recovering. The caller powers the
+     * GPU back off if anything after this point fails.
+     */
+    g15_powered = true;
+    if (pmgr_adt_power_enable("/arm-io/sgx") < 0)
+        bail("FDT: GPU: failed to power on sgx\n");
+
+    int before = g15_guard_begin();
+    u32 id_version = read32(sgx_base + G15_SGX_ID_VERSION);
+    u32 mask0 = read32(sgx_base + G15_SGX_CORE_MASK);
+    u32 mask1 = read32(sgx_base + G15_SGX_CORE_MASK + 4);
+    u32 mask2 = read32(sgx_base + G15_SGX_CORE_MASK + 8);
+    if (g15_guard_end(before))
+        bail("FDT: GPU: fault reading the GPU ID registers\n");
+
+    printf("FDT: GPU: ID_VERSION 0x%08x (gen %d variant %d rev %d.%d)\n", id_version,
+           id_version >> 24, (id_version >> 16) & 0xff, (id_version >> 12) & 0xf,
+           (id_version >> 8) & 0xf);
+    if ((id_version >> 24) != G15S_ID_GEN || ((id_version >> 16) & 0xff) != G15S_ID_VARIANT)
+        bail("FDT: GPU: not a G15S (expected gen %d variant %d)\n", G15S_ID_GEN, G15S_ID_VARIANT);
+
+    /* 80-bit mask, 20 valid slots on G15S */
+    u64 mask = mask0 | ((u64)mask1 << 32);
+    printf("FDT: GPU: core mask 0x%04x%016lx\n", mask2 & 0xffff, mask);
+    if ((mask2 & 0xffff) || (mask >> (T6030_MAX_CLUSTERS * G15S_CORES_PER_CLUSTER)))
+        bail("FDT: GPU: core mask has bits beyond the %d G15S core slots\n", G15S_MAX_CORES);
+
+    *enabled_cores = 0;
+    printf("FDT: GPU: Core counts: ");
+    for (u32 i = 0; i < T6030_MAX_CLUSTERS; i++) {
+        core_count[i] = __builtin_popcountll((mask >> (i * G15S_CORES_PER_CLUSTER)) &
+                                             MASK(G15S_CORES_PER_CLUSTER));
+        *enabled_cores += core_count[i];
+        printf("%d ", core_count[i]);
+    }
+    printf("\n");
+    if (!*enabled_cores)
+        bail("FDT: GPU: no enabled cores\n");
+
+    /* First m1n1 access to this fuse page (AON region, inside the arm-io MMIO mapping) */
+    before = g15_guard_begin();
+    u32 fuse = read32(T6030_LEAK_FUSE);
+    if (g15_guard_end(before))
+        bail("FDT: GPU: fault reading leakage fuse at 0x%lx\n", T6030_LEAK_FUSE);
+
+    /* v = fuse[29:15], leak = 2.0 * (v + 1). Only core_leak[0] exists on G15S. */
+    u32 v = (fuse >> 15) & 0x7fff;
+    *leak = 2.0f * (v + 1);
+
+    return 0;
+}
+
+/*
+ * G15S maximum performance power model: per pstate, a banded static current plus a dynamic
+ * current, clamped, times the voltage. Units: I in mA, P in mW, so max_pwr[] is P * 1000
+ * (microwatts), as for the other SoCs. Only table 0 voltages are used. Inputs are
+ * bounded by g15_get_pstates() (mV <= 1500) and the clamp, so the result always fits a u32.
+ */
+static void calc_power_t6030(u32 count, const struct perf_state *core, float leak,
+                             u32 enabled_cores, u32 *max_pwr)
+{
+    max_pwr[0] = 0;
+
+    for (u32 i = 1; i < count; i++) {
+        float mv = core[i].volt;
+        float v = mv / 1000.f;
+        u32 f_mhz = core[i].freq / 1000000; // truncated to integer MHz
+        float k, b, a;
+
+        if (mv < 700) {
+            k = 0.0095196338f;
+            b = 0.0017332509f;
+            a = 3.8552403f;
+        } else if (mv < 900) {
+            k = 0.0083248606f;
+            b = 0.0020220736f;
+            a = 3.6032584f;
+        } else {
+            k = 0.0033452217f;
+            b = 0.0038701950f;
+            a = 2.7668998f;
+        }
+
+        float i_static = leak * k * expf(a + b * mv);
+        float i_dynamic = 32.0f * powf(v, 1.2f) * f_mhz * enabled_cores / (float)G15S_MAX_CORES;
+        float i_total = i_static + i_dynamic;
+
+        if (!(i_total >= 0.0f)) // also catches NaN
+            i_total = 0.0f;
+        if (i_total > G15S_PWR_CLAMP)
+            i_total = G15S_PWR_CLAMP;
+
+        max_pwr[i] = v * i_total * 1000;
+    }
+}
+
+/* Replace all children of the operating-points-v2 table with one OPP per ADT pstate. */
+static int g15_set_opps(void *dt, u32 opps_ph, u32 count, u32 table_count,
+                        const struct perf_state *perf_states, const u32 *max_pwr)
+{
+    int opps = fdt_node_offset_by_phandle(dt, opps_ph);
+    if (opps < 0)
+        bail("FDT: GPU: node for phandle %u not found\n", opps_ph);
+
+    int child;
+    while ((child = fdt_first_subnode(dt, opps)) >= 0) {
+        if (fdt_del_node(dt, child))
+            bail("FDT: GPU: failed to delete placeholder OPP\n");
+        opps = fdt_node_offset_by_phandle(dt, opps_ph);
+        if (opps < 0)
+            bail("FDT: GPU: OPP table lost\n");
+    }
+
+    /* fdt_add_subnode() inserts at the head, so add in reverse to keep opp00 first */
+    for (int i = count - 1; i >= 0; i--) {
+        char name[16];
+        fdt32_t volts[T6030_MAX_CLUSTERS];
+
+        for (u32 j = 0; j < T6030_MAX_CLUSTERS; j++) {
+            /*
+             * One voltage per MGPU (drm/asahi expects max_num_clusters entries). Missing tables and
+             * zero entries are back-filled from table 0.
+             */
+            u32 t = j < table_count ? j : 0;
+            u32 mv = perf_states[i + t * count].volt;
+            if (!mv)
+                mv = perf_states[i].volt;
+            volts[j] = cpu_to_fdt32(mv * 1000);
+        }
+
+        snprintf(name, sizeof(name), "opp%02d", i);
+        int opp = fdt_add_subnode(dt, opps, name);
+        if (opp < 0)
+            bail("FDT: GPU: failed to add %s\n", name);
+        if (fdt_setprop_u64(dt, opp, "opp-hz", perf_states[i].freq))
+            bail("FDT: GPU: Failed to set opp-hz for PS %d\n", i);
+        if (fdt_setprop(dt, opp, "opp-microvolt", volts, sizeof(volts)))
+            bail("FDT: GPU: Failed to set opp-microvolt for PS %d\n", i);
+        if (fdt_setprop_u32(dt, opp, "opp-microwatt", max_pwr[i]))
+            bail("FDT: GPU: Failed to set opp-microwatt for PS %d\n", i);
+
+        opps = fdt_node_offset_by_phandle(dt, opps_ph);
+        if (opps < 0)
+            bail("FDT: GPU: OPP table lost\n");
+    }
+
+    return 0;
+}
+
+static int g15_set_float_array(void *dt, const char *name, float val, int count)
+{
+    fdt32_t data[MAX_CLUSTERS];
+
+    if (count > MAX_CLUSTERS)
+        bail("FDT: GPU: g15_set_float_array() with too many values\n");
+
+    for (int i = 0; i < count; i++) {
+        u32 raw;
+        memcpy(&raw, &val, sizeof(raw));
+        data[i] = cpu_to_fdt32(raw);
+    }
+
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        bail("FDT: GPU: gpu alias lost\n");
+
+    /* fdt_setprop (not _inplace): the placeholder may be missing or have another length */
+    if (fdt_setprop(dt, gpu, name, data, sizeof(u32) * count))
+        bail("FDT: GPU: Failed to set %s\n", name);
+
+    return 0;
+}
+
+static int g15_set_status(void *dt, const char *path, const char *status)
+{
+    int node = fdt_path_offset(dt, path);
+    if (node < 0)
+        bail("FDT: GPU: %s not found\n", path);
+    if (fdt_setprop_string(dt, node, "status", status))
+        bail("FDT: GPU: failed to set %s status to %s\n", path, status);
+    return 0;
+}
+
+/*
+ * GPU firmware segments (fw-text, fw-data).
+ *
+ * iBoot loads the GPU coprocessor firmware before m1n1 runs. ADT /arm-io/gfx-asc "segment-ranges"
+ * says where: one {u64 phys, u64 firmware VA, u64 remap, u32 size, u32 flags} entry per segment,
+ * in the order of "segment-names" (text, then data). A kernel that runs this firmware in place
+ * needs the two carveouts and their firmware VAs, so the gpu node gets:
+ * - two no-map reserved-memory nodes, appended to its memory-region as "fw-text" and "fw-data".
+ *   The existing entries and names keep their order, so kernels that look up the other regions
+ *   are not affected.
+ * - apple,firmware-segment-vas = <TEXT VA, DATA VA> (two u64),
+ * - apple,firmware-segment-flags = <1 0> (the ADT flags of the two segments),
+ * - apple,m3-handoff-version = <1>.
+ * All of these are added, or none: a missing or unexpected ADT or DT input, or a failed DT write,
+ * leaves the DT as it was and is logged. The GPU setup does not depend on them. Only the ADT and
+ * the DT are read for this, never the GPU or its memory.
+ *
+ * The carveouts lie outside usable RAM (checked), and no-map keeps them out of the kernel's linear
+ * map: dt_set_memory() does not add no-map regions to /memory.
+ */
+#define G15_FW_SEGS         2
+#define G15_FW_DATA_SEG     "__DATA"     // name of the second (last) segment
+#define G15_FW_SEG_MAX_SIZE (16 * SZ_1M) // sanity bound; the 14.8.3 image uses 0x5c000 + 0x114000
+#define G15_HANDOFF_VERSION 1
+/* Bounds for the gpu node's memory-region and memory-region-names, which are copied for the undo */
+#define G15_MAX_MEM_REGIONS      16
+#define G15_MAX_MEM_REGION_NAMES 256
+#define G15_FW_NODE_NAME_LEN     40
+
+struct g15_fw_seg {
+    const char *name;        /* memory-region-names entry */
+    const char *node_prefix; /* reserved-memory node name, before the unit address */
+    u32 flags;               /* ADT segment flags this segment must have */
+    u64 phys;
+    u64 va;
+    u64 size;
+    char node[G15_FW_NODE_NAME_LEN];
+};
+
+static const struct g15_fw_seg g15_fw_seg_defs[G15_FW_SEGS] = {
+    {"fw-text", "gpu-fw-text", 1, 0, 0, 0, ""},
+    {"fw-data", "gpu-fw-data", 0, 0, 0, 0, ""},
+};
+
+static const char *const g15_fw_seg_props[] = {
+    "apple,firmware-segment-vas",
+    "apple,firmware-segment-flags",
+    "apple,m3-handoff-version",
+};
+
+/* What g15_unset_fw_segs() needs to restore the DT. Reset by dt_set_gpu_t6030(). */
+static struct {
+    bool active; /* the DT may hold (part of) the firmware segment description */
+    int mr_len;
+    int names_len;
+    fdt32_t mr[G15_MAX_MEM_REGIONS];
+    char names[G15_MAX_MEM_REGION_NAMES];
+    char node[G15_FW_SEGS][G15_FW_NODE_NAME_LEN]; /* added nodes, "" if not added */
+} g15_fw_undo;
+
+/* Whether [a, a + a_size) and [b, b + b_size) overlap; a range that wraps extends to the end */
+static bool g15_overlaps(u64 a, u64 a_size, u64 b, u64 b_size)
+{
+    u64 a_end = a + a_size < a ? ~0UL : a + a_size;
+    u64 b_end = b + b_size < b ? ~0UL : b + b_size;
+
+    return a_size && b_size && a < b_end && b < a_end;
+}
+
+/*
+ * Read and check the firmware segments from the ADT and the gpu node inputs from the DT. Changes
+ * nothing. `regions` are the checked UAT regions. Returns 0 if the description can be added.
+ */
+static int g15_get_fw_segs(void *dt, int gpu, const struct g15_region *regions,
+                           struct g15_fw_seg *segs)
+{
+    struct adt_segment_ranges ranges[G15_FW_SEGS];
+    u32 len;
+
+    int asc = adt_path_offset(adt, "/arm-io/gfx-asc");
+    if (asc < 0)
+        bail("ADT: GPU: /arm-io/gfx-asc not found\n");
+
+    len = 0;
+    const char *seg_names = adt_getprop(adt, asc, "segment-names", &len);
+    /* Exactly two ";"-separated names, the second being G15_FW_DATA_SEG */
+    const char *sep = seg_names && len ? memchr(seg_names, ';', len) : NULL;
+    u32 tail = sep ? len - (u32)(sep + 1 - seg_names) : 0;
+    if (!sep || sep == seg_names || tail < sizeof(G15_FW_DATA_SEG) ||
+        memcmp(sep + 1, G15_FW_DATA_SEG, sizeof(G15_FW_DATA_SEG)))
+        bail("ADT: GPU: gfx-asc segment-names is not two segments ending in " G15_FW_DATA_SEG "\n");
+
+    len = 0;
+    const void *seg_ranges = adt_getprop(adt, asc, "segment-ranges", &len);
+    if (!seg_ranges || len != sizeof(ranges))
+        bail("ADT: GPU: gfx-asc segment-ranges missing or not %d entries (len %u)\n", G15_FW_SEGS,
+             len);
+    memcpy(ranges, seg_ranges, sizeof(ranges));
+
+    /* The firmware nub below gfx-asc carries a copy of the segments; if present it must agree */
+    int nub = adt_path_offset(adt, "/arm-io/gfx-asc/iop-gfx-nub");
+    if (nub >= 0) {
+        u32 preloaded;
+
+        len = 0;
+        const void *nub_ranges = adt_getprop(adt, nub, "segment-ranges", &len);
+        if (nub_ranges && (len != sizeof(ranges) || memcmp(nub_ranges, ranges, sizeof(ranges))))
+            bail("ADT: GPU: iop-gfx-nub segment-ranges differ from gfx-asc\n");
+        if (!g15_adt_u32(nub, "pre-loaded", &preloaded) && preloaded != 1)
+            bail("ADT: GPU: iop-gfx-nub pre-loaded is %u, not 1\n", preloaded);
+    }
+
+    u64 dram_base, dram_size;
+    int chosen = adt_path_offset(adt, "/chosen");
+    if (chosen < 0 || g15_adt_u64(chosen, "dram-base", &dram_base) ||
+        g15_adt_u64(chosen, "dram-size", &dram_size) || !dram_size ||
+        dram_base + dram_size <= dram_base)
+        bail("ADT: GPU: no usable /chosen dram-base/dram-size\n");
+
+    u64 ram_min = kboot_ram_base();
+    u64 ram_max = kboot_ram_base() + kboot_ram_size();
+
+    for (int i = 0; i < G15_FW_SEGS; i++) {
+        const struct adt_segment_ranges *r = &ranges[i];
+        struct g15_fw_seg *s = &segs[i];
+
+        *s = g15_fw_seg_defs[i];
+        s->phys = r->phys;
+        s->va = r->iova;
+        s->size = r->size;
+        u64 end = s->phys + s->size;
+
+        if (r->unk != s->flags)
+            bail("ADT: GPU: firmware segment %d flags 0x%x, expected 0x%x\n", i, r->unk, s->flags);
+        /* remap repeats the physical address for these segments */
+        if (r->remap != r->phys)
+            bail("ADT: GPU: firmware segment %d remap 0x%lx differs from phys 0x%lx\n", i, r->remap,
+                 r->phys);
+        if (!s->phys || !s->size || s->size > G15_FW_SEG_MAX_SIZE ||
+            ((s->phys | s->size) & (SZ_16K - 1)) || ((s->phys | s->size) & (get_page_size() - 1)) ||
+            end < s->phys)
+            bail("ADT: GPU: bad firmware segment %d 0x%lx+0x%lx\n", i, s->phys, s->size);
+        if (!s->va || (s->va & (SZ_16K - 1)) || s->va + s->size < s->va)
+            bail("ADT: GPU: bad firmware segment %d VA 0x%lx+0x%lx\n", i, s->va, s->size);
+
+        if (!(end <= ram_min || s->phys >= ram_max))
+            bail("ADT: GPU: firmware %s 0x%lx..0x%lx is not outside usable RAM 0x%lx..0x%lx\n",
+                 s->name, s->phys, end, ram_min, ram_max);
+        if (s->phys < dram_base || end > dram_base + dram_size)
+            bail("ADT: GPU: firmware %s 0x%lx..0x%lx is outside DRAM 0x%lx+0x%lx\n", s->name,
+                 s->phys, end, dram_base, dram_size);
+        for (size_t j = 0; j < mcc_carveout_count; j++)
+            if (g15_overlaps(s->phys, s->size, mcc_carveouts[j].base, mcc_carveouts[j].size))
+                bail("ADT: GPU: firmware %s overlaps memory carveout 0x%lx+0x%lx\n", s->name,
+                     mcc_carveouts[j].base, mcc_carveouts[j].size);
+        for (int j = 0; j < G15_NUM_REGIONS; j++)
+            if (g15_overlaps(s->phys, s->size, regions[j].base, regions[j].size))
+                bail("ADT: GPU: firmware %s overlaps %s\n", s->name, regions[j].adt_name);
+        for (int j = 0; j < i; j++) {
+            if (g15_overlaps(s->phys, s->size, segs[j].phys, segs[j].size))
+                bail("ADT: GPU: firmware %s overlaps %s\n", s->name, segs[j].name);
+            if (g15_overlaps(s->va, s->size, segs[j].va, segs[j].size))
+                bail("ADT: GPU: firmware %s VA range overlaps %s\n", s->name, segs[j].name);
+        }
+
+        snprintf(s->node, sizeof(s->node), "%s@%lx", s->node_prefix, s->phys);
+    }
+
+    /* Reserved memory: 2+2 cells, no node of that name yet, no overlap with an enabled region */
+    int resv = fdt_path_offset(dt, "/reserved-memory");
+    if (resv < 0 || fdt_address_cells(dt, resv) != 2 || fdt_size_cells(dt, resv) != 2)
+        bail("FDT: GPU: /reserved-memory missing or not 2+2 cells\n");
+
+    int node;
+    fdt_for_each_subnode(node, dt, resv)
+    {
+        const char *node_name = fdt_get_name(dt, node, NULL);
+        for (int i = 0; i < G15_FW_SEGS; i++)
+            if (node_name && !strcmp(node_name, segs[i].node))
+                bail("FDT: GPU: /reserved-memory/%s already exists\n", node_name);
+
+        const char *status = fdt_getprop(dt, node, "status", NULL);
+        if (status && !strcmp(status, "disabled"))
+            continue;
+
+        int reg_len;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &reg_len);
+        if (!reg || reg_len <= 0)
+            continue;
+        for (int k = 0; (k + 2) * (int)sizeof(fdt64_t) <= reg_len; k += 2) {
+            u64 base = fdt64_ld(&reg[k]), size = fdt64_ld(&reg[k + 1]);
+            for (int i = 0; i < G15_FW_SEGS; i++)
+                if (size && g15_overlaps(segs[i].phys, segs[i].size, base, size))
+                    bail("FDT: GPU: firmware %s overlaps /reserved-memory/%s\n", segs[i].name,
+                         node_name ? node_name : "?");
+        }
+    }
+
+    /*
+     * The gpu node: memory-region and memory-region-names present, with one name per entry (so
+     * that the appended names line up), no fw-text/fw-data yet, none of the properties yet.
+     */
+    int mr_len = 0, names_len = 0;
+    const void *mr = fdt_getprop(dt, gpu, "memory-region", &mr_len);
+    const void *mr_names = fdt_getprop(dt, gpu, "memory-region-names", &names_len);
+    int count = fdt_stringlist_count(dt, gpu, "memory-region-names");
+    if (!mr || !mr_names || mr_len <= 0 || mr_len % sizeof(fdt32_t) ||
+        mr_len > (int)sizeof(g15_fw_undo.mr) || names_len <= 0 ||
+        names_len > (int)sizeof(g15_fw_undo.names) || count != mr_len / (int)sizeof(fdt32_t))
+        bail("FDT: GPU: gpu memory-region (len %d) and memory-region-names (%d names) missing, "
+             "too long or inconsistent\n",
+             mr_len, count);
+    for (int i = 0; i < G15_FW_SEGS; i++)
+        if (fdt_stringlist_search(dt, gpu, "memory-region-names", segs[i].name) >= 0)
+            bail("FDT: GPU: gpu memory-region-names already has %s\n", segs[i].name);
+    for (size_t i = 0; i < ARRAY_SIZE(g15_fw_seg_props); i++)
+        if (fdt_getprop(dt, gpu, g15_fw_seg_props[i], NULL))
+            bail("FDT: GPU: gpu node already has %s\n", g15_fw_seg_props[i]);
+
+    return 0;
+}
+
+/*
+ * Undo g15_set_fw_segs(), also after a partial one. The gpu node's memory-region lists are only
+ * ever restored to their original (same or shorter) values and the rest is deleted, so this needs
+ * no DT space. Returns -1 if the DT could not be restored.
+ */
+static int g15_unset_fw_segs(void *dt)
+{
+    if (!g15_fw_undo.active)
+        return 0;
+
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        bail("FDT: GPU: gpu alias lost\n");
+    if (fdt_setprop(dt, gpu, "memory-region", g15_fw_undo.mr, g15_fw_undo.mr_len))
+        bail("FDT: GPU: failed to restore memory-region\n");
+    gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0 ||
+        fdt_setprop(dt, gpu, "memory-region-names", g15_fw_undo.names, g15_fw_undo.names_len))
+        bail("FDT: GPU: failed to restore memory-region-names\n");
+    for (size_t i = 0; i < ARRAY_SIZE(g15_fw_seg_props); i++) {
+        gpu = fdt_path_offset(dt, "gpu");
+        if (gpu < 0)
+            bail("FDT: GPU: gpu alias lost\n");
+        int err = fdt_delprop(dt, gpu, g15_fw_seg_props[i]);
+        if (err && err != -FDT_ERR_NOTFOUND)
+            bail("FDT: GPU: failed to delete %s\n", g15_fw_seg_props[i]);
+    }
+
+    /* Nothing refers to the nodes any more */
+    for (int i = 0; i < G15_FW_SEGS; i++) {
+        if (!g15_fw_undo.node[i][0])
+            continue;
+        int resv = fdt_path_offset(dt, "/reserved-memory");
+        int node = resv < 0 ? resv : fdt_subnode_offset(dt, resv, g15_fw_undo.node[i]);
+        if (node >= 0 && fdt_del_node(dt, node))
+            bail("FDT: GPU: failed to delete /reserved-memory/%s\n", g15_fw_undo.node[i]);
+        if (node < 0 && node != -FDT_ERR_NOTFOUND)
+            bail("FDT: GPU: cannot look up /reserved-memory/%s\n", g15_fw_undo.node[i]);
+        g15_fw_undo.node[i][0] = 0;
+    }
+
+    g15_fw_undo.active = false;
+    return 0;
+}
+
+static int g15_set_fw_segs_inner(void *dt, const struct g15_fw_seg *segs)
+{
+    fdt32_t mr[G15_MAX_MEM_REGIONS + G15_FW_SEGS];
+    char names[G15_MAX_MEM_REGION_NAMES + sizeof("fw-text") + sizeof("fw-data")];
+    fdt64_t vas[G15_FW_SEGS];
+    fdt32_t flags[G15_FW_SEGS];
+    fdt32_t version = cpu_to_fdt32(G15_HANDOFF_VERSION);
+    int len;
+
+    /* Copy what gets appended to, for the undo (bounds checked by g15_get_fw_segs()) */
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        bail("FDT: GPU: gpu alias lost\n");
+    const void *p = fdt_getprop(dt, gpu, "memory-region", &len);
+    if (!p || len <= 0 || len > (int)sizeof(g15_fw_undo.mr))
+        bail("FDT: GPU: gpu memory-region changed\n");
+    memcpy(g15_fw_undo.mr, p, len);
+    g15_fw_undo.mr_len = len;
+    p = fdt_getprop(dt, gpu, "memory-region-names", &len);
+    if (!p || len <= 0 || len > (int)sizeof(g15_fw_undo.names))
+        bail("FDT: GPU: gpu memory-region-names changed\n");
+    memcpy(g15_fw_undo.names, p, len);
+    g15_fw_undo.names_len = len;
+    g15_fw_undo.active = true;
+
+    int mr_len = g15_fw_undo.mr_len, names_len = g15_fw_undo.names_len;
+    memcpy(mr, g15_fw_undo.mr, mr_len);
+    memcpy(names, g15_fw_undo.names, names_len);
+
+    for (int i = 0; i < G15_FW_SEGS; i++) {
+        const struct g15_fw_seg *s = &segs[i];
+        fdt64_t reg[2];
+        u32 phandle;
+
+        int resv = fdt_path_offset(dt, "/reserved-memory");
+        if (resv < 0)
+            bail("FDT: GPU: /reserved-memory lost\n");
+        int node = fdt_add_subnode(dt, resv, s->node);
+        if (node < 0)
+            bail("FDT: GPU: failed to add /reserved-memory/%s (%d)\n", s->node, node);
+        memcpy(g15_fw_undo.node[i], s->node, sizeof(g15_fw_undo.node[i]));
+
+        fdt64_st(&reg[0], s->phys);
+        fdt64_st(&reg[1], s->size);
+        int err = fdt_generate_phandle(dt, &phandle);
+        if (!err)
+            err = fdt_setprop_u32(dt, node, "phandle", phandle);
+        if (!err)
+            err = fdt_setprop(dt, node, "reg", reg, sizeof(reg));
+        if (!err)
+            err = fdt_setprop_empty(dt, node, "no-map");
+        if (err)
+            bail("FDT: GPU: failed to fill /reserved-memory/%s (%d)\n", s->node, err);
+
+        size_t name_len = strlen(s->name) + 1;
+        if ((size_t)names_len + name_len > sizeof(names))
+            bail("FDT: GPU: memory-region-names too long\n");
+        mr[mr_len / sizeof(fdt32_t)] = cpu_to_fdt32(phandle);
+        mr_len += sizeof(fdt32_t);
+        memcpy(names + names_len, s->name, name_len);
+        names_len += name_len;
+        fdt64_st(&vas[i], s->va);
+        flags[i] = cpu_to_fdt32(s->flags);
+    }
+
+    gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        bail("FDT: GPU: gpu alias lost\n");
+    int err = fdt_setprop(dt, gpu, "memory-region", mr, mr_len);
+    if (!err)
+        err = fdt_setprop(dt, gpu, "memory-region-names", names, names_len);
+    if (!err)
+        err = fdt_setprop(dt, gpu, "apple,firmware-segment-vas", vas, sizeof(vas));
+    if (!err)
+        err = fdt_setprop(dt, gpu, "apple,firmware-segment-flags", flags, sizeof(flags));
+    if (!err)
+        err = fdt_setprop(dt, gpu, "apple,m3-handoff-version", &version, sizeof(version));
+    if (err)
+        bail("FDT: GPU: failed to set the gpu firmware segment properties (%d)\n", err);
+
+    return 0;
+}
+
+/*
+ * Add the firmware segment description checked by g15_get_fw_segs(). Returns 0 when it was added,
+ * 1 when it was not and the DT is unchanged, -1 when a partial description could not be removed.
+ */
+static int g15_set_fw_segs(void *dt, const struct g15_fw_seg *segs)
+{
+    if (!g15_set_fw_segs_inner(dt, segs)) {
+        printf("FDT: GPU: fw-text 0x%lx+0x%lx (VA 0x%lx), fw-data 0x%lx+0x%lx (VA 0x%lx), "
+               "m3-handoff-version %d\n",
+               segs[0].phys, segs[0].size, segs[0].va, segs[1].phys, segs[1].size, segs[1].va,
+               G15_HANDOFF_VERSION);
+        return 0;
+    }
+
+    if (g15_unset_fw_segs(dt)) {
+        printf("FDT: GPU: could not remove a partial firmware segment description\n");
+        return -1;
+    }
+    printf("FDT: GPU: firmware segment description not added (DT write failed, undone)\n");
+    return 1;
+}
+
+/* Put the gpu node and its UAT regions back into the "not usable" state. Best effort. */
+static void g15_disable(void *dt)
+{
+    static const fdt32_t zero[3] = {0, 0, 0};
+
+    if (g15_unset_fw_segs(dt))
+        printf("FDT: GPU: failed to remove the firmware segment description\n");
+
+    for (int i = 0; i < G15_NUM_REGIONS; i++) {
+        int node = fdt_path_offset(dt, g15_region_names[i].dt_path);
+        if (node >= 0)
+            fdt_setprop_string(dt, node, "status", "disabled");
+    }
+
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        return;
+
+    if (fdt_setprop_string(dt, gpu, "status", "disabled"))
+        printf("FDT: GPU: failed to disable the gpu node\n");
+
+    /*
+     * Belt and braces: drm/asahi refuses G15 before any MMIO unless firmware-compat is <14 8 3>.
+     * Zeroing it in place needs no DT space; deleting it (the kernel then refuses too) neither.
+     */
+    int len;
+    if (fdt_getprop(dt, gpu, "apple,firmware-compat", &len) && len == sizeof(zero)) {
+        if (fdt_setprop_inplace(dt, gpu, "apple,firmware-compat", zero, sizeof(zero)))
+            printf("FDT: GPU: failed to clear apple,firmware-compat\n");
+    } else {
+        fdt_delprop(dt, gpu, "apple,firmware-compat");
+    }
+}
+
+/*
+ * Returns 0 when the GPU was set up and enabled, 1 after a successful dry run (not armed: every
+ * firmware/ADT/DT check ran, no GPU hardware was touched and nothing was enabled), -1 on failure.
+ */
+static int dt_set_gpu_t6030_inner(void *dt, bool armed)
+{
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        bail("FDT: GPU: gpu alias lost\n");
+
+    int sgx = adt_path_offset(adt, "/arm-io/sgx");
+    if (sgx < 0)
+        bail("ADT: GPU: /arm-io/sgx node not found\n");
+
+    /* Informational: the chip revision (A0/B0/B1) selects the firmware image. */
+    u32 chip_rev;
+    int arm_io = adt_path_offset(adt, "/arm-io");
+    if (arm_io >= 0 && !g15_adt_u32(arm_io, "chip-revision", &chip_rev))
+        printf("ADT: GPU: arm-io chip-revision 0x%x\n", chip_rev);
+
+    /*
+     * 1. Firmware ABI. The GPU firmware ABI is identified from the image iBoot loaded, because
+     * 14.8.3 and 14.7 share one iBoot string. Nothing else (in particular no GPU
+     * register) is touched unless it is positively the 14.8.3 G15 ABI drm/asahi supports.
+     */
+    const struct fw_version_info *gfx_fw = firmware_gfx_version();
+    if (!gfx_fw)
+        bail("FDT: GPU: loaded GPU firmware is not a known ABI\n");
+    if (gfx_fw->version != V14_8_3 || gfx_fw->num_length != 3 || gfx_fw->num[0] != 14 ||
+        gfx_fw->num[1] != 8 || gfx_fw->num[2] != 3)
+        bail("FDT: GPU: GPU firmware ABI %s is not supported on T6030\n", gfx_fw->string);
+
+    /* 2. ADT and DT inputs (no DT changes yet) */
+    u32 perf_state_count, perf_state_table_count;
+    const struct perf_state *perf_states;
+    if (g15_get_pstates(sgx, &perf_state_count, &perf_state_table_count, &perf_states))
+        return -1;
+
+    struct g15_region regions[G15_NUM_REGIONS];
+    for (int i = 0; i < G15_NUM_REGIONS; i++) {
+        regions[i] = g15_region_names[i];
+        if (g15_get_region(dt, sgx, &regions[i]))
+            return -1;
+    }
+    if (g15_check_regions(dt, regions))
+        return -1;
+
+    int len;
+    const fdt32_t *opps_ph_p = fdt_getprop(dt, gpu, "operating-points-v2", &len);
+    if (!opps_ph_p || len != 4)
+        bail("FDT: GPU: operating-points-v2 not found\n");
+    u32 opps_ph = fdt32_ld(opps_ph_p);
+    if (fdt_node_offset_by_phandle(dt, opps_ph) < 0)
+        bail("FDT: GPU: OPP table for phandle %u not found\n", opps_ph);
+
+    if (adt_getprop(adt, sgx, "gptbat-ready", NULL))
+        printf("ADT: GPU: gptbat-ready present\n");
+    else
+        printf("ADT: GPU: gptbat-ready absent\n");
+
+    /* Optional: the firmware segment description. Without it the GPU is still set up. */
+    struct g15_fw_seg fw_segs[G15_FW_SEGS];
+    bool have_fw_segs = !g15_get_fw_segs(dt, gpu, regions, fw_segs);
+    if (have_fw_segs)
+        printf("ADT: GPU: firmware text 0x%lx+0x%lx VA 0x%lx, data 0x%lx+0x%lx VA 0x%lx\n",
+               fw_segs[0].phys, fw_segs[0].size, fw_segs[0].va, fw_segs[1].phys, fw_segs[1].size,
+               fw_segs[1].va);
+    else
+        printf("FDT: GPU: no firmware segment description: fw-text, fw-data, "
+               "apple,firmware-segment-* and apple,m3-handoff-version are not added\n");
+
+    if (!armed) {
+        printf("FDT: GPU: dry run OK: firmware %s, %u pstates x %u tables, UAT regions valid, "
+               "firmware segments %s\n",
+               gfx_fw->string, perf_state_count, perf_state_table_count,
+               have_fw_segs ? "valid" : "omitted");
+        printf("FDT: GPU: not armed (no chosen.asahi,t6030-gpu=1): GPU hardware not touched, gpu "
+               "node left disabled\n");
+        return 1;
+    }
+
+    /* 3. Hardware: power on, GPU ID, core masks, leakage fuse (reads guarded) */
+    u32 core_count[T6030_MAX_CLUSTERS], enabled_cores;
+    float leak;
+    if (g15_read_hw(dt, gpu, core_count, &enabled_cores, &leak))
+        return -1;
+
+    /* 4. Power model */
+    u32 max_pwr[MAX_PSTATES];
+    calc_power_t6030(perf_state_count, perf_states, leak, enabled_cores, max_pwr);
+
+    printf("FDT: GPU: Leakage: %d.%03d\n", (int)leak, ((int)(leak * 1000) % 1000));
+    printf("FDT: GPU: Max power table: ");
+    for (u32 i = 0; i < perf_state_count; i++)
+        printf("%d ", max_pwr[i]);
+    printf("\n");
+
+    /* drm/asahi divides by max(opp-microwatt) / 1000 (rel_max_powers), so it must be >= 1 mW */
+    for (u32 i = 1; i < perf_state_count; i++)
+        if (max_pwr[i] > max_pwr[perf_state_count - 1])
+            bail("FDT: GPU: max power of pstate %u is above the top pstate\n", i);
+    if (max_pwr[perf_state_count - 1] < 1000)
+        bail("FDT: GPU: implausible max power %u uW\n", max_pwr[perf_state_count - 1]);
+
+    /* 5. DT writes. The gpu node and the uat-* regions are still disabled. */
+    if (g15_set_opps(dt, opps_ph, perf_state_count, perf_state_table_count, perf_states, max_pwr))
+        return -1;
+
+    /*
+     * TODO: G15S has a single leakage value and no SRAM leakage fuse. It is not known yet which
+     * HwData fields the firmware reads it from; drm/asahi wants one value per cluster, so give
+     * every cluster the fused core value and 0 for SRAM.
+     */
+    if (g15_set_float_array(dt, "apple,core-leak-coef", leak, T6030_MAX_CLUSTERS))
+        return -1;
+    if (g15_set_float_array(dt, "apple,sram-leak-coef", 0.0f, T6030_MAX_CLUSTERS))
+        return -1;
+
+    for (int i = 0; i < G15_NUM_REGIONS; i++) {
+        fdt64_t reg[2];
+        int node = fdt_path_offset(dt, regions[i].dt_path);
+
+        fdt64_st(&reg[0], regions[i].base);
+        fdt64_st(&reg[1], regions[i].size);
+        if (node < 0 || fdt_setprop(dt, node, "reg", reg, sizeof(reg)))
+            bail("FDT: GPU: failed to set reg for %s\n", regions[i].dt_path);
+    }
+
+    gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        bail("FDT: GPU: gpu alias lost\n");
+    if (firmware_set_fdt(dt, gpu, "apple,firmware-version", gfx_fw))
+        return -1;
+    if (firmware_set_fdt(dt, gpu, "apple,firmware-abi", gfx_fw))
+        return -1;
+    if (firmware_set_fdt(dt, gpu, "apple,firmware-compat", gfx_fw))
+        return -1;
+
+    /* All or nothing; a description that was not added does not stop the GPU setup */
+    if (have_fw_segs && g15_set_fw_segs(dt, fw_segs) < 0)
+        return -1;
+
+    /* 6. Enable: the UAT regions first, the gpu node last */
+    for (int i = 0; i < G15_NUM_REGIONS; i++)
+        if (g15_set_status(dt, regions[i].dt_path, "okay"))
+            return -1;
+    if (g15_set_status(dt, "gpu", "okay"))
+        return -1;
+
+    printf("FDT: GPU: T6030 GPU enabled (firmware %s)\n", gfx_fw->string);
+    return 0;
+}
+
+/* Never fails: on any problem the gpu node is left disabled and the boot continues. */
+static int dt_set_gpu_t6030(void *dt)
+{
+    /* Per-kboot state: nothing of the firmware segment description is in this DT yet */
+    memset(&g15_fw_undo, 0, sizeof(g15_fw_undo));
+
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0) {
+        printf("FDT: GPU: gpu alias not found in device tree\n");
+        return 0;
+    }
+
+    if (fdt_node_check_compatible(dt, gpu, "apple,agx-t6030")) {
+        printf("FDT: GPU: gpu node is not apple,agx-t6030, leaving it alone\n");
+        return 0;
+    }
+
+    /* Disabled until everything below has succeeded */
+    if (fdt_setprop_string(dt, gpu, "status", "disabled")) {
+        printf("FDT: GPU: cannot mark the gpu node disabled, not setting up the T6030 GPU\n");
+        g15_disable(dt);
+        return 0;
+    }
+
+    /*
+     * Explicit opt-in before any GPU hardware access. m1n1 cannot tell which kernel GRUB will boot,
+     * so without it the power-on and GPU register reads would run for every kernel, the default one
+     * included. The opt-in is a config line appended to boot.bin (update-m1n1 copies chosen.* lines
+     * from /etc/m1n1.conf):  chosen.asahi,t6030-gpu=1
+     * Without it this is a dry run: the firmware identification (DRAM reads only) and all ADT/DT
+     * checks run and are logged, then the gpu node is left disabled.
+     */
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int len = 0;
+    const char *optin = chosen >= 0 ? fdt_getprop(dt, chosen, "asahi,t6030-gpu", &len) : NULL;
+    bool armed = optin && len == 2 && !strcmp(optin, "1");
+
+    g15_powered = false;
+    int ret = dt_set_gpu_t6030_inner(dt, armed);
+    if (ret) {
+        if (ret < 0)
+            printf("FDT: GPU: T6030 GPU setup failed, leaving the gpu node disabled\n");
+        g15_disable(dt);
+        if (g15_powered && pmgr_adt_power_disable("/arm-io/sgx") < 0)
+            printf("FDT: GPU: failed to power the GPU back off\n");
+    }
+
+    return 0;
+}
+
 int dt_set_gpu(void *dt)
 {
     bool has_cs_afr = false;
@@ -521,6 +1670,8 @@ int dt_set_gpu(void *dt)
         case T8112:
             calc_power = calc_power_t600x;
             break;
+        case T6030:
+            return dt_set_gpu_t6030(dt);
         default:
             printf("ADT: GPU: unsupported chip!\n");
             return 0;
