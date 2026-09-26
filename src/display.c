@@ -264,9 +264,25 @@ const display_config_t *display_get_config(void)
     return conf;
 }
 
+/*
+ * On T6030 the internal DCP is left exactly as iBoot started it (see kboot_display_t6030.c). The
+ * modeset below is untested there, and its fallback config names a power domain T6030 does not
+ * have, so it must never run (display= variable, non-retina heuristic, proxy).
+ */
+static bool display_t6030_hands_off(const char *what)
+{
+    if (chip_id != T6030)
+        return false;
+    printf("display: T6030: %s skipped, keeping the display iBoot set up\n", what);
+    return true;
+}
+
 int display_start_dcp(void)
 {
     if (iboot)
+        return 0;
+
+    if (display_t6030_hands_off("DCP start"))
         return 0;
 
 #ifdef NO_DISPLAY
@@ -401,6 +417,9 @@ int display_configure(const char *config)
     printf("display: skip configuration (NO_DISPLAY)\n");
     return 0;
 #endif
+
+    if (display_t6030_hands_off("DCP modeset"))
+        return 0;
 
     display_parse_mode(config, &want, &opts);
 
