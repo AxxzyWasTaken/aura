@@ -103,6 +103,37 @@ class ResourceTests(unittest.TestCase):
         self.pack('sgx', 'interrupts-valid', '<I', 4)
         with self.assertRaises(resources.DecodeError): self.decode()
 
+    def test_reject_gpu_sram_frequency_mismatch(self):
+        self.pack('sgx', 'perf-states-sram', '<IIII', 100, 500, 201, 600)
+        with self.assertRaisesRegex(resources.DecodeError, 'frequencies differ'):
+            self.decode()
+
+    def test_preserve_nonmonotonic_performance_order(self):
+        for prop in ('perf-states', 'perf-states-sram'):
+            self.pack('sgx', prop, '<IIII', 200, 500, 100, 600)
+        result = self.decode()['performance_tables']['perf-states']
+        self.assertEqual([p['frequency_raw'] for p in result], [200, 100])
+
+    def test_thermal_bits_preserved_without_interpretation(self):
+        self.pack('sgx', 'gpu-fast-die0-integral-gain', '<I', 0xc1200000)
+        result = self.decode()['thermal_metadata']
+        self.assertEqual(result['raw_u32'], {'gpu-fast-die0-integral-gain': 0xc1200000})
+        self.assertIn('gpu-fast-die0-sensor-mask', result['missing_properties'])
+        self.assertFalse(result['interpretation_validated'])
+
+    def test_missing_topology_is_explicit(self):
+        result = self.decode()['topology_metadata']
+        self.assertEqual(result['raw_u32'], {})
+        self.assertEqual(result['missing_properties'], list(resources.TOPOLOGY_PROPERTIES))
+        self.assertFalse(result['interpretation_validated'])
+
+    def test_reject_malformed_optional_metadata(self):
+        for prop in ('gpu-fast-die0-target', 'gpu-core-count'):
+            with self.subTest(prop=prop):
+                self.put('sgx', prop, b'\x01\x00')
+                with self.assertRaises(resources.DecodeError): self.decode()
+                del self.export['nodes']['sgx']['properties'][prop]
+
     def test_reject_length_mismatch(self):
         self.export['nodes']['sgx']['properties']['reg']['bytes'] = 1
         with self.assertRaises(resources.DecodeError): self.decode()

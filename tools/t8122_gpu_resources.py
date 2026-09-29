@@ -15,6 +15,17 @@ class DecodeError(ValueError):
     pass
 
 
+THERMAL_PROPERTIES = (
+    'gpu-fast-die0-sensor-mask', 'gpu-fast-die0-alarm-threshold',
+    'gpu-fast-die0-target', 'gpu-fast-die0-integral-gain',
+    'gpu-fast-die0-proportional-gain', 'gpu-sochot-temp',
+)
+TOPOLOGY_PROPERTIES = (
+    'gpu-core-count', 'gpu-core-mask', 'gpu-count', 'gpu-num-mgpus',
+    'gpu-num-cores', 'gpu-num-frags',
+)
+
+
 def decode(export):
     if export.get('schema_version') != 1:
         raise DecodeError('Unsupported diagnostic schema')
@@ -124,6 +135,8 @@ def decode(export):
     result['power_dependencies'] = [visited[i] for i in sorted(visited)]
     count = scalar('sgx', 'perf-state-count')
     tables = scalar('sgx', 'perf-state-table-count')
+    if not count or not tables:
+        raise DecodeError('Empty performance table dimensions')
     if 'gpu-num-perf-states' in nodes['sgx']['properties']:
         if count != scalar('sgx', 'gpu-num-perf-states') + 1:
             raise DecodeError('GPU pstate count must exclude one off-state entry')
@@ -134,8 +147,22 @@ def decode(export):
             raise DecodeError(f'{prop}: count mismatch')
         result['performance_tables'][prop] = [
             {'frequency_raw': freq, 'voltage_raw': volt} for freq, volt in entries]
+    gpu = result['performance_tables']['perf-states']
+    sram = result['performance_tables']['perf-states-sram']
+    if any(g['frequency_raw'] != s['frequency_raw'] for g, s in zip(gpu, sram)):
+        raise DecodeError('GPU/SRAM performance frequencies differ')
     result['performance_state_count'] = count
     result['performance_table_count'] = tables
+    for label, properties in (('thermal_metadata', THERMAL_PROPERTIES),
+                              ('topology_metadata', TOPOLOGY_PROPERTIES)):
+        present = nodes['sgx']['properties']
+        # Preserve bit patterns: gains may encode floats, and a sensor mask
+        # alone does not identify the sensors or establish a thermal model.
+        result[label] = {
+            'raw_u32': {p: scalar('sgx', p) for p in properties if p in present},
+            'missing_properties': [p for p in properties if p not in present],
+            'interpretation_validated': False,
+        }
     result['firmware_layout'] = {'available': False, 'abi_identified': False}
     if 'segment-ranges' in nodes['gfx-asc']['properties']:
         if export.get('exporter_revision') != 2:
