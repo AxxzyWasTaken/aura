@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "kboot.h"
+#include "kboot_gpu_t8122.h"
 #include "adt.h"
 #include "assert.h"
 #include "clk.h"
@@ -3079,6 +3080,10 @@ int kboot_prepare_dt(void *fdt)
     /* Last, so that its 15K never takes room the steps above need. */
     if (dt_set_pmp_t6030())
         return -1;
+
+    /* Optional export goes last so it cannot consume space needed by fixups. */
+    if (chip_id == T8122)
+        dt_gpu_t8122_diagnostics(dt);
 
     if (fdt_pack(dt))
         bail("FDT: fdt_pack() failed\n");

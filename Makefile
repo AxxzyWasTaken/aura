@@ -159,7 +159,7 @@ OBJECTS := \
 	iodev.o \
 	iova.o \
 	isp.o \
-	kboot.o kboot_atc.o \
+	kboot.o kboot_atc.o kboot_gpu_t8122.o \
 	kboot_t6020_compat.o \
 	kboot_display_t6030.o \
 	main.o \

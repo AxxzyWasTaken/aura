@@ -1672,6 +1672,9 @@ int dt_set_gpu(void *dt)
             break;
         case T6030:
             return dt_set_gpu_t6030(dt);
+        case T8122:
+            /* Metadata-only diagnostics run after the required DT fixups. */
+            return 0;
         default:
             printf("ADT: GPU: unsupported chip!\n");
             return 0;
