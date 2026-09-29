@@ -9,6 +9,8 @@
 
 void *adt;
 static int mode, reads, fail_alloc;
+u64 kboot_ram_base(void) { return 0x800000000; }
+u64 kboot_ram_size(void) { return 0x100000000; }
 void *__real_malloc(size_t size);
 void *__wrap_malloc(size_t size)
 {
@@ -17,22 +19,35 @@ void *__wrap_malloc(size_t size)
 static unsigned char data[32769];
 static const char *const paths[] = {
     "/arm-io", "/arm-io/sgx", "/arm-io/gfx-asc", "/arm-io/pmgr",
-    "/arm-io/mapper-gfx-asc",
+    "/arm-io/mapper-gfx-asc", "/arm-io/gfx-asc/iop-gfx-nub", "/chosen", "/",
 };
 
 int adt_path_offset(const void *tree, const char *path)
 {
     (void)tree;
     reads++;
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 8; i++)
         if (!strcmp(paths[i], path))
-            return mode == 1 && i == 2 ? -1 : i;
+            return (mode == 1 && i == 2) || (mode == 4 && i >= 5) ? -1 : i;
     return -1;
 }
 
 const void *adt_getprop(const void *tree, int node, const char *name, u32 *size)
 {
     (void)tree;
+    if (!strcmp(name, "segment-ranges") && (node == 2 || node == 5)) {
+        *size = 64;
+        return data;
+    }
+    if (!strcmp(name, "segment-names") && (node == 2 || node == 5)) {
+        static const char names[] = "__TEXT;__DATA";
+        *size = sizeof(names);
+        return names;
+    }
+    if (!strcmp(name, "gpu-fast-die0-target") && node == 1) {
+        *size = 4;
+        return data;
+    }
     if (strcmp(name, "reg"))
         return NULL;
     *size = mode == 2 ? sizeof(data) : mode == 3 ? 32768 : 16;
@@ -95,6 +110,22 @@ int main(void)
         assert(!fdt_getprop(dt, node, "reg", &len));
         assert(!fdt_getprop(dt, node, "compatible", &len));
     }
+    int asc = fdt_path_offset(dt, "/chosen/asahi,t8122-gpu-diagnostics/gfx-asc");
+    assert(fdt_getprop(dt, asc, "adt,segment-ranges", &len) && len == 64);
+    int nub = fdt_path_offset(dt, "/chosen/asahi,t8122-gpu-diagnostics/gfx-nub");
+    assert(fdt_getprop(dt, nub, "adt,segment-names", &len) && len == 14);
+    assert(!fdt_getprop(dt, nub, "adt,reg", &len));
+    int sgx = fdt_path_offset(dt, "/chosen/asahi,t8122-gpu-diagnostics/sgx");
+    assert(fdt_getprop(dt, sgx, "adt,gpu-fast-die0-target", &len) && len == 4);
+    assert(!fdt_getprop(dt, sgx, "adt,segment-ranges", &len));
+    const void *usable_prop = fdt_getprop(dt, root, "usable-memory", &len);
+    assert(usable_prop && len == 16);
+    fdt64_t usable[2];
+    memcpy(usable, usable_prop, sizeof(usable));
+    assert(fdt64_to_cpu(usable[0]) == kboot_ram_base());
+    assert(fdt64_to_cpu(usable[1]) == kboot_ram_size());
+    const fdt32_t *revision = fdt_getprop(dt, root, "exporter-revision", &len);
+    assert(revision && len == 4 && fdt32_to_cpu(*revision) == 2);
     int chosen = fdt_path_offset(dt, "/chosen");
     assert(!strcmp(fdt_getprop(dt, chosen, "bootargs", NULL), "unchanged"));
     /* Repeated calls do not overwrite earlier evidence. */
@@ -112,8 +143,15 @@ int main(void)
         assert(!memcmp(before, dt, sizeof(dt)));
     }
 
+    prepare(dt, sizeof(dt), "1", 2);
+    mode = 4;
+    assert(!dt_gpu_t8122_diagnostics(dt));
+    root = fdt_path_offset(dt, export_path);
+    assert(root >= 0 && fdt_getprop(dt, root, "complete", &len));
+    assert(fdt_path_offset(dt, "/chosen/asahi,t8122-gpu-diagnostics/gfx-nub") < 0);
+
     /* Exercise every out-of-space boundary, including partial child writes. */
-    for (int size = 256; size <= 2048; size += 8) {
+    for (int size = 256; size <= 4096; size += 8) {
         prepare(dt, size, "1", 2);
         memcpy(before, dt, size);
         assert(!dt_gpu_t8122_diagnostics(dt));
@@ -123,5 +161,5 @@ int main(void)
         else
             assert(fdt_getprop(dt, root, "complete", &len) && len == 0);
     }
-    puts("PASS: opt-in, metadata, idempotency, allocation failure, bounds and 225 capacity boundaries");
+    puts("PASS: opt-in, metadata, idempotency, allocation failure, bounds and 481 capacity boundaries");
 }

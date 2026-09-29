@@ -29,7 +29,7 @@ def read_export(root):
             if len(data) > 32768 or total > 49152:
                 raise ValueError('Diagnostic data exceeds export bounds')
             item = {'bytes': len(data), 'hex': data.hex()}
-            if prop.name == 'adt,compatible':
+            if prop.name in ('adt,compatible', 'adt,segment-names'):
                 item['strings'] = data.rstrip(b'\0').decode('ascii').split('\0')
             else:
                 for size in (4, 8):
@@ -45,7 +45,21 @@ def read_export(root):
         }
     if not {'sgx', 'gfx-asc'} <= nodes.keys():
         raise ValueError('Required GPU ADT nodes absent')
-    return {'schema_version': 1, 'nodes': nodes}
+    result = {'schema_version': 1, 'nodes': nodes}
+    revision_path = root / 'exporter-revision'
+    if revision_path.exists():
+        revision = revision_path.read_bytes()
+        if len(revision) != 4 or int.from_bytes(revision, 'big') != 2:
+            raise ValueError('Unsupported exporter revision')
+        usable = (root / 'usable-memory').read_bytes()
+        if len(usable) != 16:
+            raise ValueError('Invalid usable-memory extent')
+        base = int.from_bytes(usable[:8], 'big')
+        size = int.from_bytes(usable[8:], 'big')
+        if not size or base + size > 1 << 64:
+            raise ValueError('Invalid usable-memory bounds')
+        result.update(exporter_revision=2, usable_memory={'base': base, 'size': size})
+    return result
 
 
 if __name__ == '__main__':

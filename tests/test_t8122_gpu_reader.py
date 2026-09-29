@@ -48,6 +48,23 @@ class ReaderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reader.read_export(self.root)
 
+    def test_revision_two_memory_is_big_endian(self):
+        (self.root / 'exporter-revision').write_bytes((2).to_bytes(4, 'big'))
+        (self.root / 'usable-memory').write_bytes(
+            (0x800000000).to_bytes(8, 'big') + (0x100000).to_bytes(8, 'big'))
+        result = reader.read_export(self.root)
+        self.assertEqual(result['usable_memory'], {'base': 0x800000000, 'size': 0x100000})
+        self.assertEqual(result['exporter_revision'], 2)
+
+    def test_reject_bad_revision_or_memory(self):
+        for revision, memory in [(3, bytes(16)), (2, bytes(15)), (2, bytes(16)),
+                                 (2, bytes([255]) * 16)]:
+            with self.subTest(revision=revision, memory=memory):
+                (self.root / 'exporter-revision').write_bytes(revision.to_bytes(4, 'big'))
+                (self.root / 'usable-memory').write_bytes(memory)
+                with self.assertRaises(ValueError):
+                    reader.read_export(self.root)
+
 
 if __name__ == '__main__':
     unittest.main()
