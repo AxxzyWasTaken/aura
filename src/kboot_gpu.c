@@ -1639,6 +1639,82 @@ static int dt_set_gpu_t6030(void *dt)
     return 0;
 }
 
+/*
+ * Export the four T8122 UAT carveouts from this boot's ADT. Their physical
+ * addresses depend on the installed RAM size: a J615's fixed addresses are
+ * not valid on this J613. This diagnostic never enables the GPU or mailbox,
+ * votes for power, or starts the ASC.
+ */
+static int dt_set_gpu_t8122(void *dt)
+{
+    int gpu = fdt_path_offset(dt, "/soc/gpu@292400000");
+    if (gpu < 0 || fdt_node_check_compatible(dt, gpu, "apple,agx-t8122"))
+        return 0;
+
+    const char *gpu_status = fdt_getprop(dt, gpu, "status", NULL);
+    int mailbox = fdt_path_offset(dt, "/soc/mbox@292408000");
+    const char *mailbox_status = mailbox >= 0 ?
+        fdt_getprop(dt, mailbox, "status", NULL) : NULL;
+    if (!gpu_status || strcmp(gpu_status, "disabled") ||
+        !mailbox_status || strcmp(mailbox_status, "disabled")) {
+        printf("FDT: GPU: T8122 diagnostic requires disabled GPU and mailbox nodes\n");
+        return 0;
+    }
+
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int len = 0;
+    const char *optin = chosen >= 0 ?
+        fdt_getprop(dt, chosen, "asahi,t8122-gpu-handoff-diag", &len) : NULL;
+    if (!optin || len != 2 || strcmp(optin, "1"))
+        return 0;
+
+    int sgx = adt_path_offset(adt, "/arm-io/sgx");
+    if (sgx < 0)
+        return 0;
+
+    struct g15_region regions[G15_NUM_REGIONS];
+    for (int i = 0; i < G15_NUM_REGIONS; i++) {
+        regions[i] = g15_region_names[i];
+        if (g15_get_region(dt, sgx, &regions[i]))
+            return 0;
+        int node = fdt_path_offset(dt, regions[i].dt_path);
+        const char *status = node >= 0 ? fdt_getprop(dt, node, "status", NULL) : NULL;
+        if (!status || strcmp(status, "disabled")) {
+            printf("FDT: GPU: T8122 expected a disabled %s\n", regions[i].dt_path);
+            return 0;
+        }
+    }
+    if (g15_check_regions(dt, regions))
+        return 0;
+
+    /* Fixed-size reg writes cannot change the DT structure. */
+    for (int i = 0; i < G15_NUM_REGIONS; i++) {
+        fdt64_t reg[2];
+        fdt64_st(&reg[0], regions[i].base);
+        fdt64_st(&reg[1], regions[i].size);
+        int node = fdt_path_offset(dt, regions[i].dt_path);
+        if (node < 0 || fdt_setprop_inplace(dt, node, "reg", reg, sizeof(reg))) {
+            printf("FDT: GPU: T8122 cannot fill %s; all UAT nodes remain disabled\n",
+                   regions[i].dt_path);
+            return 0;
+        }
+    }
+
+    int enabled = 0;
+    for (; enabled < G15_NUM_REGIONS; enabled++)
+        if (g15_set_status(dt, regions[enabled].dt_path, "okay"))
+            break;
+    if (enabled != G15_NUM_REGIONS) {
+        for (int i = 0; i < enabled; i++)
+            if (g15_set_status(dt, regions[i].dt_path, "disabled"))
+                printf("FDT: GPU: T8122 failed to restore %s disabled\n", regions[i].dt_path);
+        return 0;
+    }
+
+    printf("FDT: GPU: T8122 UAT reservations supplied from ADT; GPU and ASC remain disabled\n");
+    return 0;
+}
+
 int dt_set_gpu(void *dt)
 {
     bool has_cs_afr = false;
@@ -1673,8 +1749,7 @@ int dt_set_gpu(void *dt)
         case T6030:
             return dt_set_gpu_t6030(dt);
         case T8122:
-            /* Metadata-only diagnostics run after the required DT fixups. */
-            return 0;
+            return dt_set_gpu_t8122(dt);
         default:
             printf("ADT: GPU: unsupported chip!\n");
             return 0;
