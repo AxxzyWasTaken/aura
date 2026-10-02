@@ -49,8 +49,9 @@ def read_export(root):
     revision_path = root / 'exporter-revision'
     if revision_path.exists():
         revision = revision_path.read_bytes()
-        if len(revision) != 4 or int.from_bytes(revision, 'big') != 2:
+        if len(revision) != 4 or int.from_bytes(revision, 'big') not in (2, 3):
             raise ValueError('Unsupported exporter revision')
+        revision_number = int.from_bytes(revision, 'big')
         usable = (root / 'usable-memory').read_bytes()
         if len(usable) != 16:
             raise ValueError('Invalid usable-memory extent')
@@ -58,7 +59,31 @@ def read_export(root):
         size = int.from_bytes(usable[8:], 'big')
         if not size or base + size > 1 << 64:
             raise ValueError('Invalid usable-memory bounds')
-        result.update(exporter_revision=2, usable_memory={'base': base, 'size': size})
+        result.update(exporter_revision=revision_number,
+                      usable_memory={'base': base, 'size': size})
+        if revision_number == 3:
+            names = ('image-uuid', 'image-patchbay-offset',
+                     'image-patchbay-size', 'image-text-size')
+            present = [(root / name).exists() for name in names]
+            if any(present) and not all(present):
+                raise ValueError('Incomplete firmware image identity')
+            if all(present):
+                uuid = (root / names[0]).read_bytes()
+                fields = [(root / name).read_bytes() for name in names[1:]]
+                if len(uuid) != 16 or any(len(field) != 4 for field in fields):
+                    raise ValueError('Invalid firmware image identity')
+                patchbay_offset, patchbay_size, text_size = (
+                    int.from_bytes(field, 'big') for field in fields)
+                if not text_size or patchbay_offset > text_size or \
+                        patchbay_size > text_size - patchbay_offset:
+                    raise ValueError('Invalid firmware image geometry')
+                result['firmware_image'] = {
+                    'uuid': uuid.hex(),
+                    'patchbay_offset': patchbay_offset,
+                    'patchbay_size': patchbay_size,
+                    'text_size': text_size,
+                    'abi_identified': False,
+                }
     return result
 
 

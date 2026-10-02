@@ -165,8 +165,8 @@ def decode(export):
         }
     result['firmware_layout'] = {'available': False, 'abi_identified': False}
     if 'segment-ranges' in nodes['gfx-asc']['properties']:
-        if export.get('exporter_revision') != 2:
-            raise DecodeError('Segment validation requires revision 2 memory bounds')
+        if export.get('exporter_revision') not in (2, 3):
+            raise DecodeError('Segment validation requires revision 2 or 3 memory bounds')
 
         def extent(base, size):
             if base <= 0 or size <= 0 or base + size > 1 << 64:
@@ -229,8 +229,10 @@ def decode(export):
         result['firmware_layout'] = {
             'available': True, 'abi_identified': False, 'segments': decoded,
             'uat_regions': uat, 'dram': {'base': dram[0], 'size': dram[1] - dram[0]},
-            'limits': 'ADT geometry only; no firmware reads, TZ carveout check or reservations.',
+            'limits': 'Segment geometry only; no TZ carveout check or reservations.',
         }
+    if 'firmware_image' in export:
+        result['firmware_layout']['image_identity'] = export['firmware_image']
     result['limitations'] = [
         'Mailbox subrange and IRQ roles are not established by ADT node ranges.',
         'No core topology, fuse values, thermal model or firmware ABI identification.',

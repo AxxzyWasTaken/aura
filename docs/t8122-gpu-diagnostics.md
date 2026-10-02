@@ -96,10 +96,25 @@ original raw encoding. No GPU MMIO, power transitions, firmware reads or Linux
 GPU-node enablement are performed. Property/aggregate size limits and atomic
 publication remain unchanged.
 
-The reader supports both the original export and revision 2. When segment
+The reader supports the original export and revisions 2 and 3. When segment
 metadata is present, the resource decoder checks physical extents against DRAM
 and usable RAM, rejects overlaps with the four UAT regions, validates virtual
 extents, and compares optional nub metadata. It does not validate TrustZone
 carveouts or firmware contents, reserve memory, or identify a firmware ABI.
 The 13-versus-14 pstate relationship is checked against the existing parser's
 N-active-states-plus-one-off-state convention, without creating power limits.
+
+## Exporter revision 3: loaded firmware identity
+
+Revision 3 retains the same opt-in and all revision-2 fields. It additionally
+reads the 0x38-byte image-info header at offset 0x4200 within the ADT-described
+GFX `__TEXT` segment. The read uses the existing DRAM/carveout checks and
+synchronous-exception guard. A missing or malformed header leaves the optional
+`image-*` properties absent; it does not fail boot or enable the GPU.
+
+When present, `image-uuid` is 16 bytes and `image-patchbay-offset`,
+`image-patchbay-size`, and `image-text-size` are big-endian FDT u32 values.
+The local reader reports them under `firmware_image` with
+`abi_identified: false`. A structurally valid header identifies the loaded
+image; it does not prove the firmware ABI or authorize GPU startup. Keep actual
+UUIDs and other machine-derived values outside git.

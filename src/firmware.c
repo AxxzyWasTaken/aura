@@ -3,6 +3,7 @@
 #include "firmware.h"
 #include "adt.h"
 #include "exception.h"
+#include "gfx_fw_image_info.h"
 #include "mcc.h"
 #include "memory.h"
 #include "stdint.h"
@@ -315,12 +316,6 @@ bool firmware_sfw_in_range(enum fw_version lower_bound, enum fw_version upper_bo
  * NULL, and the caller must then leave the GPU disabled.
  */
 // clang-format on
-#define GFX_FW_HDR_OFFSET 0x4200     // image-info header in the text segment
-#define GFX_FW_HDR_BRANCH 0x14000011 // b +0x44
-#define GFX_FW_HDR_MAGIC  0x64697575 // 'uuid'
-#define GFX_FW_HDR_VER    5
-#define GFX_FW_HDR_SIZE   0x38
-
 struct gfx_fw_image {
     enum fw_version version;
     const char *image;
@@ -377,6 +372,45 @@ static int gfx_fw_read_header(u64 addr, u32 *hdr)
     exc_guard = GUARD_OFF;
 
     return exc_count == exc_before ? 0 : -1;
+}
+
+/*
+ * Return only the fixed image-info identity of the already-loaded GFX image.
+ * This diagnostic is not an ABI allowlist and does not start the GPU. The
+ * address and length come from iBoot's ADT; reject MMIO, carveouts, malformed
+ * extents and any read that faults before copying fields to the caller.
+ */
+bool firmware_gfx_image_info(struct gfx_fw_image_info *out)
+{
+    if (!out)
+        return false;
+    int node = adt_path_offset(adt, "/arm-io/gfx-asc");
+    if (node < 0)
+        return false;
+
+    u32 len = 0;
+    const struct adt_segment_ranges *seg = adt_getprop(adt, node, "segment-ranges", &len);
+    if (!seg || len != 2 * sizeof(*seg))
+        return false;
+    const char *names = adt_getprop(adt, node, "segment-names", &len);
+    if (!names || len < sizeof("__TEXT;") - 1 ||
+        memcmp(names, "__TEXT;", sizeof("__TEXT;") - 1))
+        return false;
+
+    u64 phys = seg[0].phys;
+    u32 size = seg[0].size;
+    if (!phys || size < GFX_FW_HDR_OFFSET + GFX_FW_HDR_SIZE || (phys & 3) ||
+        phys + GFX_FW_HDR_OFFSET < phys)
+        return false;
+    u64 addr = phys + GFX_FW_HDR_OFFSET;
+    if (!gfx_fw_range_is_dram(addr, GFX_FW_HDR_SIZE) ||
+        gfx_fw_range_is_carveout(addr, GFX_FW_HDR_SIZE))
+        return false;
+
+    u32 hdr[GFX_FW_HDR_SIZE / 4];
+    if (gfx_fw_read_header(addr, hdr))
+        return false;
+    return gfx_fw_parse_image_info(hdr, size, out);
 }
 
 /*

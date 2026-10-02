@@ -10,3 +10,7 @@ ${CC:-cc} -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
     src/libfdt/fdt_wip.c src/libfdt/fdt_sw.c src/libfdt/fdt_empty_tree.c \
     -Wl,--wrap=malloc -o "$test_dir/t8122-gpu-diagnostics"
 "$test_dir/t8122-gpu-diagnostics"
+${CC:-cc} -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -g \
+    tests/test_gfx_fw_image_info.c -o "$test_dir/gfx-fw-image-info"
+"$test_dir/gfx-fw-image-info"

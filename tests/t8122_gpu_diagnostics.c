@@ -3,12 +3,14 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+
 #include "../src/adt.h"
+#include "../src/firmware.h"
 #include "../src/kboot_gpu_t8122.h"
 #include "../src/libfdt/libfdt.h"
 
 void *adt;
-static int mode, reads, fail_alloc;
+static int mode, reads, image_reads, fail_alloc;
 u64 kboot_ram_base(void) { return 0x800000000; }
 u64 kboot_ram_size(void) { return 0x100000000; }
 void *__real_malloc(size_t size);
@@ -55,6 +57,20 @@ const void *adt_getprop(const void *tree, int node, const char *name, u32 *size)
     return data;
 }
 
+bool firmware_gfx_image_info(struct gfx_fw_image_info *out)
+{
+    image_reads++;
+    if (mode == 4)
+        return false;
+    memset(out, 0, sizeof(*out));
+    for (int i = 0; i < 16; i++)
+        out->uuid[i] = i;
+    out->patchbay_offset = 0x1000;
+    out->patchbay_size = 0x200;
+    out->text_size = 0x64000;
+    return true;
+}
+
 static void prepare(void *dt, int size, const void *opt, int len)
 {
     assert(!fdt_create_empty_tree(dt, size));
@@ -63,7 +79,7 @@ static void prepare(void *dt, int size, const void *opt, int len)
     assert(!fdt_setprop_string(dt, node, "bootargs", "unchanged"));
     if (opt)
         assert(!fdt_setprop(dt, node, "asahi,t8122-gpu-diag", opt, len));
-    mode = reads = 0;
+    mode = reads = image_reads = 0;
 }
 
 int main(void)
@@ -74,14 +90,14 @@ int main(void)
     assert(!fdt_create_empty_tree(dt, sizeof(dt)));
     memcpy(before, dt, sizeof(dt));
     assert(!dt_gpu_t8122_diagnostics(dt));
-    assert(!reads && !memcmp(before, dt, sizeof(dt)));
+    assert(!reads && !image_reads && !memcmp(before, dt, sizeof(dt)));
 
     prepare(dt, sizeof(dt), "1", 2);
     memcpy(before, dt, sizeof(dt));
     fail_alloc = 1;
     assert(!dt_gpu_t8122_diagnostics(dt));
     fail_alloc = 0;
-    assert(!reads && !memcmp(before, dt, sizeof(dt)));
+    assert(!reads && !image_reads && !memcmp(before, dt, sizeof(dt)));
 
     /* Exact string opt-in only, including its NUL terminator. */
     const char *opts[] = {NULL, "0", "1", "1xx", "1"};
@@ -90,7 +106,7 @@ int main(void)
         prepare(dt, sizeof(dt), opts[i], lengths[i]);
         memcpy(before, dt, sizeof(dt));
         assert(!dt_gpu_t8122_diagnostics(dt));
-        assert(!reads && !memcmp(before, dt, sizeof(dt)));
+        assert(!reads && !image_reads && !memcmp(before, dt, sizeof(dt)));
     }
 
     prepare(dt, sizeof(dt), "1", 2);
@@ -125,14 +141,19 @@ int main(void)
     assert(fdt64_to_cpu(usable[0]) == kboot_ram_base());
     assert(fdt64_to_cpu(usable[1]) == kboot_ram_size());
     const fdt32_t *revision = fdt_getprop(dt, root, "exporter-revision", &len);
-    assert(revision && len == 4 && fdt32_to_cpu(*revision) == 2);
+    assert(revision && len == 4 && fdt32_to_cpu(*revision) == 3);
+    assert(image_reads == 1);
+    const unsigned char *uuid = fdt_getprop(dt, root, "image-uuid", &len);
+    assert(uuid && len == 16 && uuid[0] == 0 && uuid[15] == 15);
+    const fdt32_t *text_size = fdt_getprop(dt, root, "image-text-size", &len);
+    assert(text_size && len == 4 && fdt32_to_cpu(*text_size) == 0x64000);
     int chosen = fdt_path_offset(dt, "/chosen");
     assert(!strcmp(fdt_getprop(dt, chosen, "bootargs", NULL), "unchanged"));
     /* Repeated calls do not overwrite earlier evidence. */
     memcpy(before, dt, sizeof(dt));
-    reads = 0;
+    reads = image_reads = 0;
     assert(!dt_gpu_t8122_diagnostics(dt));
-    assert(!reads && !memcmp(before, dt, sizeof(dt)));
+    assert(!reads && !image_reads && !memcmp(before, dt, sizeof(dt)));
 
     /* Missing ASC, oversized property and aggregate overflow roll back bytes. */
     for (int failure = 1; failure <= 3; failure++) {
@@ -149,6 +170,7 @@ int main(void)
     root = fdt_path_offset(dt, export_path);
     assert(root >= 0 && fdt_getprop(dt, root, "complete", &len));
     assert(fdt_path_offset(dt, "/chosen/asahi,t8122-gpu-diagnostics/gfx-nub") < 0);
+    assert(!fdt_getprop(dt, root, "image-uuid", &len));
 
     /* Exercise every out-of-space boundary, including partial child writes. */
     for (int size = 256; size <= 4096; size += 8) {

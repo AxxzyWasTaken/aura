@@ -222,4 +222,13 @@ void firmware_parse_version(const char *s, u32 *out);
 /* GPU firmware ABI of the image loaded in gfx-asc, or NULL if it is not positively identified */
 const struct fw_version_info *firmware_gfx_version(void);
 
+/* Diagnostic identity only. A valid header does not establish a supported GPU ABI. */
+struct gfx_fw_image_info {
+    u8 uuid[16];
+    u32 patchbay_offset;
+    u32 patchbay_size;
+    u32 text_size;
+};
+bool firmware_gfx_image_info(struct gfx_fw_image_info *out);
+
 #endif

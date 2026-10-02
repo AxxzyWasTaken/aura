@@ -1,16 +1,21 @@
 /* SPDX-License-Identifier: MIT */
 
+#include <malloc.h>
+
 #include "adt.h"
+#include "firmware.h"
 #include "kboot.h"
 #include "kboot_gpu_t8122.h"
+
 #include "libfdt/libfdt.h"
-#include <malloc.h>
 
 /*
  * The Air has no grounded GPU DT or hardware configuration yet. Preserve a
  * small, explicit set of iBoot's ADT metadata for Linux-side inspection before
  * anyone guesses resources from the Pro. These are raw little-endian ADT
- * properties, not Linux device bindings. No firmware bytes or MMIO reads.
+ * properties, not Linux device bindings. Revision 3 also reads only the
+ * fixed image-info header from the already-loaded firmware in DRAM. Only
+ * identity fields are exported, with no GPU MMIO reads.
  *
  * No export unless chosen.asahi,t8122-gpu-diag=1. The caller selects T8122.
  * Build in a private FDT copy and publish only on success, including strings.
@@ -98,7 +103,7 @@ static int export_metadata(void *dt, int chosen)
         return -1;
     if (fdt_setprop_u32(dt, out, "schema-version", 1) ||
         fdt_setprop_string(dt, out, "encoding", "raw-adt-little-endian") ||
-        fdt_setprop_u32(dt, out, "exporter-revision", 2))
+        fdt_setprop_u32(dt, out, "exporter-revision", 3))
         goto fail;
 
     /* Unlike adt,* properties this is an ordinary big-endian FDT pair. */
@@ -127,6 +132,14 @@ static int export_metadata(void *dt, int chosen)
         if (i == 6 && COPY_PROPS(dram_properties))
             goto fail;
         if (i == 7 && COPY_PROPS(root_properties))
+            goto fail;
+    }
+    struct gfx_fw_image_info image;
+    if (firmware_gfx_image_info(&image)) {
+        if (fdt_setprop(dt, out, "image-uuid", image.uuid, sizeof(image.uuid)) ||
+            fdt_setprop_u32(dt, out, "image-patchbay-offset", image.patchbay_offset) ||
+            fdt_setprop_u32(dt, out, "image-patchbay-size", image.patchbay_size) ||
+            fdt_setprop_u32(dt, out, "image-text-size", image.text_size))
             goto fail;
     }
     if (fdt_setprop(dt, out, "complete", NULL, 0))
