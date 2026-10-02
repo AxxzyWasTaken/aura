@@ -49,7 +49,7 @@ def read_export(root):
     revision_path = root / 'exporter-revision'
     if revision_path.exists():
         revision = revision_path.read_bytes()
-        if len(revision) != 4 or int.from_bytes(revision, 'big') not in (2, 3):
+        if len(revision) != 4 or int.from_bytes(revision, 'big') not in (2, 3, 4):
             raise ValueError('Unsupported exporter revision')
         revision_number = int.from_bytes(revision, 'big')
         usable = (root / 'usable-memory').read_bytes()
@@ -61,7 +61,7 @@ def read_export(root):
             raise ValueError('Invalid usable-memory bounds')
         result.update(exporter_revision=revision_number,
                       usable_memory={'base': base, 'size': size})
-        if revision_number == 3:
+        if revision_number >= 3:
             names = ('image-uuid', 'image-patchbay-offset',
                      'image-patchbay-size', 'image-text-size')
             present = [(root / name).exists() for name in names]
@@ -84,6 +84,17 @@ def read_export(root):
                     'text_size': text_size,
                     'abi_identified': False,
                 }
+            version_path = root / 'image-rtkit-version'
+            if version_path.exists():
+                if revision_number != 4:
+                    raise ValueError('RTKit version requires exporter revision 4')
+                if not all(present):
+                    raise ValueError('RTKit version without firmware image identity')
+                raw = version_path.read_bytes()
+                if (len(raw) < 8 or len(raw) > 64 or not raw.startswith(b'RTKit-') or
+                        raw[-1] != 0 or any(byte < 0x20 or byte > 0x7e for byte in raw[:-1])):
+                    raise ValueError('Invalid RTKit version')
+                result['firmware_image']['rtkit_version'] = raw[:-1].decode('ascii')
     return result
 
 

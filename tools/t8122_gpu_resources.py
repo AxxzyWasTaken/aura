@@ -165,8 +165,8 @@ def decode(export):
         }
     result['firmware_layout'] = {'available': False, 'abi_identified': False}
     if 'segment-ranges' in nodes['gfx-asc']['properties']:
-        if export.get('exporter_revision') not in (2, 3):
-            raise DecodeError('Segment validation requires revision 2 or 3 memory bounds')
+        if export.get('exporter_revision') not in (2, 3, 4):
+            raise DecodeError('Segment validation requires revision 2, 3 or 4 memory bounds')
 
         def extent(base, size):
             if base <= 0 or size <= 0 or base + size > 1 << 64:

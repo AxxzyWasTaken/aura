@@ -413,6 +413,41 @@ bool firmware_gfx_image_info(struct gfx_fw_image_info *out)
     return gfx_fw_parse_image_info(hdr, size, out);
 }
 
+bool firmware_gfx_rtkit_version(char out[GFX_FW_VERSION_MAX])
+{
+    if (!out)
+        return false;
+    struct gfx_fw_image_info image;
+    if (!firmware_gfx_image_info(&image))
+        return false;
+    if (image.rtkit_version_offset > image.text_size ||
+        GFX_FW_VERSION_MAX > image.text_size - image.rtkit_version_offset)
+        return false;
+
+    int node = adt_path_offset(adt, "/arm-io/gfx-asc");
+    if (node < 0)
+        return false;
+    u32 len = 0;
+    const struct adt_segment_ranges *seg = adt_getprop(adt, node, "segment-ranges", &len);
+    if (!seg || len != 2 * sizeof(*seg) ||
+        seg[0].phys + image.rtkit_version_offset < seg[0].phys)
+        return false;
+    u64 addr = seg[0].phys + image.rtkit_version_offset;
+    if (!gfx_fw_range_is_dram(addr, GFX_FW_VERSION_MAX) ||
+        gfx_fw_range_is_carveout(addr, GFX_FW_VERSION_MAX))
+        return false;
+
+    u8 bytes[GFX_FW_VERSION_MAX];
+    int before = exc_count;
+    exc_guard = GUARD_MARK | GUARD_SILENT;
+    for (size_t i = 0; i < sizeof(bytes); i++)
+        bytes[i] = read8(addr + i);
+    sysop("dsb sy");
+    sysop("isb");
+    exc_guard = GUARD_OFF;
+    return exc_count == before && gfx_fw_parse_rtkit_version(bytes, out);
+}
+
 /*
  * Returns the firmware version whose GPU ABI is loaded in gfx-asc memory, or NULL if the loaded
  * image could not be positively identified. Never faults the boot.

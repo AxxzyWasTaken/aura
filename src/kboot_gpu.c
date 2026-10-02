@@ -1257,22 +1257,22 @@ static int g15_get_fw_segs(void *dt, int gpu, const struct g15_region *regions,
  * ever restored to their original (same or shorter) values and the rest is deleted, so this needs
  * no DT space. Returns -1 if the DT could not be restored.
  */
-static int g15_unset_fw_segs(void *dt)
+static int g15_unset_fw_segs(void *dt, const char *gpu_path)
 {
     if (!g15_fw_undo.active)
         return 0;
 
-    int gpu = fdt_path_offset(dt, "gpu");
+    int gpu = fdt_path_offset(dt, gpu_path);
     if (gpu < 0)
         bail("FDT: GPU: gpu alias lost\n");
     if (fdt_setprop(dt, gpu, "memory-region", g15_fw_undo.mr, g15_fw_undo.mr_len))
         bail("FDT: GPU: failed to restore memory-region\n");
-    gpu = fdt_path_offset(dt, "gpu");
+    gpu = fdt_path_offset(dt, gpu_path);
     if (gpu < 0 ||
         fdt_setprop(dt, gpu, "memory-region-names", g15_fw_undo.names, g15_fw_undo.names_len))
         bail("FDT: GPU: failed to restore memory-region-names\n");
     for (size_t i = 0; i < ARRAY_SIZE(g15_fw_seg_props); i++) {
-        gpu = fdt_path_offset(dt, "gpu");
+        gpu = fdt_path_offset(dt, gpu_path);
         if (gpu < 0)
             bail("FDT: GPU: gpu alias lost\n");
         int err = fdt_delprop(dt, gpu, g15_fw_seg_props[i]);
@@ -1297,7 +1297,7 @@ static int g15_unset_fw_segs(void *dt)
     return 0;
 }
 
-static int g15_set_fw_segs_inner(void *dt, const struct g15_fw_seg *segs)
+static int g15_set_fw_segs_inner(void *dt, const char *gpu_path, const struct g15_fw_seg *segs)
 {
     fdt32_t mr[G15_MAX_MEM_REGIONS + G15_FW_SEGS];
     char names[G15_MAX_MEM_REGION_NAMES + sizeof("fw-text") + sizeof("fw-data")];
@@ -1307,7 +1307,7 @@ static int g15_set_fw_segs_inner(void *dt, const struct g15_fw_seg *segs)
     int len;
 
     /* Copy what gets appended to, for the undo (bounds checked by g15_get_fw_segs()) */
-    int gpu = fdt_path_offset(dt, "gpu");
+    int gpu = fdt_path_offset(dt, gpu_path);
     if (gpu < 0)
         bail("FDT: GPU: gpu alias lost\n");
     const void *p = fdt_getprop(dt, gpu, "memory-region", &len);
@@ -1362,7 +1362,7 @@ static int g15_set_fw_segs_inner(void *dt, const struct g15_fw_seg *segs)
         flags[i] = cpu_to_fdt32(s->flags);
     }
 
-    gpu = fdt_path_offset(dt, "gpu");
+    gpu = fdt_path_offset(dt, gpu_path);
     if (gpu < 0)
         bail("FDT: GPU: gpu alias lost\n");
     int err = fdt_setprop(dt, gpu, "memory-region", mr, mr_len);
@@ -1384,9 +1384,9 @@ static int g15_set_fw_segs_inner(void *dt, const struct g15_fw_seg *segs)
  * Add the firmware segment description checked by g15_get_fw_segs(). Returns 0 when it was added,
  * 1 when it was not and the DT is unchanged, -1 when a partial description could not be removed.
  */
-static int g15_set_fw_segs(void *dt, const struct g15_fw_seg *segs)
+static int g15_set_fw_segs(void *dt, const char *gpu_path, const struct g15_fw_seg *segs)
 {
-    if (!g15_set_fw_segs_inner(dt, segs)) {
+    if (!g15_set_fw_segs_inner(dt, gpu_path, segs)) {
         printf("FDT: GPU: fw-text 0x%lx+0x%lx (VA 0x%lx), fw-data 0x%lx+0x%lx (VA 0x%lx), "
                "m3-handoff-version %d\n",
                segs[0].phys, segs[0].size, segs[0].va, segs[1].phys, segs[1].size, segs[1].va,
@@ -1394,7 +1394,7 @@ static int g15_set_fw_segs(void *dt, const struct g15_fw_seg *segs)
         return 0;
     }
 
-    if (g15_unset_fw_segs(dt)) {
+    if (g15_unset_fw_segs(dt, gpu_path)) {
         printf("FDT: GPU: could not remove a partial firmware segment description\n");
         return -1;
     }
@@ -1407,7 +1407,7 @@ static void g15_disable(void *dt)
 {
     static const fdt32_t zero[3] = {0, 0, 0};
 
-    if (g15_unset_fw_segs(dt))
+    if (g15_unset_fw_segs(dt, "gpu"))
         printf("FDT: GPU: failed to remove the firmware segment description\n");
 
     for (int i = 0; i < G15_NUM_REGIONS; i++) {
@@ -1575,7 +1575,7 @@ static int dt_set_gpu_t6030_inner(void *dt, bool armed)
         return -1;
 
     /* All or nothing; a description that was not added does not stop the GPU setup */
-    if (have_fw_segs && g15_set_fw_segs(dt, fw_segs) < 0)
+    if (have_fw_segs && g15_set_fw_segs(dt, "gpu", fw_segs) < 0)
         return -1;
 
     /* 6. Enable: the UAT regions first, the gpu node last */
@@ -1647,7 +1647,8 @@ static int dt_set_gpu_t6030(void *dt)
  */
 static int dt_set_gpu_t8122(void *dt)
 {
-    int gpu = fdt_path_offset(dt, "/soc/gpu@292400000");
+    static const char *const gpu_path = "/soc/gpu@292400000";
+    int gpu = fdt_path_offset(dt, gpu_path);
     if (gpu < 0 || fdt_node_check_compatible(dt, gpu, "apple,agx-t8122"))
         return 0;
 
@@ -1687,6 +1688,15 @@ static int dt_set_gpu_t8122(void *dt)
     if (g15_check_regions(dt, regions))
         return 0;
 
+    struct g15_fw_seg fw_segs[G15_FW_SEGS];
+    if (g15_get_fw_segs(dt, gpu, regions, fw_segs))
+        return 0;
+    struct gfx_fw_image_info image;
+    if (!firmware_gfx_image_info(&image) || image.text_size != fw_segs[0].size) {
+        printf("FDT: GPU: T8122 firmware header and ADT text extent disagree\n");
+        return 0;
+    }
+
     /* Fixed-size reg writes cannot change the DT structure. */
     for (int i = 0; i < G15_NUM_REGIONS; i++) {
         fdt64_t reg[2];
@@ -1700,6 +1710,11 @@ static int dt_set_gpu_t8122(void *dt)
         }
     }
 
+    /* Reuse the guarded, rollback-capable G15 segment description. */
+    memset(&g15_fw_undo, 0, sizeof(g15_fw_undo));
+    if (g15_set_fw_segs(dt, gpu_path, fw_segs))
+        return 0;
+
     int enabled = 0;
     for (; enabled < G15_NUM_REGIONS; enabled++)
         if (g15_set_status(dt, regions[enabled].dt_path, "okay"))
@@ -1708,10 +1723,13 @@ static int dt_set_gpu_t8122(void *dt)
         for (int i = 0; i < enabled; i++)
             if (g15_set_status(dt, regions[i].dt_path, "disabled"))
                 printf("FDT: GPU: T8122 failed to restore %s disabled\n", regions[i].dt_path);
+        if (g15_unset_fw_segs(dt, gpu_path))
+            printf("FDT: GPU: T8122 failed to remove firmware segment description\n");
         return 0;
     }
 
-    printf("FDT: GPU: T8122 UAT reservations supplied from ADT; GPU and ASC remain disabled\n");
+    printf("FDT: GPU: T8122 UAT and firmware reservations supplied from ADT; "
+           "GPU and ASC remain disabled, firmware ABI unidentified\n");
     return 0;
 }
 

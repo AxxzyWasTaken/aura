@@ -225,10 +225,12 @@ const struct fw_version_info *firmware_gfx_version(void);
 /* Diagnostic identity only. A valid header does not establish a supported GPU ABI. */
 struct gfx_fw_image_info {
     u8 uuid[16];
+    u32 rtkit_version_offset;
     u32 patchbay_offset;
     u32 patchbay_size;
     u32 text_size;
 };
 bool firmware_gfx_image_info(struct gfx_fw_image_info *out);
+bool firmware_gfx_rtkit_version(char out[64]);
 
 #endif

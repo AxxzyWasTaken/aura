@@ -71,6 +71,14 @@ bool firmware_gfx_image_info(struct gfx_fw_image_info *out)
     return true;
 }
 
+bool firmware_gfx_rtkit_version(char out[64])
+{
+    if (mode == 4)
+        return false;
+    strcpy(out, "RTKit-2419.140.12");
+    return true;
+}
+
 static void prepare(void *dt, int size, const void *opt, int len)
 {
     assert(!fdt_create_empty_tree(dt, size));
@@ -141,12 +149,13 @@ int main(void)
     assert(fdt64_to_cpu(usable[0]) == kboot_ram_base());
     assert(fdt64_to_cpu(usable[1]) == kboot_ram_size());
     const fdt32_t *revision = fdt_getprop(dt, root, "exporter-revision", &len);
-    assert(revision && len == 4 && fdt32_to_cpu(*revision) == 3);
+    assert(revision && len == 4 && fdt32_to_cpu(*revision) == 4);
     assert(image_reads == 1);
     const unsigned char *uuid = fdt_getprop(dt, root, "image-uuid", &len);
     assert(uuid && len == 16 && uuid[0] == 0 && uuid[15] == 15);
     const fdt32_t *text_size = fdt_getprop(dt, root, "image-text-size", &len);
     assert(text_size && len == 4 && fdt32_to_cpu(*text_size) == 0x64000);
+    assert(!strcmp(fdt_getprop(dt, root, "image-rtkit-version", &len), "RTKit-2419.140.12"));
     int chosen = fdt_path_offset(dt, "/chosen");
     assert(!strcmp(fdt_getprop(dt, chosen, "bootargs", NULL), "unchanged"));
     /* Repeated calls do not overwrite earlier evidence. */

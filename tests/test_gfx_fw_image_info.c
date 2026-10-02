@@ -10,6 +10,7 @@ int main(void)
         [0] = GFX_FW_HDR_BRANCH,
         [1] = GFX_FW_HDR_MAGIC,
         [2] = GFX_FW_HDR_VER,
+        [3] = 0x4800,
         [11] = 0x1000,
         [12] = 0x200,
         [13] = 0x64000,
@@ -20,8 +21,23 @@ int main(void)
     assert(gfx_fw_parse_image_info(hdr, 0x64000, &out));
     for (int i = 0; i < 16; i++)
         assert(out.uuid[i] == i);
-    assert(out.patchbay_offset == 0x1000 && out.patchbay_size == 0x200 &&
+    assert(out.rtkit_version_offset == 0x4800 && out.patchbay_offset == 0x1000 && out.patchbay_size == 0x200 &&
            out.text_size == 0x64000);
+
+    u8 version[GFX_FW_VERSION_MAX] = "RTKit-2419.140.12";
+    char parsed[GFX_FW_VERSION_MAX] = "unchanged";
+    assert(gfx_fw_parse_rtkit_version(version, parsed));
+    assert(!strcmp(parsed, "RTKit-2419.140.12"));
+    version[0] = 'X';
+    assert(!gfx_fw_parse_rtkit_version(version, parsed));
+    assert(!strcmp(parsed, "RTKit-2419.140.12"));
+    version[0] = 'R';
+    version[8] = '\n';
+    assert(!gfx_fw_parse_rtkit_version(version, parsed));
+    version[8] = '1';
+    memset(version, 'x', sizeof(version));
+    memcpy(version, "RTKit-", 6);
+    assert(!gfx_fw_parse_rtkit_version(version, parsed));
 
     struct gfx_fw_image_info saved = out;
     assert(!gfx_fw_parse_image_info(NULL, 0x64000, &out));

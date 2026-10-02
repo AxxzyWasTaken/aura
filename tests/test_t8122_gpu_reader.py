@@ -57,7 +57,7 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(result['exporter_revision'], 2)
 
     def test_reject_bad_revision_or_memory(self):
-        for revision, memory in [(4, bytes(16)), (2, bytes(15)), (2, bytes(16)),
+        for revision, memory in [(5, bytes(16)), (2, bytes(15)), (2, bytes(16)),
                                  (2, bytes([255]) * 16)]:
             with self.subTest(revision=revision, memory=memory):
                 (self.root / 'exporter-revision').write_bytes(revision.to_bytes(4, 'big'))
@@ -85,6 +85,29 @@ class ReaderTests(unittest.TestCase):
         (self.root / 'image-text-size').unlink()
         with self.assertRaises(ValueError):
             reader.read_export(self.root)
+
+    def test_revision_four_version_is_validated_and_not_abi_support(self):
+        (self.root / 'exporter-revision').write_bytes((4).to_bytes(4, 'big'))
+        (self.root / 'usable-memory').write_bytes(
+            (0x800000000).to_bytes(8, 'big') + (0x100000).to_bytes(8, 'big'))
+        identity = {
+            'image-uuid': bytes(range(16)),
+            'image-patchbay-offset': (0x1000).to_bytes(4, 'big'),
+            'image-patchbay-size': (0x200).to_bytes(4, 'big'),
+            'image-text-size': (0x64000).to_bytes(4, 'big'),
+        }
+        for name, value in identity.items():
+            (self.root / name).write_bytes(value)
+        version = self.root / 'image-rtkit-version'
+        version.write_bytes(b'RTKit-2419.140.12\0')
+        result = reader.read_export(self.root)
+        self.assertEqual(result['firmware_image']['rtkit_version'], 'RTKit-2419.140.12')
+        self.assertFalse(result['firmware_image']['abi_identified'])
+        for raw in (b'RTKit-\0', b'RTKit-1\n\0', b'RTKit-1', b'RTKit-' + b'x' * 64 + b'\0'):
+            with self.subTest(raw=raw):
+                version.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    reader.read_export(self.root)
 
 
 if __name__ == '__main__':

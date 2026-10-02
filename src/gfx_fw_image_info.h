@@ -10,6 +10,7 @@
 #define GFX_FW_HDR_MAGIC  0x64697575
 #define GFX_FW_HDR_VER    5
 #define GFX_FW_HDR_SIZE   0x38
+#define GFX_FW_VERSION_MAX 64
 
 /* Parse an already-read image-info header; it is an identity, not ABI approval. */
 static inline bool gfx_fw_parse_image_info(const u32 hdr[GFX_FW_HDR_SIZE / 4], u32 segment_size,
@@ -21,6 +22,7 @@ static inline bool gfx_fw_parse_image_info(const u32 hdr[GFX_FW_HDR_SIZE / 4], u
         return false;
 
     struct gfx_fw_image_info found = {
+        .rtkit_version_offset = hdr[3],
         .patchbay_offset = hdr[11],
         .patchbay_size = hdr[12],
         .text_size = hdr[13],
@@ -28,6 +30,25 @@ static inline bool gfx_fw_parse_image_info(const u32 hdr[GFX_FW_HDR_SIZE / 4], u
     memcpy(found.uuid, &hdr[5], sizeof(found.uuid));
     *out = found;
     return true;
+}
+
+/* Accept only one bounded, printable RTKit version string. Never infer ABI. */
+static inline bool gfx_fw_parse_rtkit_version(const u8 bytes[GFX_FW_VERSION_MAX],
+                                              char out[GFX_FW_VERSION_MAX])
+{
+    if (!bytes || !out || memcmp(bytes, "RTKit-", 6))
+        return false;
+    for (size_t i = 0; i < GFX_FW_VERSION_MAX; i++) {
+        if (bytes[i] == 0) {
+            if (i <= 6)
+                return false;
+            memcpy(out, bytes, i + 1);
+            return true;
+        }
+        if (bytes[i] < 0x20 || bytes[i] > 0x7e)
+            return false;
+    }
+    return false;
 }
 
 #endif
