@@ -1688,7 +1688,9 @@ static int t8122_identity_read(void *context, u32 *id, u32 masks[3])
 static int t8122_identity_power_disable(void *context)
 {
     UNUSED(context);
-    return pmgr_adt_power_disable("/arm-io/sgx");
+    if (pmgr_adt_power_disable_recursive("/arm-io/sgx"))
+        return -1;
+    return pmgr_adt_power_is_off("/arm-io/sgx") == 1 ? 0 : -1;
 }
 
 /*
@@ -1709,6 +1711,14 @@ static void t8122_read_powered_identity(void *dt, int gpu)
         !sgx_base || sgx_base != dt_sgx ||
         sgx_size < G15_SGX_CORE_MASK + 12) {
         printf("FDT: GPU: T8122 powered identity preflight rejected SGX window\n");
+        return;
+    }
+
+    /* The SGX gates are virtual on T8122; their real GFX parent must be off
+     * at entry so recursive cleanup can restore that exact state.
+     */
+    if (pmgr_adt_power_is_off("/arm-io/sgx") != 1) {
+        printf("FDT: GPU: T8122 SGX power closure was not off; skipping probe\n");
         return;
     }
 
