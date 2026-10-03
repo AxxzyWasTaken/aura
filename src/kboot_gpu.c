@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "kboot.h"
+#include "kboot_gpu_t8122_power.h"
 #include "adt.h"
 #include "assert.h"
 #include "exception.h"
@@ -1639,11 +1640,108 @@ static int dt_set_gpu_t6030(void *dt)
     return 0;
 }
 
+/* A separate, exact opt-in reads only powered SGX identity registers. */
+
+static int t8122_identity_node(void *dt)
+{
+    int chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen < 0 || fdt_subnode_offset(dt, chosen, "asahi,t8122-gpu-powered-identity") >= 0)
+        return -1;
+    int node = fdt_add_subnode(dt, chosen, "asahi,t8122-gpu-powered-identity");
+    if (node < 0)
+        return -1;
+    if (fdt_setprop_u32(dt, node, "schema-version", 1) ||
+        fdt_setprop_u32(dt, node, "probe-result", T8122_ID_NOT_RUN) ||
+        fdt_setprop_u32(dt, node, "id-version", 0) ||
+        fdt_setprop_u32(dt, node, "core-mask-0", 0) ||
+        fdt_setprop_u32(dt, node, "core-mask-1", 0) ||
+        fdt_setprop_u32(dt, node, "core-mask-2", 0)) {
+        fdt_del_node(dt, node);
+        return -1;
+    }
+    return node;
+}
+
+static int t8122_identity_set_u32(void *dt, int node, const char *name, u32 value)
+{
+    fdt32_t encoded = cpu_to_fdt32(value);
+    return fdt_setprop_inplace(dt, node, name, &encoded, sizeof(encoded));
+}
+
+static int t8122_identity_power_enable(void *context)
+{
+    UNUSED(context);
+    return pmgr_adt_power_enable("/arm-io/sgx");
+}
+
+static int t8122_identity_read(void *context, u32 *id, u32 masks[3])
+{
+    u64 sgx_base = *(u64 *)context;
+    int before = g15_guard_begin();
+    *id = read32(sgx_base + G15_SGX_ID_VERSION);
+    masks[0] = read32(sgx_base + G15_SGX_CORE_MASK);
+    masks[1] = read32(sgx_base + G15_SGX_CORE_MASK + 4);
+    masks[2] = read32(sgx_base + G15_SGX_CORE_MASK + 8);
+    return g15_guard_end(before);
+}
+
+static int t8122_identity_power_disable(void *context)
+{
+    UNUSED(context);
+    return pmgr_adt_power_disable("/arm-io/sgx");
+}
+
+/*
+ * Called only after every UAT and firmware reservation passes the existing
+ * T8122 handoff checks. Power is voted on solely for bounded ID/core-mask
+ * reads, then voted off before Linux starts. Neither GPU nor mailbox is enabled.
+ */
+static void t8122_read_powered_identity(void *dt, int gpu)
+{
+    if (!t8122_power_probe_opted_in(dt))
+        return;
+
+    int sgx_path[8];
+    u64 sgx_base, sgx_size, dt_sgx;
+    if (adt_path_offset_trace(adt, "/arm-io/sgx", sgx_path) < 0 ||
+        adt_get_reg(adt, sgx_path, "reg", 0, &sgx_base, &sgx_size) < 0 ||
+        g15_dt_reg_by_name(dt, gpu, "sgx", &dt_sgx) ||
+        !sgx_base || sgx_base != dt_sgx ||
+        sgx_size < G15_SGX_CORE_MASK + 12) {
+        printf("FDT: GPU: T8122 powered identity preflight rejected SGX window\n");
+        return;
+    }
+
+    /* Reserve all result properties before powering hardware. */
+    int node = t8122_identity_node(dt);
+    if (node < 0) {
+        printf("FDT: GPU: T8122 powered identity result node unavailable\n");
+        return;
+    }
+
+    static const struct t8122_power_probe_ops ops = {
+        .enable = t8122_identity_power_enable,
+        .read = t8122_identity_read,
+        .disable = t8122_identity_power_disable,
+    };
+    struct t8122_powered_identity identity = t8122_power_probe_run(&ops, &sgx_base);
+    if (identity.result == T8122_ID_POWER_OFF_FAILED)
+        printf("FDT: GPU: T8122 failed to release SGX power vote\n");
+
+    if (t8122_identity_set_u32(dt, node, "id-version", identity.id_version) ||
+        t8122_identity_set_u32(dt, node, "core-mask-0", identity.core_mask[0]) ||
+        t8122_identity_set_u32(dt, node, "core-mask-1", identity.core_mask[1]) ||
+        t8122_identity_set_u32(dt, node, "core-mask-2", identity.core_mask[2]) ||
+        t8122_identity_set_u32(dt, node, "probe-result", identity.result))
+        printf("FDT: GPU: T8122 could not publish powered identity result\n");
+    printf("FDT: GPU: T8122 bounded powered identity result %u; GPU and ASC remain disabled\n",
+           identity.result);
+}
+
 /*
  * Export the four T8122 UAT carveouts from this boot's ADT. Their physical
  * addresses depend on the installed RAM size: a J615's fixed addresses are
- * not valid on this J613. This diagnostic never enables the GPU or mailbox,
- * votes for power, or starts the ASC.
+ * not valid on this J613. Normal diagnostics do not power or enable the GPU.
  */
 static int dt_set_gpu_t8122(void *dt)
 {
@@ -1730,6 +1828,7 @@ static int dt_set_gpu_t8122(void *dt)
 
     printf("FDT: GPU: T8122 UAT and firmware reservations supplied from ADT; "
            "GPU and ASC remain disabled, firmware ABI unidentified\n");
+    t8122_read_powered_identity(dt, gpu);
     return 0;
 }
 
