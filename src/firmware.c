@@ -317,6 +317,7 @@ bool firmware_sfw_in_range(enum fw_version lower_bound, enum fw_version upper_bo
  */
 // clang-format on
 struct gfx_fw_image {
+    u32 chip; /* the SoC whose GPU runs this image (chip_id) */
     enum fw_version version;
     const char *image;
     u8 uuid[16];
@@ -328,12 +329,17 @@ struct gfx_fw_image {
 // clang-format off
 static const struct gfx_fw_image gfx_fw_images[] = {
     /* 14.8.3 G15S firmware (InitData ver_info 0x0c08e21e83800490) */
-    {V14_8_3, "g15s build a0", {0x0c, 0xbb, 0x17, 0xaf, 0x78, 0x3d, 0x36, 0x7b,
-                                0x9c, 0xed, 0xd5, 0x91, 0x09, 0x44, 0x73, 0x1e},
+    {T6030, V14_8_3, "g15s build a0", {0x0c, 0xbb, 0x17, 0xaf, 0x78, 0x3d, 0x36, 0x7b,
+                                       0x9c, 0xed, 0xd5, 0x91, 0x09, 0x44, 0x73, 0x1e},
      0x58e88, 0x1e8, 0x5c000},
-    {V14_8_3, "g15s build b0", {0xdb, 0xf3, 0x7c, 0x40, 0xea, 0xd5, 0x37, 0x60,
-                                0x94, 0x41, 0x99, 0x50, 0x18, 0x78, 0x29, 0x55},
+    {T6030, V14_8_3, "g15s build b0", {0xdb, 0xf3, 0x7c, 0x40, 0xea, 0xd5, 0x37, 0x60,
+                                       0x94, 0x41, 0x99, 0x50, 0x18, 0x78, 0x29, 0x55},
      0x58e88, 0x1e8, 0x5c000},
+    /*
+     * T8122 (M3, G15G): no image is listed yet, so firmware_gfx_version(T8122) identifies nothing.
+     * An entry needs the UUID, patchbay offset/size and text size that firmware_gfx_version()
+     * logs ("FW: GFX: image uuid ...") for the image loaded on an M3 Air.
+     */
 };
 // clang-format on
 
@@ -450,9 +456,9 @@ bool firmware_gfx_rtkit_version(char out[GFX_FW_VERSION_MAX])
 
 /*
  * Returns the firmware version whose GPU ABI is loaded in gfx-asc memory, or NULL if the loaded
- * image could not be positively identified. Never faults the boot.
+ * image could not be positively identified as one of `chip`'s known images. Never faults the boot.
  */
-const struct fw_version_info *firmware_gfx_version(void)
+const struct fw_version_info *firmware_gfx_version(u32 chip)
 {
     int node = adt_path_offset(adt, "/arm-io/gfx-asc");
     if (node < 0) {
@@ -508,6 +514,8 @@ const struct fw_version_info *firmware_gfx_version(void)
         for (size_t j = 0; j < ARRAY_SIZE(gfx_fw_images); j++) {
             const struct gfx_fw_image *img = &gfx_fw_images[j];
 
+            if (img->chip != chip)
+                continue;
             if (memcmp(uuid, img->uuid, sizeof(img->uuid)) || hdr[11] != img->patchbay_off ||
                 hdr[12] != img->patchbay_size || hdr[13] != img->text_size)
                 continue;

@@ -1462,7 +1462,7 @@ static int dt_set_gpu_t6030_inner(void *dt, bool armed)
      * 14.8.3 and 14.7 share one iBoot string. Nothing else (in particular no GPU
      * register) is touched unless it is positively the 14.8.3 G15 ABI drm/asahi supports.
      */
-    const struct fw_version_info *gfx_fw = firmware_gfx_version();
+    const struct fw_version_info *gfx_fw = firmware_gfx_version(T6030);
     if (!gfx_fw)
         bail("FDT: GPU: loaded GPU firmware is not a known ABI\n");
     if (gfx_fw->version != V14_8_3 || gfx_fw->num_length != 3 || gfx_fw->num[0] != 14 ||

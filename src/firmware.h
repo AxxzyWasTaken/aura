@@ -219,8 +219,11 @@ bool firmware_iboot_in_range(u32 min[IBOOT_VER_COMP], u32 max[IBOOT_VER_COMP],
                              u32 this[IBOOT_VER_COMP]);
 bool firmware_sfw_in_range(enum fw_version lower_bound, enum fw_version upper_bound);
 void firmware_parse_version(const char *s, u32 *out);
-/* GPU firmware ABI of the image loaded in gfx-asc, or NULL if it is not positively identified */
-const struct fw_version_info *firmware_gfx_version(void);
+/*
+ * GPU firmware ABI of the image loaded in gfx-asc, or NULL if it is not positively identified as
+ * a known image of the SoC `chip`
+ */
+const struct fw_version_info *firmware_gfx_version(u32 chip);
 
 /* Diagnostic identity only. A valid header does not establish a supported GPU ABI. */
 struct gfx_fw_image_info {
