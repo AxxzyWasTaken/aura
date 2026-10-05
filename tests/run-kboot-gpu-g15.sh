@@ -1,5 +1,5 @@
 #!/bin/sh
-# Host test of the G15 GPU setup (src/kboot_gpu.c).
+# Host test of the G15 GPU setup (src/kboot_gpu.c) on T6030 and T8122.
 #
 #   sh tests/run-kboot-gpu-g15.sh [BASE_REF]
 #

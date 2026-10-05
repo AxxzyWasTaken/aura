@@ -118,3 +118,53 @@ The local reader reports them under `firmware_image` with
 `abi_identified: false`. A structurally valid header identifies the loaded
 image; it does not prove the firmware ABI or authorize GPU startup. Keep actual
 UUIDs and other machine-derived values outside git.
+
+## GPU setup: `chosen.asahi,t8122-gpu=1`
+
+This switch runs the same fail-soft G15 GPU setup that `chosen.asahi,t6030-gpu=1`
+runs on the M3 Pro (`dt_set_gpu_g15()` in `src/kboot_gpu.c`), with the T8122
+entry of its SoC table. It is off by default: without it a T8122 boot does not
+run the setup at all (there is no dry run), and only the diagnostic switches
+above apply. With it, `asahi,t8122-gpu-handoff-diag` is ignored.
+
+The setup needs a `gpu` alias to an `apple,agx-t8122` node with the same inputs
+as the T6030 node (`reg`/`reg-names` for asc and sgx, `operating-points-v2`,
+`memory-region`/`memory-region-names`, `apple,firmware-*`, the four
+`/reserved-memory/uat-*` nodes and a `mboxes` mailbox). In order, it
+
+1. marks the gpu node disabled;
+2. identifies the loaded GFX firmware against the T8122 entries of the
+   known-image table (`firmware_gfx_version(T8122)`);
+3. reads and checks the pstates, the four UAT regions and the firmware
+   segments from the ADT, and the gpu node, OPP table and mailbox from the DT;
+4. requires the GPU power closure to be off, powers it on, reads the GPU ID
+   (family 7, variant 2), `ID_COUNTS_1` (one die; cores per cluster and
+   clusters, as drm/asahi reads them for G15G) and the core masks, and
+   rejects mask bits beyond the reported slots or more pstate tables than
+   clusters;
+5. reads the leakage value, computes the per-pstate maximum power and fills
+   the OPPs (one microvolt per cluster), the leakage coefficients, the UAT
+   regions, `apple,firmware-*` and the firmware segment description;
+6. enables the UAT regions, the mailbox if the DT keeps it disabled, and then
+   the gpu node.
+
+Any failure leaves the gpu node, the UAT regions and the mailbox disabled,
+zeroes `apple,firmware-compat`, releases the GPU power closure recursively
+and checks that it is off, and lets the boot continue.
+
+The T8122 table does not have a known G15G firmware image, a leakage fuse or a
+power model yet, so today step 2 stops the setup before any GPU register or
+power access. It logs the loaded image (`FW: GFX: image uuid ...`) and that
+the leakage fuse and power model are missing. The kernel also has no T8122 GPU
+node or driver path yet.
+
+Host tests (synthetic ADT, simulated bus, real libfdt):
+
+```sh
+sh tests/run-kboot-gpu-g15.sh aurora7
+```
+
+The T8122 scenarios check the default (no change at all), the refusal with
+the current tables, and the whole pipeline with the missing data supplied by
+the test: power closure, GPU ID, die count, core mask, pstate table count, DT
+capacity and power-release failures, and precedence over the diagnostic.

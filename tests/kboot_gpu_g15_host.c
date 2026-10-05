@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Host test of the G15 GPU setup in kboot_gpu.c (T6030), with a synthetic ADT, a
+ * Host test of the G15 GPU setup in kboot_gpu.c (T6030 and T8122), with a synthetic ADT, a
  * simulated bus and real libfdt. run-kboot-gpu-g15.sh copies kboot_gpu.c next to this file and
  * the stand-in utils.h/memory.h from tests/g15_host, so the setup runs unchanged on the host.
  *
  * Usage: kboot-gpu-g15 <scenario>   prints the resulting DT, bus and PMGR traces and the log.
  *        kboot-gpu-g15 list         prints the scenario names.
- * The scenarios also build against an older kboot_gpu.c, so the run script can check that the
- * T6030 results did not change.
+ * T6030 scenarios also build against an older kboot_gpu.c, so the run script can check that the
+ * T6030 results did not change. T8122 scenarios need G15_NEW (this tree) and assert on results.
  */
 #include <assert.h>
 #include <stdarg.h>
@@ -570,6 +570,9 @@ static void expect_gpu_off(const void *dt)
 /* ---------- scenarios ---------- */
 
 static const struct fixture t6030_fx = {T6030, "apple,agx-t6030", "asahi,t6030-gpu", 2, 0, 65536};
+#ifdef G15_NEW
+static const struct fixture t8122_fx = {T8122, "apple,agx-t8122", "asahi,t8122-gpu", 1, 1, 65536};
+#endif
 
 static struct fixture fx;
 static u8 dtbuf[1 << 17];
@@ -706,6 +709,172 @@ static void t6030_wrong_compat(void)
     run();
 }
 
+#ifdef G15_NEW
+/*
+ * T8122. With this tree's tables the setup must refuse before any GPU access: the G15G image,
+ * leakage fuse and power model are not known yet.
+ */
+static void t8122_default(void)
+{
+    struct fixture f = t8122_fx;
+    f.optin = NULL;
+    prepare(&f);
+    static u8 before[sizeof(dtbuf)];
+    memcpy(before, dtbuf, sizeof(dtbuf));
+    run();
+    assert(!memcmp(before, dtbuf, sizeof(dtbuf)));
+    assert(!trace_len && !pmgr_enables && !mmio_reads);
+}
+
+static void t8122_armed_refuses(void)
+{
+    prepare(&t8122_fx);
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("FW: GFX: image uuid"));
+    assert(log_has("T8122 GPU setup failed"));
+}
+
+/*
+ * The T8122 pipeline with the data that is still missing supplied by the test: the G15S image
+ * stands in for the G15G one, and the leakage and power model are fixed test values.
+ */
+static int test_read_leak(const struct g15_soc *soc, float *leak)
+{
+    (void)soc;
+    *leak = 2.0f;
+    return 0;
+}
+
+static void test_calc_power(u32 count, const struct perf_state *core, float leak, u32 cores,
+                            u32 *max_pwr)
+{
+    (void)leak;
+    (void)cores;
+    max_pwr[0] = 0;
+    for (u32 i = 1; i < count; i++)
+        max_pwr[i] = core[i].volt * (core[i].freq / 1000000);
+}
+
+static struct g15_soc test_soc;
+
+static int run_t8122_test_soc(void)
+{
+    test_soc = g15_soc_t8122;
+    test_soc.chip = T6030; /* the G15S images stand in for the G15G ones */
+    test_soc.read_leak = test_read_leak;
+    test_soc.calc_power = test_calc_power;
+    return dt_set_gpu_g15(dtbuf, &test_soc);
+}
+
+static void t8122_pipeline(void)
+{
+    prepare(&t8122_fx);
+    run_t8122_test_soc();
+    const char *gpu = "/soc/gpu@292400000";
+    assert(!strcmp(status_of(dtbuf, gpu), "okay"));
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "okay"));
+    assert(!strcmp(status_of(dtbuf, "/reserved-memory/uat-pagetables-l2"), "okay"));
+    assert(prop_len(dtbuf, gpu, "apple,core-leak-coef") == 4);
+    assert(prop_len(dtbuf, gpu, "apple,sram-leak-coef") == 4);
+    assert(prop_len(dtbuf, gpu, "apple,m3-handoff-version") == 4);
+    assert(prop_len(dtbuf, "/opp-table-gpu/opp04", "opp-microvolt") == 4);
+    assert(prop_len(dtbuf, "/opp-table-gpu/opp00", "opp-microvolt") == 4);
+    int gpu_node = fdt_path_offset(dtbuf, gpu);
+    const fdt32_t *compat = fdt_getprop(dtbuf, gpu_node, "apple,firmware-compat", NULL);
+    assert(fdt32_to_cpu(compat[0]) == 14 && fdt32_to_cpu(compat[1]) == 8 &&
+           fdt32_to_cpu(compat[2]) == 3);
+    assert(pmgr_enables == 1 && pmgr_disables == 0 && unguarded_faults == 0);
+    assert(log_has("1 cluster(s) x 10 core slots"));
+    assert(log_has("T8122 GPU enabled"));
+}
+
+static void t8122_closure_on(void)
+{
+    prepare(&t8122_fx);
+    pmgr_off = 0;
+    run_t8122_test_soc();
+    expect_gpu_off(dtbuf);
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("power closure is not off"));
+}
+
+static void t8122_wrong_id(void)
+{
+    prepare(&t8122_fx);
+    mmio_set(SGX_BASE + 0xd04000, 0x07032000, 0);
+    run_t8122_test_soc();
+    expect_gpu_off(dtbuf);
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+    assert(strstr(trace_buf, "pmgr disable-recursive /arm-io/sgx"));
+}
+
+static void t8122_two_dies(void)
+{
+    prepare(&t8122_fx);
+    mmio_set(SGX_BASE + 0xd04010, 0x0002010a, 0);
+    run_t8122_test_soc();
+    expect_gpu_off(dtbuf);
+    assert(pmgr_disables == 1 && pmgr_off == 1);
+    assert(log_has("dies"));
+}
+
+static void t8122_mask_beyond_slots(void)
+{
+    prepare(&t8122_fx);
+    mmio_set(SGX_BASE + 0xe01500, 0x000004ff, 0);
+    run_t8122_test_soc();
+    expect_gpu_off(dtbuf);
+    assert(pmgr_disables == 1);
+}
+
+static void t8122_tables_exceed_clusters(void)
+{
+    struct fixture f = t8122_fx;
+    f.clusters = 2;
+    prepare(&f);
+    run_t8122_test_soc();
+    expect_gpu_off(dtbuf);
+    assert(pmgr_disables == 1);
+    assert(log_has("perf-state tables"));
+}
+
+static void t8122_release_fails(void)
+{
+    prepare(&t8122_fx);
+    mmio_set(SGX_BASE + 0xd04000, 0, 1);
+    pmgr_off_after_release = 0;
+    run_t8122_test_soc();
+    expect_gpu_off(dtbuf);
+    assert(log_has("failed to power the GPU back off"));
+}
+
+static void t8122_small_dt(void)
+{
+    /* Too little room to rebuild the OPP table: everything is undone and the power released */
+    prepare(&t8122_fx);
+    fdt_pack(dtbuf);
+    CHK(fdt_open_into(dtbuf, dtbuf, fdt_totalsize(dtbuf) + 0x40));
+    run_t8122_test_soc();
+    expect_gpu_off(dtbuf);
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(pmgr_disables == 1 && pmgr_off == 1);
+}
+
+static void t8122_with_diag_optin(void)
+{
+    /* The full setup takes precedence over the reservation-only diagnostic */
+    prepare(&t8122_fx);
+    fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"), "asahi,t8122-gpu-handoff-diag",
+                       "1");
+    run();
+    expect_gpu_off(dtbuf);
+    assert(log_has("handoff-diag ignored"));
+}
+#endif
 
 static const struct {
     const char *name;
@@ -728,6 +897,19 @@ static const struct {
     {"t6030-tiny-dt", t6030_tiny_dt},
     {"t6030-no-alias", t6030_no_alias},
     {"t6030-wrong-compat", t6030_wrong_compat},
+#ifdef G15_NEW
+    {"t8122-default", t8122_default},
+    {"t8122-armed-refuses", t8122_armed_refuses},
+    {"t8122-pipeline", t8122_pipeline},
+    {"t8122-closure-on", t8122_closure_on},
+    {"t8122-wrong-id", t8122_wrong_id},
+    {"t8122-two-dies", t8122_two_dies},
+    {"t8122-mask-beyond-slots", t8122_mask_beyond_slots},
+    {"t8122-tables-exceed-clusters", t8122_tables_exceed_clusters},
+    {"t8122-release-fails", t8122_release_fails},
+    {"t8122-small-dt", t8122_small_dt},
+    {"t8122-with-diag-optin", t8122_with_diag_optin},
+#endif
 };
 
 #undef printf

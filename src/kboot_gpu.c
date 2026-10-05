@@ -538,6 +538,7 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
 #define T6030_MAX_CLUSTERS     2        // 20 core slots / 10 per MGPU (drm/asahi max_num_clusters)
 #define G15_SGX_ID_VERSION     0xd04000 // = Fender+0x4000
 #define G15_SGX_CORE_MASK      0xe01500 // 3 words, third masked to 16 bits
+#define G15_SGX_ID_COUNTS_1    0xd04010 // [7:0] cores/cluster, [15:8] clusters/die, [19:16] dies
 #define G15_MAX_CLUSTERS       2        // array bound: the most clusters of a supported SoC
 #define T6030_LEAK_FUSE        0x3642c81a8 // efuse page 0x3642c8000 + 0x1a8
 #define G15S_PWR_CLAMP         70000.0f    // I_static + I_dynamic clamp
@@ -560,9 +561,17 @@ struct g15_soc {
     const char *optin;      /* /chosen property that arms the setup when it is "1" */
     u8 id_gen;              /* expected ID_VERSION[31:24] */
     u8 id_variant;          /* expected ID_VERSION[23:16] */
-    u32 cores_per_cluster; /* core mask slots per cluster */
+    /* Core topology: fixed here, or 0 to read it from ID_COUNTS_1 (then `dies` is required) */
+    u32 cores_per_cluster;
     u32 clusters;
+    u32 dies;
     u32 mask2_bits; /* core mask bits in the third mask word; the bits above it are ignored */
+    /*
+     * The GPU power closure must be off before the setup powers it on, and a failed setup releases
+     * it recursively and checks that it is off again.
+     */
+    bool power_closure;
+    /* NULL while not known: the setup then stops before it touches the GPU */
     int (*read_leak)(const struct g15_soc *soc, float *leak);
     void (*calc_power)(u32 count, const struct perf_state *core, float leak, u32 enabled_cores,
                        u32 *max_pwr);
@@ -641,6 +650,8 @@ static int g15_adt_u64(int node, const char *name, u64 *val)
 static int g15_get_pstates(const struct g15_soc *soc, int sgx, u32 *count_out, u32 *tables_out,
                            const struct perf_state **out)
 {
+    /* With a topology read from the hardware, the tables are checked against it later */
+    u32 max_tables = soc->clusters ? soc->clusters : G15_MAX_CLUSTERS;
     u32 count = 0, n = 0, tables = 0, len = 0;
     bool have_count = !g15_adt_u32(sgx, "perf-state-count", &count) && count;
     bool have_n = !g15_adt_u32(sgx, "gpu-num-perf-states", &n) && n;
@@ -665,7 +676,7 @@ static int g15_get_pstates(const struct g15_soc *soc, int sgx, u32 *count_out, u
 
     if (!have_tables)
         tables = len / (sizeof(*ps) * count);
-    if (!tables || tables > soc->clusters || len != sizeof(*ps) * count * tables)
+    if (!tables || tables > max_tables || len != sizeof(*ps) * count * tables)
         bail("ADT: GPU: unexpected perf-state tables (count %u, tables %u, len %u)\n", count, tables,
              len);
 
@@ -869,6 +880,13 @@ static int g15_read_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *core_c
         bail("ADT: GPU: sgx reg 0 too small (0x%lx)\n", sgx_size);
 
     /*
+     * Only a closure that is off now can be put back exactly as it was if the setup fails later
+     * (a plain power-off of the sgx devices can leave their parents on).
+     */
+    if (soc->power_closure && pmgr_adt_power_is_off("/arm-io/sgx") != 1)
+        bail("FDT: GPU: the GPU power closure is not off, not powering it on\n");
+
+    /*
      * PMGR power-on, unguarded like every other pmgr_adt_power_enable() caller in m1n1: these are
      * the regular PMGR PS registers (the polls are bounded), and a GUARD_MARK fault in the middle of
      * the read-modify-write would corrupt registers instead of recovering. The caller powers the
@@ -878,8 +896,12 @@ static int g15_read_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *core_c
     if (pmgr_adt_power_enable("/arm-io/sgx") < 0)
         bail("FDT: GPU: failed to power on sgx\n");
 
+    bool hw_topology = !soc->cores_per_cluster;
+    u32 counts = 0;
     int before = g15_guard_begin();
     u32 id_version = read32(sgx_base + G15_SGX_ID_VERSION);
+    if (hw_topology)
+        counts = read32(sgx_base + G15_SGX_ID_COUNTS_1);
     u32 mask0 = read32(sgx_base + G15_SGX_CORE_MASK);
     u32 mask1 = read32(sgx_base + G15_SGX_CORE_MASK + 4);
     u32 mask2 = read32(sgx_base + G15_SGX_CORE_MASK + 8);
@@ -893,7 +915,20 @@ static int g15_read_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *core_c
         bail("FDT: GPU: not a %s (expected gen %d variant %d)\n", soc->gpu_name, soc->id_gen,
              soc->id_variant);
 
+    /* Cores per cluster and clusters: fixed for the SoC, or as drm/asahi reads them */
     u32 cores_per_cluster = soc->cores_per_cluster, clusters = soc->clusters;
+    if (hw_topology) {
+        u32 dies = (counts >> 16) & 0xf;
+
+        cores_per_cluster = counts & 0xff;
+        clusters = ((counts >> 8) & 0xff) * dies;
+        printf("FDT: GPU: ID_COUNTS_1 0x%08x: %u die(s), %u cluster(s) x %u core slots\n", counts,
+               dies, clusters, cores_per_cluster);
+        if (dies != soc->dies)
+            bail("FDT: GPU: %u dies, expected %u\n", dies, soc->dies);
+        if (!clusters || clusters > G15_MAX_CLUSTERS || !cores_per_cluster || cores_per_cluster > 32)
+            bail("FDT: GPU: unsupported core topology\n");
+    }
     u32 slots = clusters * cores_per_cluster;
 
     /* Up to 80 (G15S) or 96 mask bits; at most 64 slots */
@@ -1441,6 +1476,46 @@ static int g15_set_fw_segs(void *dt, const char *gpu_path, const struct g15_fw_s
     return 1;
 }
 
+/*
+ * The gpu node's mailbox, its first "mboxes" phandle. A DT may keep it disabled until the GPU is
+ * usable (the T8122 DTs do); the setup then enables it right before the gpu node, and g15_disable()
+ * disables it again. A mailbox that is not disabled is left alone (T6030).
+ */
+static u32 g15_mbox_enabled; /* phandle of the mailbox this setup enabled, 0 if none */
+
+/* *phandle: the mailbox if it is disabled and has to be enabled with the gpu node, else 0 */
+static int g15_get_mbox(void *dt, int gpu, u32 *phandle)
+{
+    int len;
+    const fdt32_t *mboxes = fdt_getprop(dt, gpu, "mboxes", &len);
+
+    *phandle = 0;
+    if (!mboxes)
+        return 0;
+    if (len < (int)sizeof(fdt32_t))
+        bail("FDT: GPU: gpu mboxes is malformed\n");
+
+    u32 ph = fdt32_ld(mboxes);
+    int mbox = fdt_node_offset_by_phandle(dt, ph);
+    if (mbox < 0)
+        bail("FDT: GPU: gpu mailbox (phandle %u) not found\n", ph);
+    const char *status = fdt_getprop(dt, mbox, "status", NULL);
+    if (status && !strcmp(status, "disabled")) {
+        printf("FDT: GPU: gpu mailbox %s is disabled, it is enabled with the gpu node\n",
+               fdt_get_name(dt, mbox, NULL));
+        *phandle = ph;
+    }
+    return 0;
+}
+
+static int g15_set_mbox_status(void *dt, u32 phandle, const char *status)
+{
+    int mbox = fdt_node_offset_by_phandle(dt, phandle);
+    if (mbox < 0 || fdt_setprop_string(dt, mbox, "status", status))
+        bail("FDT: GPU: failed to set the gpu mailbox status to %s\n", status);
+    return 0;
+}
+
 /* Put the gpu node and its UAT regions back into the "not usable" state. Best effort. */
 static void g15_disable(void *dt)
 {
@@ -1453,6 +1528,11 @@ static void g15_disable(void *dt)
         int node = fdt_path_offset(dt, g15_region_names[i].dt_path);
         if (node >= 0)
             fdt_setprop_string(dt, node, "status", "disabled");
+    }
+
+    if (g15_mbox_enabled) {
+        g15_set_mbox_status(dt, g15_mbox_enabled, "disabled");
+        g15_mbox_enabled = 0;
     }
 
     int gpu = fdt_path_offset(dt, "gpu");
@@ -1475,6 +1555,16 @@ static void g15_disable(void *dt)
     }
 }
 
+/*
+ * T8122 (M3, AGX G15G). Same setup as T6030, with these differences:
+ * - the core topology (cores per cluster, clusters) is read from ID_COUNTS_1, the way drm/asahi
+ *   reads it for G15G, and the pstate tables must not outnumber the clusters it reports;
+ * - the GPU power closure must be off before the setup powers it on, and a failed setup releases it
+ *   recursively and checks that it is off again (as the T8122 powered identity probe does);
+ * - the gpu node's mailbox is enabled with it when the DT keeps it disabled (see g15_get_mbox()).
+ * Not known yet, so an armed T8122 setup stops before it touches the GPU: the G15G firmware images
+ * (firmware_gfx_version() has none for T8122), the leakage fuse and the power model.
+ */
 static const struct g15_soc g15_soc_t6030 = {
     .chip = T6030,
     .name = "T6030",
@@ -1488,6 +1578,19 @@ static const struct g15_soc g15_soc_t6030 = {
     .mask2_bits = 16,
     .read_leak = g15s_read_leak,
     .calc_power = calc_power_t6030,
+};
+
+static const struct g15_soc g15_soc_t8122 = {
+    .chip = T8122,
+    .name = "T8122",
+    .gpu_name = "G15G",
+    .compatible = "apple,agx-t8122",
+    .optin = "asahi,t8122-gpu",
+    .id_gen = 7,     // drm/asahi hw/agx3.rs T8122: family 7
+    .id_variant = 2, // variant 2 = G
+    .dies = 1,
+    .mask2_bits = 32,
+    .power_closure = true,
 };
 
 /* Whether /chosen has `name` = "1" */
@@ -1525,11 +1628,16 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
      * register) is touched unless it is positively the 14.8.3 G15 ABI drm/asahi supports.
      */
     const struct fw_version_info *gfx_fw = firmware_gfx_version(soc->chip);
+    bool have_model = soc->read_leak && soc->calc_power;
+    if (!have_model)
+        printf("FDT: GPU: the %s leakage fuse and power model are not known yet\n", soc->gpu_name);
     if (!gfx_fw)
         bail("FDT: GPU: loaded GPU firmware is not a known ABI\n");
     if (gfx_fw->version != V14_8_3 || gfx_fw->num_length != 3 || gfx_fw->num[0] != 14 ||
         gfx_fw->num[1] != 8 || gfx_fw->num[2] != 3)
         bail("FDT: GPU: GPU firmware ABI %s is not supported on %s\n", gfx_fw->string, soc->name);
+    if (!have_model)
+        return -1;
 
     /* 2. ADT and DT inputs (no DT changes yet) */
     u32 perf_state_count, perf_state_table_count;
@@ -1553,6 +1661,10 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     u32 opps_ph = fdt32_ld(opps_ph_p);
     if (fdt_node_offset_by_phandle(dt, opps_ph) < 0)
         bail("FDT: GPU: OPP table for phandle %u not found\n", opps_ph);
+
+    u32 mbox_ph;
+    if (g15_get_mbox(dt, gpu, &mbox_ph))
+        return -1;
 
     if (adt_getprop(adt, sgx, "gptbat-ready", NULL))
         printf("ADT: GPU: gptbat-ready present\n");
@@ -1586,6 +1698,9 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     float leak;
     if (g15_read_hw(dt, gpu, soc, core_count, &clusters, &enabled_cores, &leak))
         return -1;
+    if (perf_state_table_count > clusters)
+        bail("FDT: GPU: %u perf-state tables but %u cluster(s)\n", perf_state_table_count,
+             clusters);
 
     /* 4. Power model */
     u32 max_pwr[MAX_PSTATES];
@@ -1643,10 +1758,15 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     if (have_fw_segs && g15_set_fw_segs(dt, "gpu", fw_segs) < 0)
         return -1;
 
-    /* 6. Enable: the UAT regions first, the gpu node last */
+    /* 6. Enable: the UAT regions first, then the mailbox if it was disabled, the gpu node last */
     for (int i = 0; i < G15_NUM_REGIONS; i++)
         if (g15_set_status(dt, regions[i].dt_path, "okay"))
             return -1;
+    if (mbox_ph) {
+        g15_mbox_enabled = mbox_ph;
+        if (g15_set_mbox_status(dt, mbox_ph, "okay"))
+            return -1;
+    }
     if (g15_set_status(dt, "gpu", "okay"))
         return -1;
 
@@ -1659,6 +1779,7 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
 {
     /* Per-kboot state: nothing of the firmware segment description is in this DT yet */
     memset(&g15_fw_undo, 0, sizeof(g15_fw_undo));
+    g15_mbox_enabled = 0;
 
     int gpu = fdt_path_offset(dt, "gpu");
     if (gpu < 0) {
@@ -1683,7 +1804,7 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
      * Explicit opt-in before any GPU hardware access. m1n1 cannot tell which kernel GRUB will boot,
      * so without it the power-on and GPU register reads would run for every kernel, the default one
      * included. The opt-in is a config line appended to boot.bin (update-m1n1 copies chosen.* lines
-     * from /etc/m1n1.conf):  chosen.asahi,t6030-gpu=1
+     * from /etc/m1n1.conf):  chosen.asahi,t6030-gpu=1 (chosen.asahi,t8122-gpu=1 on T8122)
      * Without it this is a dry run: the firmware identification (DRAM reads only) and all ADT/DT
      * checks run and are logged, then the gpu node is left disabled.
      */
@@ -1695,11 +1816,36 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
         if (ret < 0)
             printf("FDT: GPU: %s GPU setup failed, leaving the gpu node disabled\n", soc->name);
         g15_disable(dt);
-        if (g15_powered && pmgr_adt_power_disable("/arm-io/sgx") < 0)
-            printf("FDT: GPU: failed to power the GPU back off\n");
+        if (g15_powered) {
+            bool off;
+            if (soc->power_closure)
+                off = !pmgr_adt_power_disable_recursive("/arm-io/sgx") &&
+                      pmgr_adt_power_is_off("/arm-io/sgx") == 1;
+            else
+                off = pmgr_adt_power_disable("/arm-io/sgx") >= 0;
+            if (!off)
+                printf("FDT: GPU: failed to power the GPU back off\n");
+        }
     }
 
     return 0;
+}
+
+static int dt_set_gpu_t8122(void *dt);
+
+/*
+ * T8122: the GPU setup runs only with chosen.asahi,t8122-gpu=1; there is no dry run on a default
+ * boot. Without it, the reservation-only diagnostic (dt_set_gpu_t8122()) runs if it is opted in.
+ */
+static int dt_set_gpu_t8122_select(void *dt)
+{
+    if (!g15_optin(dt, g15_soc_t8122.optin))
+        return dt_set_gpu_t8122(dt);
+
+    if (g15_optin(dt, "asahi,t8122-gpu-handoff-diag"))
+        printf("FDT: GPU: asahi,t8122-gpu-handoff-diag ignored: chosen.asahi,t8122-gpu=1 runs "
+               "the GPU setup\n");
+    return dt_set_gpu_g15(dt, &g15_soc_t8122);
 }
 
 /* A separate, exact opt-in reads only powered SGX identity registers. */
@@ -1938,7 +2084,7 @@ int dt_set_gpu(void *dt)
         case T6030:
             return dt_set_gpu_g15(dt, &g15_soc_t6030);
         case T8122:
-            return dt_set_gpu_t8122(dt);
+            return dt_set_gpu_t8122_select(dt);
         default:
             printf("ADT: GPU: unsupported chip!\n");
             return 0;
