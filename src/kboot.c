@@ -2158,13 +2158,21 @@ static bool skip_pmp_prop(const char *prop_name)
     return false;
 }
 
-static int dt_set_pmp(void)
+/* Reads a u32 ADT property only if it is exactly four bytes long. */
+static int adt_get_u32_exact(int node, const char *name, u32 *val)
 {
-    int pmp_node = fdt_path_offset(dt, "pmp");
-    if (pmp_node < 0) {
-        printf("FDT: pmp not found in devtree\n");
-        return 0;
-    }
+    u32 len = 0;
+    const void *p = adt_getprop(adt, node, name, &len);
+
+    if (!p || len != sizeof(*val))
+        return -1;
+    memcpy(val, p, sizeof(*val));
+    return 0;
+}
+
+/* Copies this Mac's PMP values from the ADT onto the FDT node @pmp_node. */
+static int dt_fill_pmp(int pmp_node)
+{
     int chosen_anode = adt_path_offset(adt, "/chosen");
     if (chosen_anode < 0)
         bail("ADT: /chosen not found \n");
@@ -2173,11 +2181,13 @@ static int dt_set_pmp(void)
         bail("ADT: /arm-io/pmp/iop-pmp-nub not found \n");
 
     u32 board_id, dram_vendor_id, dram_capacity = 0xFFFFFFFF;
-    if (ADT_GETPROP(adt, chosen_anode, "board-id", &board_id) < 0)
+    if (adt_get_u32_exact(chosen_anode, "board-id", &board_id))
         bail("ADT: failed to get board id\n");
-    if (ADT_GETPROP(adt, chosen_anode, "dram-vendor-id", &dram_vendor_id) < 0)
+    if (adt_get_u32_exact(chosen_anode, "dram-vendor-id", &dram_vendor_id))
         bail("ADT: failed to get dram vendor id\n");
-    ADT_GETPROP(adt, pmp_iop_anode, "dram-capacity", &dram_capacity);
+    if (adt_getprop(adt, pmp_iop_anode, "dram-capacity", NULL) &&
+        adt_get_u32_exact(pmp_iop_anode, "dram-capacity", &dram_capacity))
+        bail("ADT: dram-capacity is not a u32\n");
 
     if (fdt_setprop_u32(dt, pmp_node, "apple,board-id", board_id))
         bail("FDT: failed to set board id\n");
@@ -2196,8 +2206,73 @@ static int dt_set_pmp(void)
         if (fdt_setprop(dt, pmp_node, prop_name, prop->value, prop->size))
             bail("FDT: failed to transfer pmp tunable");
     }
+    return 0;
+}
+
+static int dt_set_pmp(void)
+{
+    int pmp_node = fdt_path_offset(dt, "pmp");
+    if (pmp_node < 0) {
+        printf("FDT: pmp not found in devtree\n");
+        return 0;
+    }
+    if (dt_fill_pmp(pmp_node))
+        return -1;
     pmp_node = fdt_path_offset(dt, "pmp");
     fdt_setprop_string(dt, pmp_node, "status", "okay");
+    return 0;
+}
+
+/*
+ * T6030: the kernel's display gate adds the PMP itself, halted until the
+ * display needs it, so the device tree has no pmp node for dt_set_pmp().
+ * The gate needs this Mac's PMP values for it: copy them as dt_set_pmp()
+ * does, into /chosen/asahi,t6030-pmp, and leave the PMP alone. Only when the
+ * PMP and its DART are where the gate's overlay puts them. Fail-soft: without
+ * the node the gate keeps the display on the boot framebuffer, except on a
+ * J516S, which has built-in values.
+ */
+static int dt_set_pmp_t6030(void)
+{
+    static const u32 want_irqs[4] = {731, 730, 733, 732};
+    int dart_path[8];
+    const void *irqs;
+    u64 dart_addr = 0, dart_size = 0;
+    u32 len = 0;
+    int pmp_anode, chosen, node;
+    bool where;
+
+    if (fdt_node_check_compatible(dt, 0, "apple,t6030") || fdt_path_offset(dt, "pmp") >= 0)
+        return 0;
+
+    chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen < 0)
+        return 0;
+    node = fdt_add_subnode(dt, chosen, "asahi,t6030-pmp");
+    if (node < 0) {
+        printf("FDT: T6030 PMP values not passed: %d\n", node);
+        return 0;
+    }
+
+    pmp_anode = adt_path_offset(adt, "/arm-io/pmp");
+    irqs = pmp_anode < 0 ? NULL : adt_getprop(adt, pmp_anode, "interrupts", &len);
+    where = irqs && len == sizeof(want_irqs) && !memcmp(irqs, want_irqs, sizeof(want_irqs)) &&
+            adt_path_offset_trace(adt, "/arm-io/dart-pmp", dart_path) >= 0 &&
+            !adt_get_reg(adt, dart_path, "reg", 0, &dart_addr, &dart_size) &&
+            dart_addr == 0x350300000 && dart_size == 0x4000;
+    if (!where) {
+        /* An empty node: the kernel refuses the PMP rather than using built-in values. */
+        printf("FDT: T6030 PMP is not where the kernel expects it; no PMP values passed\n");
+        return 0;
+    }
+    if (dt_fill_pmp(node)) {
+        node = fdt_path_offset(dt, "/chosen/asahi,t6030-pmp");
+        if (node >= 0)
+            fdt_del_node(dt, node);
+        printf("FDT: T6030 PMP values not passed\n");
+        return 0;
+    }
+    printf("FDT: T6030 PMP values passed in /chosen/asahi,t6030-pmp\n");
     return 0;
 }
 
@@ -2892,7 +2967,8 @@ int kboot_prepare_dt(void *fdt)
     dt_bufsize = fdt_totalsize(fdt);
     assert(dt_bufsize);
 
-    dt_bufsize += 6 * SZ_16K; // Add 96K of buffer for modifications
+    // Add 128K of buffer for modifications; a T6030 also takes its PMP values
+    dt_bufsize += 8 * SZ_16K;
     dt = memalign(DT_ALIGN, dt_bufsize);
 
     if (fdt_open_into(fdt, dt, dt_bufsize) < 0)
@@ -2998,6 +3074,10 @@ int kboot_prepare_dt(void *fdt)
      * for the usable memory span to make it into the devicetree.
      */
     if (dt_set_memory())
+        return -1;
+
+    /* Last, so that its 15K never takes room the steps above need. */
+    if (dt_set_pmp_t6030())
         return -1;
 
     if (fdt_pack(dt))
