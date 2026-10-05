@@ -31,6 +31,7 @@ int pmgr_adt_power_is_off(const char *path);
 int pmgr_adt_power_enable_index(const char *path, u32 index);
 int pmgr_adt_power_disable_index(const char *path, u32 index);
 int pmgr_adt_reset(const char *path);
+int pmgr_adt_device_psreg(const char *path, u32 index, u64 *addr, const char **name);
 
 int pmgr_reset(int die, const char *name);
 int pmgr_power_on(int die, const char *name);

@@ -52,7 +52,7 @@ extern const char *const m1n1_version;
 extern u64 relocated_from;
 
 int dt_set_gpu(void *dt);
-int dt_set_display_t6030(void *dt);
+int dt_set_display_handoff(void *dt);
 
 u64 kboot_ram_base(void)
 {
@@ -2114,12 +2114,14 @@ static int dt_set_display(void)
             return ret;
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6022")) {
         /* noop */
-    } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030")) {
+    } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030") ||
+               !fdt_node_check_compatible(dt, 0, "apple,t8122")) {
         /*
-         * Fail-soft T6030 handoff (kboot_display_t6030.c): it always returns 0, never uses the
+         * Fail-soft handoff (kboot_display_handoff.c): it always returns 0, never uses the
          * helpers above (they bail out of kboot or enable nodes) and never enables a node.
+         * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1.
          */
-        return dt_set_display_t6030(dt);
+        return dt_set_display_handoff(dt);
     } else {
         printf("FDT: unknown compatible, skip display reserved-memory setup\n");
         return 0;

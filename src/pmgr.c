@@ -337,6 +337,37 @@ int pmgr_adt_power_disable_index(const char *path, u32 index)
     return pmgr_adt_device_set_mode(path, index, PMGR_PS_PWRGATE, false);
 }
 
+/*
+ * Read only: the power state register and name of clock-gates[index] of the ADT node at path.
+ * Returns -1 past the last entry, for a virtual device, or before pmgr_init().
+ */
+int pmgr_adt_device_psreg(const char *path, u32 index, u64 *addr, const char **name)
+{
+    const u32 *devices;
+    const struct pmgr_device *device;
+    u32 n_devices;
+
+    if (!pmgr_initialized)
+        return -1;
+    int node = adt_path_offset(adt, path);
+    if (node < 0)
+        return -1;
+    devices = adt_getprop(adt, node, "clock-gates", &n_devices);
+    if (!devices || index >= n_devices / 4)
+        return -1;
+
+    u32 id = devices[index];
+    if (pmgr_find_device(FIELD_GET(PMGR_DEVICE_ID, id), &device) ||
+        (device->flags & PMGR_FLAG_VIRTUAL))
+        return -1;
+    uintptr_t ps = pmgr_device_get_addr(FIELD_GET(PMGR_DIE_ID, id), device);
+    if (!ps)
+        return -1;
+    *addr = ps;
+    *name = device->name;
+    return 0;
+}
+
 static int pmgr_reset_device(int die, const struct pmgr_device *dev)
 {
     if (die < 0 || die > 16) {

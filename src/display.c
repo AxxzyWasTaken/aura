@@ -265,7 +265,7 @@ const display_config_t *display_get_config(void)
 }
 
 /*
- * On T6030 the internal DCP is left exactly as iBoot started it (see kboot_display_t6030.c). The
+ * On T6030 the internal DCP is left exactly as iBoot started it (see kboot_display_handoff.c). The
  * modeset below is untested there, and its fallback config names a power domain T6030 does not
  * have, so it must never run (display= variable, non-retina heuristic, proxy).
  */
