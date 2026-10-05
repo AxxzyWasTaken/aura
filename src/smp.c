@@ -149,6 +149,14 @@ void smp_secondary_prep_el3(void)
     return;
 }
 
+extern u64 relocated_from;
+
+/* Where a core whose RVBAR is locked to the pre-move base enters (start.S) */
+static u64 old_vectors_start(void)
+{
+    return relocated_from ? relocated_from + ((u64)_vectors_start - (u64)_base) : 0;
+}
+
 static void smp_start_cpu(int index, const struct cpu_info *cpu)
 {
     int i;
@@ -163,7 +171,8 @@ static void smp_start_cpu(int index, const struct cpu_info *cpu)
         return;
 
     if (!cpu_features->apple_sysregs_unlocked &&
-        (read64(cpu->impl_reg) & RVBAR_ADDR) != (u64)_vectors_start) {
+        (read64(cpu->impl_reg) & RVBAR_ADDR) != (u64)_vectors_start &&
+        (read64(cpu->impl_reg) & RVBAR_ADDR) != old_vectors_start()) {
         printf("Failed! \n    RVBAR (=0x%lx) is locked and differs from entry point (=0x%lx)\n",
                read64(cpu->impl_reg) & RVBAR_ADDR, (u64)_vectors_start);
     }

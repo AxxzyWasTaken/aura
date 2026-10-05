@@ -48,6 +48,7 @@ static char *chosen_params[MAX_CHOSEN_PARAMS][2];
 static char *uboot_config[MAX_UBOOT_CONFIGS][2];
 
 extern const char *const m1n1_version;
+extern u64 relocated_from;
 
 int dt_set_gpu(void *dt);
 int dt_set_display_t6030(void *dt);
@@ -2902,6 +2903,11 @@ int kboot_prepare_dt(void *fdt)
 
     if (fdt_add_mem_rsv(dt, (u64)_base, ((u64)_end) - ((u64)_base)))
         bail("FDT: couldn't add reservation for m1n1\n");
+
+    // m1n1 moved itself above the chainloaded image (start.S); cores with a
+    // locked RVBAR still reset into the forwarding vector at the old base.
+    if (relocated_from && fdt_add_mem_rsv(dt, relocated_from, SZ_16K))
+        bail("FDT: couldn't add reservation for m1n1's old reset vector\n");
 
     if (!cpu_features->apple_sysregs_unlocked) {
         // On M4* / A18 Pro / M5*, there is a CTRR instance left enabled only
