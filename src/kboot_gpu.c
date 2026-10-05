@@ -500,7 +500,7 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
  * hardware yet.
  *
  * Boot safety comes first: this boot.bin boots every kernel on the machine, so nothing in here may
- * fail kboot. dt_set_gpu_t6030() therefore
+ * fail kboot. dt_set_gpu_g15() therefore
  * - marks the gpu node disabled before it does anything else,
  * - positively identifies the loaded GPU firmware as the 14.8.3 ABI before it touches any GPU
  *   register (drm/asahi only accepts apple,firmware-compat = <14 8 3> for G15),
@@ -538,6 +538,7 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
 #define T6030_MAX_CLUSTERS     2        // 20 core slots / 10 per MGPU (drm/asahi max_num_clusters)
 #define G15_SGX_ID_VERSION     0xd04000 // = Fender+0x4000
 #define G15_SGX_CORE_MASK      0xe01500 // 3 words, third masked to 16 bits
+#define G15_MAX_CLUSTERS       2        // array bound: the most clusters of a supported SoC
 #define T6030_LEAK_FUSE        0x3642c81a8 // efuse page 0x3642c8000 + 0x1a8
 #define G15S_PWR_CLAMP         70000.0f    // I_static + I_dynamic clamp
 
@@ -546,6 +547,26 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
 #define G15_PS_MAX_MV 1500
 #define G15_PS_MIN_HZ 100000000u
 #define G15_PS_MAX_HZ 3000000000u
+
+/*
+ * Per-SoC parameters of the G15 GPU setup; the tables are below calc_power_t6030(). Everything
+ * else (pstates, UAT regions, firmware segments, register windows) is read from the ADT at boot.
+ */
+struct g15_soc {
+    u32 chip;               /* selects the known firmware images, see firmware_gfx_version() */
+    const char *name;       /* SoC, for the log */
+    const char *gpu_name;   /* GPU variant, for the log */
+    const char *compatible; /* the gpu node must have it */
+    const char *optin;      /* /chosen property that arms the setup when it is "1" */
+    u8 id_gen;              /* expected ID_VERSION[31:24] */
+    u8 id_variant;          /* expected ID_VERSION[23:16] */
+    u32 cores_per_cluster; /* core mask slots per cluster */
+    u32 clusters;
+    u32 mask2_bits; /* core mask bits in the third mask word; the bits above it are ignored */
+    int (*read_leak)(const struct g15_soc *soc, float *leak);
+    void (*calc_power)(u32 count, const struct perf_state *core, float leak, u32 enabled_cores,
+                       u32 *max_pwr);
+};
 
 struct g15_region {
     const char *adt_name;
@@ -617,7 +638,8 @@ static int g15_adt_u64(int node, const char *name, u64 *val)
  * - A missing perf-state-table-count is derived from the length only when the count came from
  *   perf-state-count.
  */
-static int g15_get_pstates(int sgx, u32 *count_out, u32 *tables_out, const struct perf_state **out)
+static int g15_get_pstates(const struct g15_soc *soc, int sgx, u32 *count_out, u32 *tables_out,
+                           const struct perf_state **out)
 {
     u32 count = 0, n = 0, tables = 0, len = 0;
     bool have_count = !g15_adt_u32(sgx, "perf-state-count", &count) && count;
@@ -643,7 +665,7 @@ static int g15_get_pstates(int sgx, u32 *count_out, u32 *tables_out, const struc
 
     if (!have_tables)
         tables = len / (sizeof(*ps) * count);
-    if (!tables || tables > T6030_MAX_CLUSTERS || len != sizeof(*ps) * count * tables)
+    if (!tables || tables > soc->clusters || len != sizeof(*ps) * count * tables)
         bail("ADT: GPU: unexpected perf-state tables (count %u, tables %u, len %u)\n", count, tables,
              len);
 
@@ -679,7 +701,7 @@ static int g15_get_pstates(int sgx, u32 *count_out, u32 *tables_out, const struc
 
     /* A perf-states-sram table is not used: SRAM follows max(core, 789 mV) */
     if (adt_getprop(adt, sgx, "perf-states-sram", NULL))
-        printf("ADT: GPU: note: perf-states-sram present but unused on G15S\n");
+        printf("ADT: GPU: note: perf-states-sram present but unused on %s\n", soc->gpu_name);
 
     *count_out = count;
     *tables_out = tables;
@@ -820,10 +842,11 @@ static int g15_dt_reg_by_name(void *dt, int gpu, const char *name, u64 *addr)
  * Read the GPU ID, the core masks and the leakage fuse. The DT sgx/asc bases must match the ADT, so
  * that we probe the same block the kernel will use.
  */
-/* Set once dt_set_gpu_t6030_inner() has started to power on the GPU */
+/* Set once dt_set_gpu_g15_inner() has started to power on the GPU */
 static bool g15_powered;
 
-static int g15_read_hw(void *dt, int gpu, u32 *core_count, u32 *enabled_cores, float *leak)
+static int g15_read_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *core_count,
+                       u32 *clusters_out, u32 *enabled_cores, float *leak)
 {
     int sgx_path[8], asc_path[8];
     u64 sgx_base, sgx_size, asc_base, dt_sgx, dt_asc;
@@ -866,29 +889,44 @@ static int g15_read_hw(void *dt, int gpu, u32 *core_count, u32 *enabled_cores, f
     printf("FDT: GPU: ID_VERSION 0x%08x (gen %d variant %d rev %d.%d)\n", id_version,
            id_version >> 24, (id_version >> 16) & 0xff, (id_version >> 12) & 0xf,
            (id_version >> 8) & 0xf);
-    if ((id_version >> 24) != G15S_ID_GEN || ((id_version >> 16) & 0xff) != G15S_ID_VARIANT)
-        bail("FDT: GPU: not a G15S (expected gen %d variant %d)\n", G15S_ID_GEN, G15S_ID_VARIANT);
+    if ((id_version >> 24) != soc->id_gen || ((id_version >> 16) & 0xff) != soc->id_variant)
+        bail("FDT: GPU: not a %s (expected gen %d variant %d)\n", soc->gpu_name, soc->id_gen,
+             soc->id_variant);
 
-    /* 80-bit mask, 20 valid slots on G15S */
+    u32 cores_per_cluster = soc->cores_per_cluster, clusters = soc->clusters;
+    u32 slots = clusters * cores_per_cluster;
+
+    /* Up to 80 (G15S) or 96 mask bits; at most 64 slots */
     u64 mask = mask0 | ((u64)mask1 << 32);
-    printf("FDT: GPU: core mask 0x%04x%016lx\n", mask2 & 0xffff, mask);
-    if ((mask2 & 0xffff) || (mask >> (T6030_MAX_CLUSTERS * G15S_CORES_PER_CLUSTER)))
-        bail("FDT: GPU: core mask has bits beyond the %d G15S core slots\n", G15S_MAX_CORES);
+    u32 mask2_valid = (u32)MASK(soc->mask2_bits);
+    printf("FDT: GPU: core mask 0x%0*x%016lx\n", (int)(soc->mask2_bits / 4), mask2 & mask2_valid,
+           mask);
+    if ((mask2 & mask2_valid) || (slots < 64 && (mask >> slots)))
+        bail("FDT: GPU: core mask has bits beyond the %d %s core slots\n", slots, soc->gpu_name);
 
     *enabled_cores = 0;
     printf("FDT: GPU: Core counts: ");
-    for (u32 i = 0; i < T6030_MAX_CLUSTERS; i++) {
-        core_count[i] = __builtin_popcountll((mask >> (i * G15S_CORES_PER_CLUSTER)) &
-                                             MASK(G15S_CORES_PER_CLUSTER));
+    for (u32 i = 0; i < clusters; i++) {
+        core_count[i] =
+            __builtin_popcountll((mask >> (i * cores_per_cluster)) & MASK(cores_per_cluster));
         *enabled_cores += core_count[i];
         printf("%d ", core_count[i]);
     }
     printf("\n");
     if (!*enabled_cores)
         bail("FDT: GPU: no enabled cores\n");
+    *clusters_out = clusters;
+
+    return soc->read_leak(soc, leak);
+}
+
+/* G15S: one leakage fuse */
+static int g15s_read_leak(const struct g15_soc *soc, float *leak)
+{
+    UNUSED(soc);
 
     /* First m1n1 access to this fuse page (AON region, inside the arm-io MMIO mapping) */
-    before = g15_guard_begin();
+    int before = g15_guard_begin();
     u32 fuse = read32(T6030_LEAK_FUSE);
     if (g15_guard_end(before))
         bail("FDT: GPU: fault reading leakage fuse at 0x%lx\n", T6030_LEAK_FUSE);
@@ -945,7 +983,7 @@ static void calc_power_t6030(u32 count, const struct perf_state *core, float lea
 }
 
 /* Replace all children of the operating-points-v2 table with one OPP per ADT pstate. */
-static int g15_set_opps(void *dt, u32 opps_ph, u32 count, u32 table_count,
+static int g15_set_opps(void *dt, u32 opps_ph, u32 count, u32 table_count, u32 clusters,
                         const struct perf_state *perf_states, const u32 *max_pwr)
 {
     int opps = fdt_node_offset_by_phandle(dt, opps_ph);
@@ -964,9 +1002,9 @@ static int g15_set_opps(void *dt, u32 opps_ph, u32 count, u32 table_count,
     /* fdt_add_subnode() inserts at the head, so add in reverse to keep opp00 first */
     for (int i = count - 1; i >= 0; i--) {
         char name[16];
-        fdt32_t volts[T6030_MAX_CLUSTERS];
+        fdt32_t volts[G15_MAX_CLUSTERS];
 
-        for (u32 j = 0; j < T6030_MAX_CLUSTERS; j++) {
+        for (u32 j = 0; j < clusters; j++) {
             /*
              * One voltage per MGPU (drm/asahi expects max_num_clusters entries). Missing tables and
              * zero entries are back-filled from table 0.
@@ -984,7 +1022,7 @@ static int g15_set_opps(void *dt, u32 opps_ph, u32 count, u32 table_count,
             bail("FDT: GPU: failed to add %s\n", name);
         if (fdt_setprop_u64(dt, opp, "opp-hz", perf_states[i].freq))
             bail("FDT: GPU: Failed to set opp-hz for PS %d\n", i);
-        if (fdt_setprop(dt, opp, "opp-microvolt", volts, sizeof(volts)))
+        if (fdt_setprop(dt, opp, "opp-microvolt", volts, sizeof(fdt32_t) * clusters))
             bail("FDT: GPU: Failed to set opp-microvolt for PS %d\n", i);
         if (fdt_setprop_u32(dt, opp, "opp-microwatt", max_pwr[i]))
             bail("FDT: GPU: Failed to set opp-microwatt for PS %d\n", i);
@@ -1081,7 +1119,7 @@ static const char *const g15_fw_seg_props[] = {
     "apple,m3-handoff-version",
 };
 
-/* What g15_unset_fw_segs() needs to restore the DT. Reset by dt_set_gpu_t6030(). */
+/* What g15_unset_fw_segs() needs to restore the DT. Reset by dt_set_gpu_g15(). */
 static struct {
     bool active; /* the DT may hold (part of) the firmware segment description */
     int mr_len;
@@ -1437,11 +1475,35 @@ static void g15_disable(void *dt)
     }
 }
 
+static const struct g15_soc g15_soc_t6030 = {
+    .chip = T6030,
+    .name = "T6030",
+    .gpu_name = "G15S",
+    .compatible = "apple,agx-t6030",
+    .optin = "asahi,t6030-gpu",
+    .id_gen = G15S_ID_GEN,
+    .id_variant = G15S_ID_VARIANT,
+    .cores_per_cluster = G15S_CORES_PER_CLUSTER,
+    .clusters = T6030_MAX_CLUSTERS,
+    .mask2_bits = 16,
+    .read_leak = g15s_read_leak,
+    .calc_power = calc_power_t6030,
+};
+
+/* Whether /chosen has `name` = "1" */
+static bool g15_optin(void *dt, const char *name)
+{
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int len = 0;
+    const char *optin = chosen >= 0 ? fdt_getprop(dt, chosen, name, &len) : NULL;
+    return optin && len == 2 && !strcmp(optin, "1");
+}
+
 /*
  * Returns 0 when the GPU was set up and enabled, 1 after a successful dry run (not armed: every
  * firmware/ADT/DT check ran, no GPU hardware was touched and nothing was enabled), -1 on failure.
  */
-static int dt_set_gpu_t6030_inner(void *dt, bool armed)
+static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
 {
     int gpu = fdt_path_offset(dt, "gpu");
     if (gpu < 0)
@@ -1462,17 +1524,17 @@ static int dt_set_gpu_t6030_inner(void *dt, bool armed)
      * 14.8.3 and 14.7 share one iBoot string. Nothing else (in particular no GPU
      * register) is touched unless it is positively the 14.8.3 G15 ABI drm/asahi supports.
      */
-    const struct fw_version_info *gfx_fw = firmware_gfx_version(T6030);
+    const struct fw_version_info *gfx_fw = firmware_gfx_version(soc->chip);
     if (!gfx_fw)
         bail("FDT: GPU: loaded GPU firmware is not a known ABI\n");
     if (gfx_fw->version != V14_8_3 || gfx_fw->num_length != 3 || gfx_fw->num[0] != 14 ||
         gfx_fw->num[1] != 8 || gfx_fw->num[2] != 3)
-        bail("FDT: GPU: GPU firmware ABI %s is not supported on T6030\n", gfx_fw->string);
+        bail("FDT: GPU: GPU firmware ABI %s is not supported on %s\n", gfx_fw->string, soc->name);
 
     /* 2. ADT and DT inputs (no DT changes yet) */
     u32 perf_state_count, perf_state_table_count;
     const struct perf_state *perf_states;
-    if (g15_get_pstates(sgx, &perf_state_count, &perf_state_table_count, &perf_states))
+    if (g15_get_pstates(soc, sgx, &perf_state_count, &perf_state_table_count, &perf_states))
         return -1;
 
     struct g15_region regions[G15_NUM_REGIONS];
@@ -1513,20 +1575,21 @@ static int dt_set_gpu_t6030_inner(void *dt, bool armed)
                "firmware segments %s\n",
                gfx_fw->string, perf_state_count, perf_state_table_count,
                have_fw_segs ? "valid" : "omitted");
-        printf("FDT: GPU: not armed (no chosen.asahi,t6030-gpu=1): GPU hardware not touched, gpu "
-               "node left disabled\n");
+        printf("FDT: GPU: not armed (no chosen.%s=1): GPU hardware not touched, gpu "
+               "node left disabled\n",
+               soc->optin);
         return 1;
     }
 
     /* 3. Hardware: power on, GPU ID, core masks, leakage fuse (reads guarded) */
-    u32 core_count[T6030_MAX_CLUSTERS], enabled_cores;
+    u32 core_count[G15_MAX_CLUSTERS], clusters, enabled_cores;
     float leak;
-    if (g15_read_hw(dt, gpu, core_count, &enabled_cores, &leak))
+    if (g15_read_hw(dt, gpu, soc, core_count, &clusters, &enabled_cores, &leak))
         return -1;
 
     /* 4. Power model */
     u32 max_pwr[MAX_PSTATES];
-    calc_power_t6030(perf_state_count, perf_states, leak, enabled_cores, max_pwr);
+    soc->calc_power(perf_state_count, perf_states, leak, enabled_cores, max_pwr);
 
     printf("FDT: GPU: Leakage: %d.%03d\n", (int)leak, ((int)(leak * 1000) % 1000));
     printf("FDT: GPU: Max power table: ");
@@ -1542,7 +1605,8 @@ static int dt_set_gpu_t6030_inner(void *dt, bool armed)
         bail("FDT: GPU: implausible max power %u uW\n", max_pwr[perf_state_count - 1]);
 
     /* 5. DT writes. The gpu node and the uat-* regions are still disabled. */
-    if (g15_set_opps(dt, opps_ph, perf_state_count, perf_state_table_count, perf_states, max_pwr))
+    if (g15_set_opps(dt, opps_ph, perf_state_count, perf_state_table_count, clusters, perf_states,
+                     max_pwr))
         return -1;
 
     /*
@@ -1550,9 +1614,9 @@ static int dt_set_gpu_t6030_inner(void *dt, bool armed)
      * HwData fields the firmware reads it from; drm/asahi wants one value per cluster, so give
      * every cluster the fused core value and 0 for SRAM.
      */
-    if (g15_set_float_array(dt, "apple,core-leak-coef", leak, T6030_MAX_CLUSTERS))
+    if (g15_set_float_array(dt, "apple,core-leak-coef", leak, clusters))
         return -1;
-    if (g15_set_float_array(dt, "apple,sram-leak-coef", 0.0f, T6030_MAX_CLUSTERS))
+    if (g15_set_float_array(dt, "apple,sram-leak-coef", 0.0f, clusters))
         return -1;
 
     for (int i = 0; i < G15_NUM_REGIONS; i++) {
@@ -1586,12 +1650,12 @@ static int dt_set_gpu_t6030_inner(void *dt, bool armed)
     if (g15_set_status(dt, "gpu", "okay"))
         return -1;
 
-    printf("FDT: GPU: T6030 GPU enabled (firmware %s)\n", gfx_fw->string);
+    printf("FDT: GPU: %s GPU enabled (firmware %s)\n", soc->name, gfx_fw->string);
     return 0;
 }
 
 /* Never fails: on any problem the gpu node is left disabled and the boot continues. */
-static int dt_set_gpu_t6030(void *dt)
+static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
 {
     /* Per-kboot state: nothing of the firmware segment description is in this DT yet */
     memset(&g15_fw_undo, 0, sizeof(g15_fw_undo));
@@ -1602,14 +1666,15 @@ static int dt_set_gpu_t6030(void *dt)
         return 0;
     }
 
-    if (fdt_node_check_compatible(dt, gpu, "apple,agx-t6030")) {
-        printf("FDT: GPU: gpu node is not apple,agx-t6030, leaving it alone\n");
+    if (fdt_node_check_compatible(dt, gpu, soc->compatible)) {
+        printf("FDT: GPU: gpu node is not %s, leaving it alone\n", soc->compatible);
         return 0;
     }
 
     /* Disabled until everything below has succeeded */
     if (fdt_setprop_string(dt, gpu, "status", "disabled")) {
-        printf("FDT: GPU: cannot mark the gpu node disabled, not setting up the T6030 GPU\n");
+        printf("FDT: GPU: cannot mark the gpu node disabled, not setting up the %s GPU\n",
+               soc->name);
         g15_disable(dt);
         return 0;
     }
@@ -1622,16 +1687,13 @@ static int dt_set_gpu_t6030(void *dt)
      * Without it this is a dry run: the firmware identification (DRAM reads only) and all ADT/DT
      * checks run and are logged, then the gpu node is left disabled.
      */
-    int chosen = fdt_path_offset(dt, "/chosen");
-    int len = 0;
-    const char *optin = chosen >= 0 ? fdt_getprop(dt, chosen, "asahi,t6030-gpu", &len) : NULL;
-    bool armed = optin && len == 2 && !strcmp(optin, "1");
+    bool armed = g15_optin(dt, soc->optin);
 
     g15_powered = false;
-    int ret = dt_set_gpu_t6030_inner(dt, armed);
+    int ret = dt_set_gpu_g15_inner(dt, soc, armed);
     if (ret) {
         if (ret < 0)
-            printf("FDT: GPU: T6030 GPU setup failed, leaving the gpu node disabled\n");
+            printf("FDT: GPU: %s GPU setup failed, leaving the gpu node disabled\n", soc->name);
         g15_disable(dt);
         if (g15_powered && pmgr_adt_power_disable("/arm-io/sgx") < 0)
             printf("FDT: GPU: failed to power the GPU back off\n");
@@ -1874,7 +1936,7 @@ int dt_set_gpu(void *dt)
             calc_power = calc_power_t600x;
             break;
         case T6030:
-            return dt_set_gpu_t6030(dt);
+            return dt_set_gpu_g15(dt, &g15_soc_t6030);
         case T8122:
             return dt_set_gpu_t8122(dt);
         default:
