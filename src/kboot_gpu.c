@@ -2036,6 +2036,17 @@ static void t8122_admit_image_metadata(void *dt, const struct gfx_fw_image_info 
  */
 static void t8122_enable_asc_preflight(void *dt)
 {
+    /* When the full GPU setup is opted in (chosen.asahi,t8122-gpu=1) it owns the
+     * gpu and mailbox enable; the lighter preflight must not also touch them.
+     * The reservation-only diagnostic that hosts this preflight does not run
+     * under that opt-in, so this is defence in depth, logged when it fires.
+     */
+    if (g15_optin(dt, "asahi,t8122-gpu")) {
+        printf("FDT: GPU: T8122 ASC preflight skipped: chosen.asahi,t8122-gpu=1 owns the "
+               "node enable\n");
+        return;
+    }
+
     int chosen = fdt_path_offset(dt, "/chosen");
     int gpu = fdt_path_offset(dt, "/soc/gpu@292400000");
     int mailbox = fdt_path_offset(dt, "/soc/mbox@292408000");

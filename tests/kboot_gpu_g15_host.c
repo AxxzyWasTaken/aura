@@ -957,6 +957,79 @@ static void t8122_powered_identity_counts2_fault(void)
     assert(unguarded_faults == 0);
 }
 
+/*
+ * A J613 G15G match: the reservation diagnostic and powered identity probe
+ * opted in, the root marked apple,j613, the SGX registers reading this J613's
+ * exact identity, and the owner-supplied image metadata strings in /chosen.
+ */
+#define J613_UUID "0cbb17af783d367b9cedd5910944731e"
+static void prepare_j613(void)
+{
+    prepare_powered_identity();
+    CHK(fdt_setprop_string(dtbuf, 0, "compatible", "apple,j613"));
+    mmio_set(SGX_BASE + 0xd04010, 0x0011010a, 0);
+    mmio_set(SGX_BASE + 0xe01500, 0x37e, 0);
+    int chosen = fdt_path_offset(dtbuf, "/chosen");
+    CHK(fdt_setprop_string(dtbuf, chosen, "asahi,t8122-gpu-abi-ack", "14.8.3"));
+    CHK(fdt_setprop_string(dtbuf, chosen, "asahi,t8122-gpu-expected-uuid", J613_UUID));
+    CHK(fdt_setprop_string(dtbuf, chosen, "asahi,t8122-gpu-expected-rtkit", "RTKit-test"));
+}
+
+static void t8122_j613_image_admitted(void)
+{
+    /* Image admission publishes apple,firmware-compat but enables nothing */
+    prepare_j613();
+    run();
+    assert(identity_u32("probe-result") == T8122_ID_PASS);
+    assert(identity_u32("id-counts-1") == 0x0011010a);
+    assert(identity_u32("id-counts-2") == 0x00040404);
+    assert(identity_u32("core-mask-0") == 0x37e);
+    assert(log_has("J613 exact image metadata admitted"));
+    int gpu = fdt_path_offset(dtbuf, "/soc/gpu@292400000"), len = 0;
+    const fdt32_t *compat = fdt_getprop(dtbuf, gpu, "apple,firmware-compat", &len);
+    assert(compat && len == 12 && fdt32_to_cpu(compat[0]) == 14 &&
+           fdt32_to_cpu(compat[1]) == 8 && fdt32_to_cpu(compat[2]) == 3);
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(unguarded_faults == 0);
+}
+
+static void t8122_asc_preflight_enables(void)
+{
+    /* With only asahi,t8122-gpu-asc-preflight=1, the preflight enables both nodes */
+    prepare_j613();
+    CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"),
+                           "asahi,t8122-gpu-asc-preflight", "1"));
+    run();
+    assert(log_has("J613 exact image metadata admitted"));
+    assert(log_has("one-boot ASC register preflight enabled"));
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "okay"));
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "okay"));
+    assert(unguarded_faults == 0);
+}
+
+static void t8122_asc_preflight_full_optin_noop(void)
+{
+    /* With the full GPU opt-in present, the preflight no-ops and leaves the two
+     * nodes to the full setup. Driven directly on an admitted-but-disabled DT:
+     * the full opt-in otherwise dispatches away from this diagnostic entirely.
+     */
+    prepare_j613();
+    run(); /* admits image metadata, sets apple,firmware-compat; nodes stay disabled */
+    assert(log_has("J613 exact image metadata admitted"));
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    int chosen = fdt_path_offset(dtbuf, "/chosen");
+    CHK(fdt_setprop_string(dtbuf, chosen, "asahi,t8122-gpu", "1"));
+    CHK(fdt_setprop_string(dtbuf, chosen, "asahi,t8122-gpu-asc-preflight", "1"));
+    log_len = 0;
+    log_buf[0] = 0;
+    t8122_enable_asc_preflight(dtbuf);
+    assert(log_has("ASC preflight skipped"));
+    assert(!log_has("one-boot ASC register preflight enabled"));
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+}
+
 static void t8122_with_diag_optin(void)
 {
     /* The full setup takes precedence over the reservation-only diagnostic */
@@ -1007,6 +1080,9 @@ static const struct {
     {"t8122-powered-identity-counts2", t8122_powered_identity_counts2},
     {"t8122-powered-identity-counts-fault", t8122_powered_identity_counts_fault},
     {"t8122-powered-identity-counts2-fault", t8122_powered_identity_counts2_fault},
+    {"t8122-j613-image-admitted", t8122_j613_image_admitted},
+    {"t8122-asc-preflight-enables", t8122_asc_preflight_enables},
+    {"t8122-asc-preflight-full-optin-noop", t8122_asc_preflight_full_optin_noop},
 #endif
 };
 

@@ -209,3 +209,9 @@ pulse the ASC RUN control once before returning `ENODEV`. No UAT setup, RTKit
 handshake, firmware initdata, GPU job or DRM render node is part of this test.
 The boot opt-in is separate from image admission and has not been enabled or
 booted on J613 yet.
+
+When the full GPU setup is opted in with `chosen.asahi,t8122-gpu=1`, that path
+owns the gpu and mailbox enable and the reservation-only diagnostic that hosts
+this preflight does not run. The preflight additionally no-ops (and logs one
+line) if it ever sees that opt-in, so the two paths can never both enable the
+same two nodes in one boot.
