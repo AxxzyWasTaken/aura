@@ -2181,7 +2181,11 @@ static int adt_get_u32_exact(int node, const char *name, u32 *val)
     return 0;
 }
 
-/* Copies this Mac's PMP values from the ADT onto the FDT node @pmp_node. */
+/*
+ * Copies this Mac's PMP values from the ADT onto the FDT node @pmp_node, for dt_pass_pmp() on
+ * T6030 and T8122. Stricter than dt_set_pmp(), which M1 and M2 Macs with a pmp node take: every
+ * value must be exactly a u32.
+ */
 static int dt_fill_pmp(int pmp_node)
 {
     int chosen_anode = adt_path_offset(adt, "/chosen");
@@ -2220,6 +2224,7 @@ static int dt_fill_pmp(int pmp_node)
     return 0;
 }
 
+/* The device tree's pmp node (M1 Pro/Max/Ultra, M2, M2 Pro/Max/Ultra): as upstream has it */
 static int dt_set_pmp(void)
 {
     int pmp_node = fdt_path_offset(dt, "pmp");
@@ -2227,8 +2232,37 @@ static int dt_set_pmp(void)
         printf("FDT: pmp not found in devtree\n");
         return 0;
     }
-    if (dt_fill_pmp(pmp_node))
-        return -1;
+    int chosen_anode = adt_path_offset(adt, "/chosen");
+    if (chosen_anode < 0)
+        bail("ADT: /chosen not found \n");
+    int pmp_iop_anode = adt_path_offset(adt, "/arm-io/pmp/iop-pmp-nub");
+    if (pmp_iop_anode < 0)
+        bail("ADT: /arm-io/pmp/iop-pmp-nub not found \n");
+
+    u32 board_id, dram_vendor_id, dram_capacity = 0xFFFFFFFF;
+    if (ADT_GETPROP(adt, chosen_anode, "board-id", &board_id) < 0)
+        bail("ADT: failed to get board id\n");
+    if (ADT_GETPROP(adt, chosen_anode, "dram-vendor-id", &dram_vendor_id) < 0)
+        bail("ADT: failed to get dram vendor id\n");
+    ADT_GETPROP(adt, pmp_iop_anode, "dram-capacity", &dram_capacity);
+
+    if (fdt_setprop_u32(dt, pmp_node, "apple,board-id", board_id))
+        bail("FDT: failed to set board id\n");
+    if (fdt_setprop_u32(dt, pmp_node, "apple,dram-vendor-id", dram_vendor_id))
+        bail("FDT: failed to set dram vendor id\n");
+    if (dram_capacity != 0xFFFFFFFF &&
+        fdt_setprop_u32(dt, pmp_node, "apple,dram-capacity", dram_capacity))
+        bail("FDT: failed to set dram capacity\n");
+
+    ADT_FOREACH_PROPERTY(adt, pmp_iop_anode, prop)
+    {
+        if (skip_pmp_prop(prop->name))
+            continue;
+        char prop_name[128];
+        snprintf(prop_name, sizeof(prop_name), "apple,tunable-%s", prop->name);
+        if (fdt_setprop(dt, pmp_node, prop_name, prop->value, prop->size))
+            bail("FDT: failed to transfer pmp tunable");
+    }
     pmp_node = fdt_path_offset(dt, "pmp");
     fdt_setprop_string(dt, pmp_node, "status", "okay");
     return 0;
