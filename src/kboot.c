@@ -4,6 +4,7 @@
 
 #include "kboot.h"
 #include "kboot_gpu_t8122.h"
+#include "kboot_pmp_t8122.h"
 #include "adt.h"
 #include "assert.h"
 #include "clk.h"
@@ -3013,7 +3014,7 @@ int kboot_prepare_dt(void *fdt)
 
     // Add 128K of buffer for modifications; a T6030 also takes its PMP values
     dt_bufsize += 8 * SZ_16K;
-    // A T8122 also takes its PMP values
+    // A T8122 also takes its PMP values, GPU and PMP facts and the display clock description
     if (chip_id == T8122)
         dt_bufsize += 8 * SZ_16K;
     dt = memalign(DT_ALIGN, dt_bufsize);
@@ -3132,8 +3133,10 @@ int kboot_prepare_dt(void *fdt)
         dt_gpu_t8122_diagnostics(dt);
 
     /* After the GPU export, so that one stays as before. */
-    if (chip_id == T8122)
+    if (chip_id == T8122) {
         dt_set_pmp_t8122();
+        dt_pmp_t8122_facts(dt);
+    }
 
     if (fdt_pack(dt))
         bail("FDT: fdt_pack() failed\n");
