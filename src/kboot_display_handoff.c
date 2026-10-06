@@ -180,6 +180,8 @@ static const struct dcp6_seg_def dcp6_seg_defs_t6030[DCP6_SEGS] = {
 
 #define DCP6_OSLOG_NODE "dcp-oslog"
 #define DCP6_OSLOG_PROP "apple,dcp-os-log"
+/* (address, size) of each __OS_LOG buffer found on the loaded file part of m1n1 */
+#define DCP6_OVERLAP_PROP "asahi,m1n1-oslog-overlap"
 
 /* Owners of the nubs whose __OS_LOG is reserved: /arm-io/<owner>/iop-<owner>-nub */
 static const char *const dcp6_nubs_t6030[] = {"dcp", "dcpext0", "dcpext1"};
@@ -637,6 +639,31 @@ static int dcp6_get_oslog(const char *owner, const char *nub_path, u64 *phys, u6
     return 0;
 }
 
+/*
+ * The running coprocessors write their __OS_LOG buffers from before m1n1 starts. Stage 1 loads
+ * this image at its own base and start.S then copies the file part of it away (m1n1-raw.ld keeps
+ * that part below 0x120000, where the panel DCP's buffer was seen with the stage 1 these builds
+ * were checked with). If a buffer lies on the loaded file part, the coprocessor may have written
+ * over m1n1's code or data before the copy: say so loudly, and mark it in /chosen for the OS
+ * side. The buffer is still reserved, because the coprocessor keeps writing it; nothing else can
+ * be undone at this point.
+ */
+static bool dcp6_oslog_on_file_part(const char *owner, u64 phys, u64 size, fdt64_t *marker)
+{
+    u64 base, len;
+
+    kboot_loaded_file_part(&base, &len);
+    if (!dcp6_overlaps(phys, size, base, len))
+        return false;
+    dlog("WARNING: %s __OS_LOG 0x%lx+0x%lx overlaps m1n1 where stage 1 loaded it (0x%lx+0x%lx)\n",
+         owner, phys, size, base, len);
+    dlog("WARNING: its coprocessor may have changed m1n1 there; m1n1 was only checked with a "
+         "stage 1 that leaves the first 0x120000 bytes clear\n");
+    marker[0] = cpu_to_fdt64(phys);
+    marker[1] = cpu_to_fdt64(size);
+    return true;
+}
+
 static __attribute__((noinline)) void dcp6_reserve_oslogs(void *dt)
 {
     struct {
@@ -644,7 +671,8 @@ static __attribute__((noinline)) void dcp6_reserve_oslogs(void *dt)
         bool add;
         char name[DCP6_NAME_LEN];
     } logs[DCP6_NUBS_MAX];
-    int nadd = 0, have = 0;
+    int nadd = 0, have = 0, nover = 0;
+    fdt64_t over[DCP6_NUBS_MAX][2];
 
     for (int i = 0; i < dcp6.nnubs; i++) {
         char nub[DCP6_NAME_LEN];
@@ -652,6 +680,8 @@ static __attribute__((noinline)) void dcp6_reserve_oslogs(void *dt)
         dcp6_nub_path(nub, sizeof(nub), dcp6.nubs[i]);
         if (dcp6_get_oslog(dcp6.nubs[i], nub, &logs[i].phys, &logs[i].size))
             continue;
+        if (dcp6_oslog_on_file_part(dcp6.nubs[i], logs[i].phys, logs[i].size, over[nover]))
+            nover++;
         snprintf(logs[i].name, sizeof(logs[i].name), DCP6_OSLOG_NODE "@%lx", logs[i].phys);
 
         int existing = dcp6_find_resv(dt, logs[i].name, logs[i].phys, logs[i].size);
@@ -676,6 +706,12 @@ static __attribute__((noinline)) void dcp6_reserve_oslogs(void *dt)
             continue;
         logs[i].add = true;
         nadd++;
+    }
+
+    if (nover) {
+        int chosen = fdt_path_offset(dt, "/chosen");
+        if (chosen < 0 || fdt_setprop(dt, chosen, DCP6_OVERLAP_PROP, over, nover * sizeof(over[0])))
+            dlog("could not set /chosen/" DCP6_OVERLAP_PROP "\n");
     }
 
     if (!nadd) {

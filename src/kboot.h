@@ -31,6 +31,12 @@ u64 kboot_ram_base(void);
 u64 kboot_ram_size(void);
 u64 kboot_fb_base(void);
 
+/*
+ * Where stage 1 loaded the file part of this image (the part start.S copies when it moves the
+ * image above the chainloaded one): the old base if it moved, otherwise where it runs.
+ */
+void kboot_loaded_file_part(u64 *base, u64 *size);
+
 // from rust/usb4.rs
 u64 rust_usb4_router_uuid(void);
 

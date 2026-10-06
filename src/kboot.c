@@ -71,6 +71,12 @@ u64 kboot_fb_base(void)
     return cur_boot_args.video.base;
 }
 
+void kboot_loaded_file_part(u64 *base, u64 *size)
+{
+    *base = relocated_from ? relocated_from : (u64)_base;
+    *size = (u64)_file_end - (u64)_base;
+}
+
 #define DT_ALIGN 16384
 
 #define bail(...)                                                                                  \
