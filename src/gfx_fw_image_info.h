@@ -12,6 +12,31 @@
 #define GFX_FW_HDR_SIZE   0x38
 #define GFX_FW_VERSION_MAX 64
 
+static inline int gfx_fw_hex_digit(char ch)
+{
+    if (ch >= '0' && ch <= '9')
+        return ch - '0';
+    if (ch >= 'a' && ch <= 'f')
+        return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F')
+        return ch - 'A' + 10;
+    return -1;
+}
+
+static inline bool gfx_fw_parse_uuid_hex(const char *text, int len, u8 uuid[16])
+{
+    if (!text || !uuid || len != 33 || text[32] != '\0')
+        return false;
+    for (int i = 0; i < 16; i++) {
+        int hi = gfx_fw_hex_digit(text[2 * i]);
+        int lo = gfx_fw_hex_digit(text[2 * i + 1]);
+        if (hi < 0 || lo < 0)
+            return false;
+        uuid[i] = (hi << 4) | lo;
+    }
+    return true;
+}
+
 /* Parse an already-read image-info header; it is an identity, not ABI approval. */
 static inline bool gfx_fw_parse_image_info(const u32 hdr[GFX_FW_HDR_SIZE / 4], u32 segment_size,
                                            struct gfx_fw_image_info *out)

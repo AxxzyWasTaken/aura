@@ -168,3 +168,31 @@ The T8122 scenarios check the default (no change at all), the refusal with
 the current tables, and the whole pipeline with the missing data supplied by
 the test: power closure, GPU ID, die count, core mask, pstate table count, DT
 capacity and power-release failures, and precedence over the diagnostic.
+
+## J613 image metadata admission
+
+The `air/t8122-g15g-image-admission` experiment can publish
+`apple,firmware-compat = <14 8 3>` for one J613 boot. It first requires the
+existing diagnostic opt-in, validated UAT and firmware reservations, a loaded
+image-info header whose text size matches the ADT segment, and a successful
+bounded powered identity read with this J613's measured G15G core mask and
+counts. It then requires three strings in `/chosen`:
+
+```dts
+asahi,t8122-gpu-abi-ack = "14.8.3";
+asahi,t8122-gpu-expected-uuid = "<32 lowercase or uppercase hex digits>";
+asahi,t8122-gpu-expected-rtkit = "<exact version string>";
+```
+
+The expected values are owner-supplied and must stay outside source control.
+The stage compares the UUID with the loaded image header and the RTKit string
+with the loaded firmware version. These fields are metadata, not a
+cryptographic signature. The `abi-ack` is the owner's explicit assertion that
+the image in use carries the 14.8.3 ABI; m1n1 cannot prove that ABI from the
+header alone.
+
+The stage clears any input `apple,firmware-compat` claim before checking these
+conditions. On mismatch it leaves the claim absent. Even on success the GPU
+and mailbox nodes stay disabled; no GPU firmware is started and no render node
+can result from this test. A later Linux experiment must still validate power,
+firmware startup and the J613 hardware configuration before enabling them.

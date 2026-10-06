@@ -24,6 +24,13 @@ int main(void)
     assert(out.rtkit_version_offset == 0x4800 && out.patchbay_offset == 0x1000 && out.patchbay_size == 0x200 &&
            out.text_size == 0x64000);
 
+    u8 expected_uuid[16] = {0};
+    assert(gfx_fw_parse_uuid_hex("000102030405060708090a0b0c0d0e0f", 33, expected_uuid));
+    assert(!memcmp(expected_uuid, out.uuid, sizeof(expected_uuid)));
+    assert(!gfx_fw_parse_uuid_hex("000102030405060708090a0b0c0d0e0f", 32, expected_uuid));
+    assert(!gfx_fw_parse_uuid_hex("000102030405060708090a0b0c0d0e0g", 33, expected_uuid));
+    assert(!gfx_fw_parse_uuid_hex(NULL, 33, expected_uuid));
+
     u8 version[GFX_FW_VERSION_MAX] = "RTKit-2419.140.12";
     char parsed[GFX_FW_VERSION_MAX] = "unchanged";
     assert(gfx_fw_parse_rtkit_version(version, parsed));

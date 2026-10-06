@@ -6,6 +6,7 @@
 #include "assert.h"
 #include "exception.h"
 #include "firmware.h"
+#include "gfx_fw_image_info.h"
 #include "malloc.h"
 #include "math.h"
 #include "mcc.h"
@@ -1968,6 +1969,67 @@ static void t8122_read_powered_identity(void *dt, int gpu)
            identity.core_mask[1], identity.core_mask[2]);
 }
 
+static bool t8122_identity_matches_j613(void *dt)
+{
+    int node = fdt_path_offset(dt, "/chosen/asahi,t8122-gpu-powered-identity");
+    static const struct {
+        const char *name;
+        u32 value;
+    } expected[] = {
+        {"schema-version", 1}, {"probe-result", T8122_ID_PASS},
+        {"id-version", 0x07022000}, {"id-counts-1", 0x0011010a},
+        {"id-counts-2", 0x00040404}, {"core-mask-0", 0x37e},
+        {"core-mask-1", 0}, {"core-mask-2", 0},
+    };
+    if (node < 0)
+        return false;
+    for (u32 i = 0; i < ARRAY_SIZE(expected); i++) {
+        int len = 0;
+        const fdt32_t *raw = fdt_getprop(dt, node, expected[i].name, &len);
+        if (!raw || len != sizeof(*raw) || fdt32_ld(raw) != expected[i].value)
+            return false;
+    }
+    return true;
+}
+
+/* Publish an ABI claim only for this boot's exact owner-approved image and
+ * measured J613 identity. GPU and mailbox status remain disabled.
+ */
+static void t8122_admit_image_metadata(void *dt, const struct gfx_fw_image_info *image)
+{
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int gpu = fdt_path_offset(dt, "/soc/gpu@292400000");
+    if (chosen < 0 || gpu < 0 || fdt_node_check_compatible(dt, 0, "apple,j613") ||
+        !t8122_identity_matches_j613(dt))
+        return;
+
+    int len = 0;
+    const char *ack = fdt_getprop(dt, chosen, "asahi,t8122-gpu-abi-ack", &len);
+    if (!ack || len != sizeof("14.8.3") || memcmp(ack, "14.8.3", sizeof("14.8.3")))
+        return;
+    const char *uuid_text = fdt_getprop(dt, chosen, "asahi,t8122-gpu-expected-uuid", &len);
+    u8 expected_uuid[16];
+    if (!gfx_fw_parse_uuid_hex(uuid_text, len, expected_uuid) ||
+        memcmp(expected_uuid, image->uuid, sizeof(expected_uuid)))
+        return;
+    const char *expected_rtkit =
+        fdt_getprop(dt, chosen, "asahi,t8122-gpu-expected-rtkit", &len);
+    char observed_rtkit[GFX_FW_VERSION_MAX];
+    if (!expected_rtkit || len < 8 || len > GFX_FW_VERSION_MAX ||
+        expected_rtkit[len - 1] != '\0' ||
+        strlen(expected_rtkit) + 1 != (size_t)len ||
+        !firmware_gfx_rtkit_version(observed_rtkit) ||
+        strcmp(expected_rtkit, observed_rtkit))
+        return;
+
+    const fdt32_t compat[] = {cpu_to_fdt32(14), cpu_to_fdt32(8), cpu_to_fdt32(3)};
+    if (fdt_setprop(dt, gpu, "apple,firmware-compat", compat, sizeof(compat))) {
+        printf("FDT: GPU: T8122 exact image metadata matched but ABI property could not be set\n");
+        return;
+    }
+    printf("FDT: GPU: T8122 J613 exact image metadata admitted; GPU and ASC remain disabled\n");
+}
+
 /*
  * Export the four T8122 UAT carveouts from this boot's ADT. Their physical
  * addresses depend on the installed RAM size: a J615's fixed addresses are
@@ -1996,6 +2058,14 @@ static int dt_set_gpu_t8122(void *dt)
         fdt_getprop(dt, chosen, "asahi,t8122-gpu-handoff-diag", &len) : NULL;
     if (!optin || len != 2 || strcmp(optin, "1"))
         return 0;
+
+    /* Never carry a compatibility claim from an input DT into a diagnostic boot.
+     * Done only once the diagnostic is opted in, so a default boot is untouched. */
+    int compat_err = fdt_delprop(dt, gpu, "apple,firmware-compat");
+    if (compat_err && compat_err != -FDT_ERR_NOTFOUND) {
+        printf("FDT: GPU: T8122 could not clear input firmware compatibility claim\n");
+        return 0;
+    }
 
     int sgx = adt_path_offset(adt, "/arm-io/sgx");
     if (sgx < 0)
@@ -2057,8 +2127,9 @@ static int dt_set_gpu_t8122(void *dt)
     }
 
     printf("FDT: GPU: T8122 UAT and firmware reservations supplied from ADT; "
-           "GPU and ASC remain disabled, firmware ABI unidentified\n");
+           "GPU and ASC remain disabled\n");
     t8122_read_powered_identity(dt, gpu);
+    t8122_admit_image_metadata(dt, &image);
     return 0;
 }
 
