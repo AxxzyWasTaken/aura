@@ -2207,7 +2207,7 @@ static int dt_fill_pmp(int pmp_node)
         char prop_name[128];
         snprintf(prop_name, sizeof(prop_name), "apple,tunable-%s", prop->name);
         if (fdt_setprop(dt, pmp_node, prop_name, prop->value, prop->size))
-            bail("FDT: failed to transfer pmp tunable");
+            bail("FDT: failed to transfer pmp tunable\n");
     }
     return 0;
 }
@@ -2227,55 +2227,96 @@ static int dt_set_pmp(void)
 }
 
 /*
- * T6030: the kernel's display gate adds the PMP itself, halted until the
- * display needs it, so the device tree has no pmp node for dt_set_pmp().
- * The gate needs this Mac's PMP values for it: copy them as dt_set_pmp()
- * does, into /chosen/asahi,t6030-pmp, and leave the PMP alone. Only when the
- * PMP and its DART are where the gate's overlay puts them. Fail-soft: without
- * the node the gate keeps the display on the boot framebuffer, except on a
- * J516S, which has built-in values.
+ * T6030 and T8122: the kernel's display gate adds the PMP itself, halted until
+ * the display needs it, so the device tree has no pmp node for dt_set_pmp().
+ * The gate needs this Mac's PMP values for it: copy them as dt_set_pmp() does,
+ * into /chosen/asahi,<soc>-pmp, and leave the PMP alone. Only when the PMP and
+ * its DART are where the gate puts them. Fail-soft: without the node the gate
+ * keeps the display on the boot framebuffer, except on a J516S, which has
+ * built-in values.
  */
-static int dt_set_pmp_t6030(void)
+struct pmp_values_soc {
+    const char *compat; /* SoC compatible of the FDT root */
+    const char *node;   /* the /chosen subnode */
+    const char *name;
+    u32 irqs[4];        /* /arm-io/pmp interrupts, in ADT order */
+    u64 dart_addr, dart_size;
+};
+
+static const struct pmp_values_soc pmp_values_t6030 = {
+    "apple,t6030", "asahi,t6030-pmp", "T6030", {731, 730, 733, 732}, 0x350300000, 0x4000,
+};
+
+static const struct pmp_values_soc pmp_values_t8122 = {
+    "apple,t8122", "asahi,t8122-pmp", "T8122", {622, 621, 624, 623}, 0x2d0300000, 0x4000,
+};
+
+static void dt_pass_pmp(const struct pmp_values_soc *soc)
 {
-    static const u32 want_irqs[4] = {731, 730, 733, 732};
     int dart_path[8];
     const void *irqs;
     u64 dart_addr = 0, dart_size = 0;
     u32 len = 0;
     int pmp_anode, chosen, node;
     bool where;
+    char path[40];
 
-    if (fdt_node_check_compatible(dt, 0, "apple,t6030") || fdt_path_offset(dt, "pmp") >= 0)
-        return 0;
+    if (fdt_node_check_compatible(dt, 0, soc->compat) || fdt_path_offset(dt, "pmp") >= 0)
+        return;
 
     chosen = fdt_path_offset(dt, "/chosen");
     if (chosen < 0)
-        return 0;
-    node = fdt_add_subnode(dt, chosen, "asahi,t6030-pmp");
+        return;
+    node = fdt_add_subnode(dt, chosen, soc->node);
     if (node < 0) {
-        printf("FDT: T6030 PMP values not passed: %d\n", node);
-        return 0;
+        printf("FDT: %s PMP values not passed: %d\n", soc->name, node);
+        return;
     }
 
     pmp_anode = adt_path_offset(adt, "/arm-io/pmp");
     irqs = pmp_anode < 0 ? NULL : adt_getprop(adt, pmp_anode, "interrupts", &len);
-    where = irqs && len == sizeof(want_irqs) && !memcmp(irqs, want_irqs, sizeof(want_irqs)) &&
+    where = irqs && len == sizeof(soc->irqs) && !memcmp(irqs, soc->irqs, sizeof(soc->irqs)) &&
             adt_path_offset_trace(adt, "/arm-io/dart-pmp", dart_path) >= 0 &&
             !adt_get_reg(adt, dart_path, "reg", 0, &dart_addr, &dart_size) &&
-            dart_addr == 0x350300000 && dart_size == 0x4000;
+            dart_addr == soc->dart_addr && dart_size == soc->dart_size;
     if (!where) {
         /* An empty node: the kernel refuses the PMP rather than using built-in values. */
-        printf("FDT: T6030 PMP is not where the kernel expects it; no PMP values passed\n");
-        return 0;
+        printf("FDT: %s PMP is not where the kernel expects it; no PMP values passed\n",
+               soc->name);
+        return;
     }
+    snprintf(path, sizeof(path), "/chosen/%s", soc->node);
     if (dt_fill_pmp(node)) {
-        node = fdt_path_offset(dt, "/chosen/asahi,t6030-pmp");
+        node = fdt_path_offset(dt, path);
         if (node >= 0)
             fdt_del_node(dt, node);
-        printf("FDT: T6030 PMP values not passed\n");
-        return 0;
+        printf("FDT: %s PMP values not passed\n", soc->name);
+        return;
     }
-    printf("FDT: T6030 PMP values passed in /chosen/asahi,t6030-pmp\n");
+    printf("FDT: %s PMP values passed in %s\n", soc->name, path);
+}
+
+static int dt_set_pmp_t6030(void)
+{
+    dt_pass_pmp(&pmp_values_t6030);
+    return 0;
+}
+
+/*
+ * T8122: the same values, for the PMP support of a later kernel; the kernel
+ * this m1n1 ships with does not read them. Only on a J613 with the display
+ * handoff switch, chosen.asahi,t8122-dcp=1.
+ */
+static int dt_set_pmp_t8122(void)
+{
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int len = 0;
+    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t8122-dcp", &len);
+
+    if (!opt || len != 2 || opt[0] != '1' || opt[1] != '\0' ||
+        fdt_node_check_compatible(dt, 0, "apple,j613"))
+        return 0;
+    dt_pass_pmp(&pmp_values_t8122);
     return 0;
 }
 
@@ -2972,6 +3013,9 @@ int kboot_prepare_dt(void *fdt)
 
     // Add 128K of buffer for modifications; a T6030 also takes its PMP values
     dt_bufsize += 8 * SZ_16K;
+    // A T8122 also takes its PMP values
+    if (chip_id == T8122)
+        dt_bufsize += 8 * SZ_16K;
     dt = memalign(DT_ALIGN, dt_bufsize);
 
     if (fdt_open_into(fdt, dt, dt_bufsize) < 0)
@@ -3086,6 +3130,10 @@ int kboot_prepare_dt(void *fdt)
     /* Optional export goes last so it cannot consume space needed by fixups. */
     if (chip_id == T8122)
         dt_gpu_t8122_diagnostics(dt);
+
+    /* After the GPU export, so that one stays as before. */
+    if (chip_id == T8122)
+        dt_set_pmp_t8122();
 
     if (fdt_pack(dt))
         bail("FDT: fdt_pack() failed\n");
