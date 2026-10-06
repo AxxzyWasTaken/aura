@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "kboot.h"
+#include "kboot_display_facts.h"
 #include "kboot_gpu_t8122.h"
 #include "kboot_pmp_t8122.h"
 #include "adt.h"
@@ -3017,6 +3018,9 @@ int kboot_prepare_dt(void *fdt)
     // A T8122 also takes its PMP values, GPU and PMP facts and the display clock description
     if (chip_id == T8122)
         dt_bufsize += 8 * SZ_16K;
+    // A T6030 also takes its display ADT facts (at most 40K of names and values)
+    if (chip_id == T6030)
+        dt_bufsize += 4 * SZ_16K;
     dt = memalign(DT_ALIGN, dt_bufsize);
 
     if (fdt_open_into(fdt, dt, dt_bufsize) < 0)
@@ -3137,6 +3141,10 @@ int kboot_prepare_dt(void *fdt)
         dt_set_pmp_t8122();
         dt_pmp_t8122_facts(dt);
     }
+
+    /* Read-only ADT export, last, in its own buffer room. */
+    if (chip_id == T6030)
+        dt_display_facts_t6030(dt);
 
     if (fdt_pack(dt))
         bail("FDT: fdt_pack() failed\n");
