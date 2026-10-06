@@ -11,6 +11,11 @@
 #define BOOTARGS_MEM_SIZE      24
 #define BOOTARGS_TOP_OF_KDATA  32
 
+/* MIDR_EL1 implementer and the part range of the M3 cores (midr.h) */
+#define MIDR_IMPL_APPLE        0x61
+#define MIDR_PART_M3_FIRST     0x42 /* MIDR_PART_T8122_SAWTOOTH */
+#define MIDR_PART_M3_LAST      0x49 /* MIDR_PART_T6031_EVEREST */
+
 .extern _start_c
 .extern _stack_bot
 .extern _v_sp0_sync
@@ -89,8 +94,20 @@ _start:
      * to forward them to the new one (kboot keeps that page reserved).
      * Stay put if top_of_kernel_data is not above us or the moved image
      * would not fit in RAM.
+     *
+     * Only on M3 SoCs (T8122, T6030, T6031: Apple MIDR parts 0x42-0x49),
+     * where iBoot puts those buffers there. Every other SoC runs where
+     * stage 1 put it, as before this move existed.
      */
     adrp x20, _base
+    mrs x1, midr_el1
+    ubfx x2, x1, #24, #8
+    cmp x2, #MIDR_IMPL_APPLE
+    b.ne 3f
+    ubfx x2, x1, #4, #12
+    sub x2, x2, #MIDR_PART_M3_FIRST
+    cmp x2, #(MIDR_PART_M3_LAST - MIDR_PART_M3_FIRST)
+    b.hi 3f
     ldr x21, [x19, #BOOTARGS_TOP_OF_KDATA]
     mov x1, #0xffff
     add x21, x21, x1
