@@ -519,6 +519,7 @@ struct shape {
     bool bad_names; /* properties with unreadable names before the ones that are looked up */
     int malformed;  /* a malformed /arm-io node after dart-dispext0: MAL_* */
     int nest;       /* a chain of this many nested nodes below /arm-io, before dcpext1 */
+    bool dense;     /* two hdmi nodes with 500 small values with long names each */
 };
 
 enum {
@@ -677,7 +678,21 @@ static void build_adt(const struct shape *s)
             prop_fill("function-dp2hdmi_pwr_en", 16, 0x1a);
             prop_fill("function-hpd", 16, 0x2f);
             prop_fill("big-table", 600, 0x77);
+            for (int k = 0; s->dense && k < 500; k++) {
+                char pn[40];
+                snprintf(pn, sizeof(pn), "function-hdmi-padding-%09d", k);
+                prop_fill(pn, 4, k);
+            }
             node_end();
+            if (s->dense) {
+                node_begin("dp2hdmi-gpio1");
+                for (int k = 0; k < 500; k++) {
+                    char pn[40];
+                    snprintf(pn, sizeof(pn), "function-hdmi-padding-%09d", k);
+                    prop_fill(pn, 4, k);
+                }
+                node_end();
+            }
             simple("lpdptx-phy0", "lpdptx-phy,t6030", 0x2d4000000ULL, 0x8000, 700);
             simple("atc3-dpxbar", "dp-xbar,t8122", 0x130304c000ULL, 0x4000, 9);
             simple("weird@1-xbar", "x", 0x200000000ULL, 0x1000, 1); /* not a usable node name */
@@ -811,30 +826,39 @@ static void reset_log(void)
     logbuf[0] = 0;
 }
 
-/* Names and values written, as the budget counts them: every subnode property but adt-path */
-static u32 charged(void *fdt)
-{
-    int facts = fdt_path_offset(fdt, "/chosen/asahi,t6030-display-facts"), sub, p;
-    u32 sum = 0;
-
-    fdt_for_each_subnode(sub, fdt, facts)
-    {
-        fdt_for_each_property_offset(p, fdt, sub)
-        {
-            const char *name;
-            int len;
-            fdt_getprop_by_offset(fdt, p, &name, &len);
-            if (strcmp(name, "adt-path"))
-                sum += len;
-        }
-    }
-    return sum;
-}
-
 static u32 logged_bytes(void)
 {
     const char *p = strstr(logbuf, "published (");
     return p ? (u32)strtoul(p + strlen("published ("), NULL, 10) : ~0u;
+}
+
+/* The FDT's structure and strings, which the export adds to */
+static u32 fdt_used(const void *fdt)
+{
+    return fdt_size_dt_struct(fdt) + fdt_size_dt_strings(fdt);
+}
+
+#define FACTS_NODE_COST 36                  /* the node's tags and padded name, not charged */
+#define SKIPPED_MAX     (12 + 8 + 32 * 160) /* `skipped`, not charged: at most 32 lines */
+#define BUDGET          40960
+
+static u32 used_before;
+
+/*
+ * What the export added, apart from `skipped` and the node itself, is at most what it charged,
+ * and the charge is within the budget
+ */
+static void check_budget(void *fdt)
+{
+    int len = 0;
+    u32 growth = fdt_used(fdt) - used_before, skipped = 0;
+
+    if (getp(fdt, "/chosen/asahi,t6030-display-facts", "skipped", &len))
+        skipped = 12 + ((len + 3) & ~3) + 8;
+    CHECK(skipped <= SKIPPED_MAX);
+    CHECK(growth >= skipped + FACTS_NODE_COST);
+    CHECK(growth - skipped - FACTS_NODE_COST <= logged_bytes());
+    CHECK(logged_bytes() <= BUDGET);
 }
 
 /* ---- facts scenarios ---- */
@@ -853,6 +877,7 @@ static void *run_facts(const struct shape *s, int fdt_size, u64 *before)
     build_adt(s);
     void *fdt = make_fdt(fdt_size, false);
     *before = digest_without_facts(fdt);
+    used_before = fdt_used(fdt);
     reset_log();
     facts(fdt);
     CHECK(!fdt_check_header(fdt));
@@ -930,7 +955,7 @@ static void facts_full(void)
     CHECK(!getp(fdt, FACTS "/lpdptx-phy0", "adt,name", &len));
     CHECK(!has_str(fdt, FACTS, "skipped", "absent"));
     CHECK(strstr(logbuf, "published"));
-    CHECK(charged(fdt) == logged_bytes());
+    check_budget(fdt);
     free(fdt);
 }
 
@@ -965,8 +990,9 @@ static void facts_bounds(void)
 
     CHECK(count_strs(fdt, FACTS "/atc-phy0", "adt-property-names") == 512);
     CHECK(has_str(fdt, FACTS, "skipped", "/arm-io/atc-phy0: over 512 properties"));
-    CHECK(has_str(fdt, FACTS, "skipped", "size budget of 40960 bytes reached"));
-    /* The budget covers names and values: 512 x (31 + 1 + 4) bytes per PHY is more than it */
+    CHECK(has_str(fdt, FACTS, "skipped", "device tree budget of 40960 bytes reached"));
+    check_budget(fdt);
+    /* 512 x (31 + 1 + 4) bytes of names and sizes per PHY: atc-phy1 reaches the budget */
     CHECK(count_strs(fdt, FACTS "/atc-phy2", "adt-property-names") < 512);
     CHECK(getp(fdt, FACTS, "skipped", &len) && len < 32 * 160);
     free(fdt);
@@ -1106,6 +1132,37 @@ static void facts_fuzz(void)
     }
     free(orig);
     CHECK(published > 50); /* the corruption often misses what the export reads */
+}
+
+/*
+ * kboot_prepare_dt() gives the export 64 KiB of room. A dense ADT (many small values with long
+ * names, where the FDT headers and name strings outweigh the values) still fits: the budget counts
+ * them.
+ */
+static void facts_room(void)
+{
+    struct shape s = {.atc3 = true, .ext1 = true, .finds = true, .dense = true};
+    u64 before;
+
+    build_adt(&s);
+    void *big = make_fdt(256 * 1024, true);
+    CHECK(!fdt_pack(big));
+    int room = fdt_totalsize(big) + 64 * 1024;
+    void *fdt = malloc(room);
+    CHECK(!fdt_open_into(big, fdt, room));
+    free(big);
+    before = digest_without_facts(fdt);
+    used_before = fdt_used(fdt);
+    reset_log();
+    facts(fdt);
+    CHECK(!fdt_check_header(fdt));
+    CHECK(digest_without_facts(fdt) == before);
+    CHECK(strstr(logbuf, "published ("));
+    CHECK(has_str(fdt, FACTS, "skipped", "device tree budget of 40960 bytes reached"));
+    CHECK(count_strs(fdt, FACTS "/dp2hdmi-gpio0", "adt-property-names") > 300);
+    check_budget(fdt);
+    CHECK(fdt_used(fdt) - used_before <= BUDGET + SKIPPED_MAX + FACTS_NODE_COST);
+    free(fdt);
 }
 
 /* Not published: the DT stays byte for byte as it was */
@@ -1250,6 +1307,7 @@ int main(int argc, char **argv)
     facts_missing();
     facts_bounds();
     facts_refusals();
+    facts_room();
     facts_malformed();
     facts_fuzz();
     atc_checks();

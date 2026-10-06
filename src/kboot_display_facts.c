@@ -34,9 +34,12 @@
  *
  * ADT memory only: no device register is read or written. Bounded: at most four levels below
  * /arm-io and 4096 nodes are visited, eight nodes per kind found by name, 512 property names per
- * node, 16 translated reg entries per node and 40 KiB of names and values in all. The node is
- * built on a copy of the FDT and published only if complete; an existing node is never replaced,
- * and a failure leaves the FDT as it was without stopping the boot.
+ * node and 16 translated reg entries per node. Every write is charged, before it is made, with
+ * what it adds to the FDT (node and property headers, padding and name strings), and the writes
+ * stop at 40 KiB; with `skipped` (at most 32 lines) and the node itself, the export never takes
+ * more than 46 KiB of the 64 KiB kboot_prepare_dt() adds for it. The node is built on a copy of
+ * the FDT and published only if complete; an existing node is never replaced, and a failure
+ * leaves the FDT as it was without stopping the boot.
  *
  * The ADT is read here, not through adt.h: a lookup by name there stops the boot if any earlier
  * property of the node has a name it cannot read, and this export looks at many more nodes than
@@ -60,6 +63,9 @@
 #define ADT_NAME_LEN 32   /* the ADT name field */
 #define PATH_LEN     176  /* "/arm-io" and four names of up to 31 characters, with separators */
 #define CHAIN_LEN    (WALK_DEPTH + 2) /* the root, /arm-io and four levels below it */
+
+/* FDT structure padding */
+#define TAGALIGN(x) (((x) + FDT_TAGSIZE - 1) & ~(u32)(FDT_TAGSIZE - 1))
 
 /* The ADT's binary layout and the limits the ADT library applies */
 #define ADT_NODE_HDR  8  /* property count, child count */
@@ -85,8 +91,8 @@ struct dfacts {
     void *dt;
     int chosen; /* /chosen; its offset does not move as its own subtree grows */
     int err;    /* the first libfdt error */
-    u32 bytes;  /* names and values written, against BUDGET */
-    bool over;  /* BUDGET reached (reported once) */
+    u32 bytes;  /* what the charged writes added to the FDT, at most, against BUDGET */
+    bool over;  /* BUDGET reached (reported once): nothing more is written but skipped lines */
     bool stop;  /* the search below /arm-io ended */
     int skips;
     int visited;
@@ -133,11 +139,6 @@ static void f_append(struct dfacts *f, const char *sub, const char *name, const 
         f->err = ret;
 }
 
-static void f_str(struct dfacts *f, const char *sub, const char *name, const char *s)
-{
-    f_set(f, sub, name, s, strlen(s) + 1);
-}
-
 static void __attribute__((format(printf, 2, 3))) f_skip(struct dfacts *f, const char *fmt, ...)
 {
     char buf[160];
@@ -156,14 +157,52 @@ static void __attribute__((format(printf, 2, 3))) f_skip(struct dfacts *f, const
 /* Takes n bytes of the budget, or reports (once) that it is used up */
 static bool f_charge(struct dfacts *f, u32 n)
 {
-    if (n > BUDGET - min(f->bytes, (u32)BUDGET)) {
+    if (f->over || n > BUDGET - f->bytes) {
         if (!f->over)
-            f_skip(f, "size budget of %u bytes reached; later names and values left out", BUDGET);
+            f_skip(f, "device tree budget of %u bytes reached; later entries left out", BUDGET);
         f->over = true;
         return false;
     }
     f->bytes += n;
     return true;
+}
+
+/* At most what a subnode adds to the FDT: its begin and end tags and its padded name */
+static u32 node_cost(const char *sub)
+{
+    return 2 * FDT_TAGSIZE + TAGALIGN(strlen(sub) + 1);
+}
+
+/*
+ * At most what writing len bytes as property `name` adds to the FDT: appended to an existing
+ * property, the growth of its padded value; otherwise a property header, the padded value and the
+ * name in the string table.
+ */
+static u32 prop_cost(struct dfacts *f, const char *sub, const char *name, u32 len, bool append)
+{
+    int node = f_node(f, sub), old = 0;
+
+    if (node >= 0 && append && fdt_getprop(f->dt, node, name, &old) && old >= 0)
+        return TAGALIGN((u32)old + len) - TAGALIGN((u32)old);
+    return sizeof(struct fdt_property) + TAGALIGN(len) + strlen(name) + 1;
+}
+
+/* Sets (or appends) a property if the budget has room for it */
+static bool f_put(struct dfacts *f, const char *sub, const char *name, const void *val, u32 len,
+                  bool append)
+{
+    if (f->err || !f_charge(f, prop_cost(f, sub, name, len, append)))
+        return false;
+    if (append)
+        f_append(f, sub, name, val, len);
+    else
+        f_set(f, sub, name, val, len);
+    return !f->err;
+}
+
+static bool f_str(struct dfacts *f, const char *sub, const char *name, const char *s)
+{
+    return f_put(f, sub, name, s, strlen(s) + 1, false);
 }
 
 /* ---- ADT names ---- */
@@ -453,10 +492,8 @@ static void put_value(struct dfacts *f, const char *sub, const char *name, const
         f_skip(f, "%s %s: %u bytes, over %u", sub, name, len, max);
         return;
     }
-    if (!f_charge(f, len))
-        return;
     snprintf(fname, sizeof(fname), "adt,%s", name);
-    f_set(f, sub, fname, val, len);
+    f_put(f, sub, fname, val, len, false);
 }
 
 static void copy_prop(struct dfacts *f, const char *sub, const struct anode *node, const char *name,
@@ -484,13 +521,16 @@ static void export_node(struct dfacts *f, const char *sub, const char *path,
         f_skip(f, "%s: a node named %s is exported already", path, sub);
         return;
     }
+    /* The node and its adt-path, charged together */
+    if (!f_charge(f, node_cost(sub) + prop_cost(f, NULL, "adt-path", strlen(path) + 1, false)))
+        return;
     fdt = fdt_add_subnode(f->dt, f_node(f, NULL), sub);
     if (fdt < 0) {
         if (!f->err)
             f->err = fdt;
         return;
     }
-    f_str(f, sub, "adt-path", path);
+    f_set(f, sub, "adt-path", path, strlen(path) + 1);
 
     copy_prop(f, sub, node, "compatible", BASIC_MAX);
     copy_prop(f, sub, node, "reg", BASIC_MAX);
@@ -499,11 +539,12 @@ static void export_node(struct dfacts *f, const char *sub, const char *path,
         for (u32 r = 0; r < MAX_REGS; r++) {
             u64 addr, size;
             fdt64_t cells[2];
-            if (!a_reg(chain, depth, r, &addr, &size) || !f_charge(f, sizeof(cells)))
+            if (!a_reg(chain, depth, r, &addr, &size))
                 break;
             cells[0] = cpu_to_fdt64(addr);
             cells[1] = cpu_to_fdt64(size);
-            f_append(f, sub, "translated-reg", cells, sizeof(cells));
+            if (!f_put(f, sub, "translated-reg", cells, sizeof(cells), true))
+                break;
         }
     }
     if (v == V_NOLIST)
@@ -525,7 +566,9 @@ static void export_node(struct dfacts *f, const char *sub, const char *path,
             f_skip(f, "%s: property %u has an unusable name", path, i);
             continue;
         }
-        if (!f_charge(f, strlen(name) + 1 + sizeof(size)))
+        /* The two lists stay the same length: both are charged before either is written */
+        if (!f_charge(f, prop_cost(f, sub, "adt-property-names", strlen(name) + 1, true) +
+                             prop_cost(f, sub, "adt-property-sizes", sizeof(size), true)))
             break;
         f_append(f, sub, "adt-property-names", name, strlen(name) + 1);
         f_append(f, sub, "adt-property-sizes", &size, sizeof(size));
@@ -640,7 +683,7 @@ static void build(struct dfacts *f)
     bool have[NFIXED] = {false};
     char path[PATH_LEN];
 
-    f_set(f, NULL, "schema-version", &schema, sizeof(schema));
+    f_put(f, NULL, "schema-version", &schema, sizeof(schema), false);
     f_str(f, NULL, "encoding", "adt-raw-little-endian");
 
     bool bad = false, root = a_node(0, &chain[0]);
@@ -720,7 +763,8 @@ void dt_display_facts_t6030(void *dt)
 
     if (!f.err) {
         memcpy(dt, copy, size);
-        printf(LOG "/chosen/" FACTS_NODE " published (%u bytes of names and values)\n", f.bytes);
+        printf(LOG "/chosen/" FACTS_NODE " published (%u bytes of device tree, budget %u)\n",
+               f.bytes, BUDGET);
     } else {
         printf(LOG "/chosen/" FACTS_NODE " not published: %s\n", fdt_strerror(f.err));
     }

@@ -3018,7 +3018,7 @@ int kboot_prepare_dt(void *fdt)
     // A T8122 also takes its PMP values, GPU and PMP facts and the display clock description
     if (chip_id == T8122)
         dt_bufsize += 8 * SZ_16K;
-    // A T6030 also takes its display ADT facts (at most 40K of names and values)
+    // A T6030 also takes its display ADT facts (at most 46K, headers and strings included)
     if (chip_id == T6030)
         dt_bufsize += 4 * SZ_16K;
     dt = memalign(DT_ALIGN, dt_bufsize);
