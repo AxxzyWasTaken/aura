@@ -3053,9 +3053,11 @@ int kboot_prepare_dt(void *fdt)
     dt_bufsize = fdt_totalsize(fdt);
     assert(dt_bufsize);
 
-    // Add 128K of buffer for modifications; a T6030 also takes its PMP values
-    dt_bufsize += 8 * SZ_16K;
-    // A T8122 also takes its PMP values, GPU and PMP facts and the display clock description
+    dt_bufsize += 6 * SZ_16K; // Add 96K of buffer for modifications
+    // A T6030 or T8122 also takes its PMP values
+    if (chip_id == T6030 || chip_id == T8122)
+        dt_bufsize += 2 * SZ_16K;
+    // A T8122 also takes its GPU and PMP facts and the display clock description
     if (chip_id == T8122)
         dt_bufsize += 8 * SZ_16K;
     // A T6030 also takes its display ADT facts (at most 46K, headers and strings included)
