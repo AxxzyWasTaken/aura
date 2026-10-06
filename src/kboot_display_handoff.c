@@ -40,8 +40,19 @@
  * checked as on T6030, with addresses, firmware segments and DART windows taken from the ADT
  * instead of fixed values. The display power state is taken from the ADT too: the power state
  * registers the clock-gates of /arm-io/dcp resolve to (a virtual device by its nearest real
- * parents). The DCP and its DARTs are only read while all of them are on. While no T8122 DCP
- * firmware image is pinned below, dart-dcp is not locked and the handoff is never published.
+ * parents). The DCP and its DARTs are only read while all of them are on.
+ *
+ * T8122 armed now pins the DCP image the J613/J615 iBoot loads and leaves running (the
+ * iop-dcp-nub uuid below), so the same generalised handoff publishes for the Air as for T6030:
+ * with every check passing it locks dart-dcp, reserves the firmware segments, adds the
+ * iommu-addresses from the live page tables, and sets memory-region(-names),
+ * apple,firmware-uuid/-version/-compat and the marker apple,t8122-handoff on dcp, display and
+ * piodma. Everything (addresses, segments, DART windows, the display power state) is read from
+ * the live ADT at boot, nothing is fixed from a capture. Fail-safe: if the running image's uuid
+ * is not the pinned one, the display power domain is not on, or a page-table walk maps outside
+ * the firmware segments, it publishes nothing and the Mac boots on the framebuffer. The display
+ * nodes stay "disabled": only a kernel that sees apple,t8122-handoff may enable them, and a T8122
+ * kernel device tree without display nodes is normal. No T8122 PMP is handed off here.
  *
  * Fail-soft: dt_set_display_handoff() always returns 0; a failed check is logged and changes
  * nothing. Transactional: DT edits are made on a scratch copy that replaces the DT only if every
@@ -71,6 +82,9 @@
 
 /* T6030 firmware image the handoff is written for (iop-dcp-nub uuid, the 14.x DCP interface) */
 #define DCP6_UUID "DDF38191-93B3-324A-BC8F-643006F5AC82"
+
+/* T8122 (J613/J615) DCP image iBoot loads and leaves running (iop-dcp-nub uuid, 14.7 interface) */
+#define DCP8_UUID "90F849E1-B422-367E-B389-50246F8DEC47"
 
 /* T6030 J516S/J514S runtime ADT (arm-io ranges applied); checked against the ADT first */
 #define DCP6_DART_VM_BASE 0x10000000000UL /* DARTs' DVA alias: 1 TiB + 36-bit DVA */
@@ -225,8 +239,9 @@ static const struct dcp_soc dcp_soc_t6030 = {
 /*
  * T8122 (M3 MacBook Air J613/J615). Addresses, segments, DART windows and the display power state
  * come from the ADT. pmgr_disp_cpu is ps_disp_cpu of the open T8122 PMGR device tree (pmgr
- * 0x2d0700000, state 0x10000); it is only compared with the ADT's, for the device tree. No firmware
- * image is pinned yet, so this is a dry run only.
+ * 0x2d0700000, state 0x10000); it is only compared with the ADT's, for the device tree. The DCP
+ * image iBoot leaves running is pinned (DCP8_UUID), so the generalised handoff publishes when
+ * armed and every check passes; otherwise it publishes nothing and the Mac keeps the framebuffer.
  */
 static const char *const dcp_boards_t8122[] = {"apple,j613", "apple,j615", NULL};
 
@@ -248,7 +263,7 @@ static const struct dcp_soc dcp_soc_t8122 = {
     .oslog_always = false,
     .describe = true,
     .adt_psreg = true,
-    .uuid = NULL,
+    .uuid = DCP8_UUID,
     .os_fw = V14_7,
     .os_fw_name = "14.7",
     .pmgr_disp_cpu = 0x2d0710000UL,
