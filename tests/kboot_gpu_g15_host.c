@@ -397,6 +397,7 @@ static void setup_bus(const struct fixture *fx)
     } else {
         mmio_set(SGX_BASE + 0xd04000, 0x07022000, 0);
         mmio_set(SGX_BASE + 0xd04010, 0x0001010a, 0); /* 1 die, 1 cluster, 10 cores */
+        mmio_set(SGX_BASE + 0xd04014, 0x00040404, 0); /* further topology counts */
         mmio_set(SGX_BASE + 0xe01500, 0x000000ff, 0); /* 8 active cores */
         mmio_set(SGX_BASE + 0xe01504, 0, 0);
         mmio_set(SGX_BASE + 0xe01508, 0, 0);
@@ -897,10 +898,14 @@ static void t8122_powered_identity(void)
     assert(identity_u32("probe-result") == T8122_ID_PASS);
     assert(identity_u32("id-version") == 0x07022000);
     assert(identity_u32("id-counts-1") == 0x0001010a);
+    assert(identity_u32("id-counts-2") == 0x00040404);
     assert(identity_u32("core-mask-0") == 0xff);
     assert(identity_u32("core-mask-1") == 0 && identity_u32("core-mask-2") == 0);
-    assert(log_has("ID_VERSION 0x07022000 ID_COUNTS_1 0x0001010a core masks 0xff 0x0 0x0"));
-    assert(strstr(trace_buf, "pmgr enable /arm-io/sgx\nread32 0x290d04000\nread32 0x290d04010\n"));
+    assert(log_has("ID_VERSION 0x07022000 ID_COUNTS_1 0x0001010a ID_COUNTS_2 0x00040404 "
+                   "core masks 0xff 0x0 0x0"));
+    assert(strstr(trace_buf,
+                  "pmgr enable /arm-io/sgx\nread32 0x290d04000\nread32 0x290d04010\n"
+                  "read32 0x290d04014\n"));
     assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
     assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
     assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
@@ -915,6 +920,18 @@ static void t8122_powered_identity_counts(void)
     run();
     assert(identity_u32("probe-result") == T8122_ID_PASS);
     assert(identity_u32("id-counts-1") == 0x00020203);
+    assert(identity_u32("id-counts-2") == 0x00040404);
+    assert(pmgr_disables == 1 && pmgr_off == 1 && unguarded_faults == 0);
+}
+
+static void t8122_powered_identity_counts2(void)
+{
+    /* Any ID_COUNTS_2 is published as read; it does not change the result */
+    prepare_powered_identity();
+    mmio_set(SGX_BASE + 0xd04014, 0x00050607, 0);
+    run();
+    assert(identity_u32("probe-result") == T8122_ID_PASS);
+    assert(identity_u32("id-counts-2") == 0x00050607);
     assert(pmgr_disables == 1 && pmgr_off == 1 && unguarded_faults == 0);
 }
 
@@ -923,6 +940,17 @@ static void t8122_powered_identity_counts_fault(void)
     /* A fault on ID_COUNTS_1 is a read fault, caught by the guard; the power is released */
     prepare_powered_identity();
     mmio_set(SGX_BASE + 0xd04010, 0, 1);
+    run();
+    assert(identity_u32("probe-result") == T8122_ID_READ_FAULT);
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+    assert(unguarded_faults == 0);
+}
+
+static void t8122_powered_identity_counts2_fault(void)
+{
+    /* A fault on ID_COUNTS_2 is a read fault, caught by the guard; the power is released */
+    prepare_powered_identity();
+    mmio_set(SGX_BASE + 0xd04014, 0, 1);
     run();
     assert(identity_u32("probe-result") == T8122_ID_READ_FAULT);
     assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
@@ -976,7 +1004,9 @@ static const struct {
     {"t8122-with-diag-optin", t8122_with_diag_optin},
     {"t8122-powered-identity", t8122_powered_identity},
     {"t8122-powered-identity-counts", t8122_powered_identity_counts},
+    {"t8122-powered-identity-counts2", t8122_powered_identity_counts2},
     {"t8122-powered-identity-counts-fault", t8122_powered_identity_counts_fault},
+    {"t8122-powered-identity-counts2-fault", t8122_powered_identity_counts2_fault},
 #endif
 };
 

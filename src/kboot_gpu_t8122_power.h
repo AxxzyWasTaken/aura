@@ -18,11 +18,13 @@ struct t8122_powered_identity {
     u32 id_version;
     u32 core_mask[3];
     u32 id_counts_1; /* reported only; not part of the result */
+    u32 id_counts_2; /* reported only; not part of the result */
 };
 
 struct t8122_power_probe_ops {
     int (*enable)(void *context);
-    int (*read)(void *context, u32 *id_version, u32 core_mask[3], u32 *id_counts_1);
+    int (*read)(void *context, u32 *id_version, u32 core_mask[3], u32 *id_counts_1,
+                u32 *id_counts_2);
     int (*disable)(void *context);
 };
 

@@ -14,6 +14,7 @@ struct probe_fixture {
     u32 id;
     u32 masks[3];
     u32 counts;
+    u32 counts2;
 };
 
 static int enable(void *context)
@@ -23,7 +24,7 @@ static int enable(void *context)
     return fixture->enable_result;
 }
 
-static int read_id(void *context, u32 *id, u32 masks[3], u32 *counts)
+static int read_id(void *context, u32 *id, u32 masks[3], u32 *counts, u32 *counts2)
 {
     struct probe_fixture *fixture = context;
     fixture->read_calls++;
@@ -31,6 +32,7 @@ static int read_id(void *context, u32 *id, u32 masks[3], u32 *counts)
     for (int i = 0; i < 3; i++)
         masks[i] = fixture->masks[i];
     *counts = fixture->counts;
+    *counts2 = fixture->counts2;
     return fixture->read_result;
 }
 
@@ -55,8 +57,9 @@ static void check(struct probe_fixture fixture, enum t8122_identity_result expec
     assert(fixture.enable_calls == 1);
     assert(fixture.read_calls == expected_reads);
     assert(fixture.disable_calls == 1);
-    /* ID_COUNTS_1 is reported as read, and never read without power */
+    /* ID_COUNTS_1 and ID_COUNTS_2 are reported as read, and never read without power */
     assert(result.id_counts_1 == (expected_reads ? fixture.counts : 0));
+    assert(result.id_counts_2 == (expected_reads ? fixture.counts2 : 0));
 }
 
 int main(void)
@@ -78,14 +81,17 @@ int main(void)
         .id = (7u << 24) | (2u << 16) | (2u << 12),
         .masks = {0xff, 0, 0},
         .counts = 0x0001010a,
+        .counts2 = 0x00040404,
     };
     check(eight_cores, T8122_ID_PASS, 1);
 
-    /* ID_COUNTS_1 does not take part in the result */
+    /* ID_COUNTS_1 and ID_COUNTS_2 do not take part in the result */
     struct probe_fixture counts = eight_cores;
     counts.counts = 0;
+    counts.counts2 = 0;
     check(counts, T8122_ID_PASS, 1);
     counts.counts = 0xffffffff;
+    counts.counts2 = 0xffffffff;
     check(counts, T8122_ID_PASS, 1);
     counts.id = (7u << 24) | (3u << 16);
     check(counts, T8122_ID_MISMATCH, 1);

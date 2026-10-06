@@ -23,7 +23,8 @@ struct t8122_powered_identity t8122_power_probe_run(const struct t8122_power_pro
 
     /* Disable even after a failed enable: PMGR can have made a partial vote. */
     if (!ops->enable(context)) {
-        if (ops->read(context, &identity.id_version, identity.core_mask, &identity.id_counts_1)) {
+        if (ops->read(context, &identity.id_version, identity.core_mask, &identity.id_counts_1,
+                      &identity.id_counts_2)) {
             identity.result = T8122_ID_READ_FAULT;
         } else if ((identity.id_version >> 24) != T8122_ID_GEN ||
                    ((identity.id_version >> 16) & 0xff) != T8122_ID_VARIANT ||
