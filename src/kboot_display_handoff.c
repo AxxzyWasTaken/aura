@@ -32,6 +32,12 @@
  *  The display nodes stay "disabled": the shared boot.bin DTB also boots kernels that cannot adopt
  *  locked DARTs, so only a kernel that knows the marker may enable them.
  *
+ * T6030 external display processors, dcpext0 and, if the ADT and the device tree have it,
+ * dcpext1 (see dcpext6_insts[]): with chosen asahi,t6030-dcpext=1 and the panel handoff
+ * published, each processor's firmware memory (apple,t6030-dcpext-memory-ready); with chosen
+ * asahi,t6030-dispext=1, its empty, locked display DART and a scanout child
+ * (apple,t6030-dispext-handoff).
+ *
  * T8122 (M3): nothing unless the boot.bin config line chosen.asahi,t8122-dcp=1 is set (or, with
  * oslog_always, only the __OS_LOG reservations). Armed, it does a dry run: the ADT values a T8122
  * handoff and device tree need are logged (including every clock-gate and power-gate of the
@@ -193,7 +199,7 @@ struct dcp_soc {
     bool oslog_always;  /* reserve the __OS_LOG buffers on every boot, even when not armed */
     bool describe;      /* log the ADT values the handoff and the device tree need */
     bool adt_psreg;     /* the display power state is what /arm-io/dcp's ADT clock-gates name */
-    bool ext;           /* T6030 dcpext0 memory and dispext0 DART handoffs */
+    bool ext;           /* T6030 dcpextN memory and dispextN DART handoffs */
     const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only */
     u32 os_fw;          /* enum fw_version the kernel's DCP interface is written for */
     const char *os_fw_name;
@@ -2073,57 +2079,135 @@ static __attribute__((noinline)) void dcp6_handoff(void *dt)
 }
 
 /*
- * T6030 external firmware handoff is independent of the running panel transaction.
- * Only describe preloaded memory; do not access the external ASC or DART here.
- * The external node stays disabled until a kernel explicitly opts into it.
+ * T6030 external display processors (dcpext0, dcpext1), independent of the running panel
+ * transaction. The memory handoff only describes the preloaded firmware memory; it does not
+ * access the external ASC or its DART. The display DART handoff only reads that DART's state, and
+ * only while the processor's CPU power domain is on; it never restarts or locks it. Every external
+ * node stays disabled until a kernel that knows the markers enables it.
+ *
+ * Both processors are armed by the same /chosen flags: asahi,t6030-dcpext for the memory and
+ * asahi,t6030-dispext for the display DART. dcpext1 is handed off only if the ADT has it and the
+ * device tree describes it (alias dcpext1); otherwise it is skipped and nothing changes. Each
+ * handoff is its own transaction, so a refused dcpext1 leaves dcpext0's in place.
  */
-#define DCPEXT6_MARKER "apple,t6030-dcpext-memory-ready"
-#define DCPEXT6_SEGS 4
+#define DCPEXT6_MARKER  "apple,t6030-dcpext-memory-ready"
+#define DCPEXT6_SEGS    4
+#define DISPEXT6_MARKER "apple,t6030-dispext-handoff"
+#define DISPEXT6_PMGR   0x350700000UL /* PMGR base of the dispextN_cpu power states */
 
-static int dcpext6_publish(void *dt)
+struct dcpext6_inst {
+    const char *name;     /* log name */
+    const char *alias;    /* device tree alias of the processor */
+    bool optional;        /* skipped if the ADT or the device tree does not have it */
+    const char *adt_dcp;  /* ADT processor node */
+    const char *adt_nub;  /* its iop nub */
+    const char *adt_dart; /* ADT firmware DART (stream 5) */
+    const char *adt_disp; /* ADT display DART (streams 0 and 4) */
+    const char *resv;     /* /reserved-memory name prefix of the data and heap segments */
+    u64 coproc, dart;     /* processor and firmware DART registers */
+    const char *dcp_path; /* device tree path of the processor */
+    /* Display DART, added as dart_path, with scanout_path as the processor's scanout child */
+    const char *disp; /* /reserved-memory name prefix of its page tables */
+    u64 disp_dart, disp_reg1;
+    u32 disp_irq;
+    const char *dart_name, *dart_path, *scanout_path;
+    /* The processor's CPU power state: PMGR offset, device tree node and label */
+    u32 ps_reg;
+    const char *ps_path, *ps_label;
+    const char *log; /* prefix of the display DART messages */
+};
+
+static const struct dcpext6_inst dcpext6_insts[] = {
+    {
+        .name = "dcpext",
+        .alias = "dcpext0",
+        .adt_dcp = "/arm-io/dcpext0",
+        .adt_nub = "/arm-io/dcpext0/iop-dcpext0-nub",
+        .adt_dart = "/arm-io/dart-dcpext0",
+        .adt_disp = "/arm-io/dart-dispext0",
+        .resv = "dcpext0",
+        .coproc = 0x2d2c00000UL,
+        .dart = 0x2d130c000UL,
+        .dcp_path = "/soc/dcp@2d2c00000",
+        .disp = "dispext0",
+        .disp_dart = 0x2d1304000UL,
+        .disp_reg1 = 0x2d1300000UL,
+        .disp_irq = 651,
+        .dart_name = "iommu@2d1304000",
+        .dart_path = "/soc/iommu@2d1304000",
+        .scanout_path = "/soc/dcp@2d2c00000/scanout",
+        .ps_reg = 0x3e0,
+        .ps_path = "/soc/power-management@350700000/power-controller@3e0",
+        .ps_label = "dispext0_cpu",
+        .log = "",
+    },
+    {
+        /* Registers 0x4000000 above dcpext0's; display DART interrupt as its firmware DART's */
+        .name = "dcpext1",
+        .alias = "dcpext1",
+        .optional = true,
+        .adt_dcp = "/arm-io/dcpext1",
+        .adt_nub = "/arm-io/dcpext1/iop-dcpext1-nub",
+        .adt_dart = "/arm-io/dart-dcpext1",
+        .adt_disp = "/arm-io/dart-dispext1",
+        .resv = "dcpext1",
+        .coproc = 0x2d6c00000UL,
+        .dart = 0x2d530c000UL,
+        .dcp_path = "/soc/dcp@2d6c00000",
+        .disp = "dispext1",
+        .disp_dart = 0x2d5304000UL,
+        .disp_reg1 = 0x2d5300000UL,
+        .disp_irq = 689,
+        .dart_name = "iommu@2d5304000",
+        .dart_path = "/soc/iommu@2d5304000",
+        .scanout_path = "/soc/dcp@2d6c00000/scanout",
+        .ps_reg = 0x3f8,
+        .ps_path = "/soc/power-management@350700000/power-controller@3f8",
+        .ps_label = "dispext1_cpu",
+        .log = "dispext1: ",
+    },
+};
+
+static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
 {
-    const char *alias = "dcpext0";
-    const char *nub_path = "/arm-io/dcpext0/iop-dcpext0-nub";
-    const u32 flags[DCPEXT6_SEGS] = {SEG_FLAGS_TEXT, SEG_FLAGS_DATA,
-                                    SEG_FLAGS_OSLOG, SEG_FLAGS_HEAP};
+    const char *alias = inst->alias;
+    const u32 flags[DCPEXT6_SEGS] = {SEG_FLAGS_TEXT, SEG_FLAGS_DATA, SEG_FLAGS_OSLOG,
+                                     SEG_FLAGS_HEAP};
     char path[96];
     int node = dcp6_alias_path(dt, alias, path, sizeof(path));
-    if (node < 0 || dcp6_status_disabled(dt, node, alias) ||
-        dcp6_cells_2_2(dt, node, alias))
+    if (node < 0 || dcp6_status_disabled(dt, node, alias) || dcp6_cells_2_2(dt, node, alias))
         return -1;
     int panel = fdt_path_offset(dt, "dcp");
     if (panel < 0 || !fdt_getprop(dt, panel, dcp6.soc->marker, NULL))
-        bail("dcpext needs the validated panel handoff first\n");
+        bail("%s needs the validated panel handoff first\n", inst->name);
     if (chip_id != T6030 || os_firmware.version != V14_7)
         return -1;
-    if (fdt_getprop(dt, node, "memory-region", NULL) ||
-        fdt_getprop(dt, node, DCPEXT6_MARKER, NULL))
-        bail("dcpext already has memory metadata\n");
+    if (fdt_getprop(dt, node, "memory-region", NULL) || fdt_getprop(dt, node, DCPEXT6_MARKER, NULL))
+        bail("%s already has memory metadata\n", inst->name);
 
     u64 base;
-    if (dcp6_adt_reg("/arm-io/dart-dcpext0", 0, &base) ||
-        base != 0x2d130c000UL ||
+    if (dcp6_adt_reg(inst->adt_dart, 0, &base) || base != inst->dart ||
         dcp6_check_iommu(dt, node, alias, DCP6_SID_DCP, base, DCP6_DART_VM_BASE,
                          DCP6_DART_VM_SIZE) < 0)
         return -1;
     const fdt64_t *reg;
     int len;
     reg = fdt_getprop(dt, node, "reg", &len);
-    if (dcp6_adt_reg("/arm-io/dcpext0", 0, &base) ||
-        base != 0x2d2c00000UL || !reg || len < 16 || fdt64_ld(reg) != base)
-        bail("dcpext ASC address mismatch\n");
+    if (dcp6_adt_reg(inst->adt_dcp, 0, &base) || base != inst->coproc || !reg || len < 16 ||
+        fdt64_ld(reg) != base)
+        bail("%s ASC address mismatch\n", inst->name);
 
-    int nub = adt_path_offset(adt, nub_path);
+    int nub = adt_path_offset(adt, inst->adt_nub);
     if (nub < 0)
         return -1;
     u32 seglen = 0, nameslen = 0, uuidlen = 0, loaded;
     const struct adt_segment_ranges *ranges = adt_getprop(adt, nub, "segment-ranges", &seglen);
     const char *names = adt_getprop(adt, nub, "segment-names", &nameslen);
     const char *uuid = adt_getprop(adt, nub, "uuid", &uuidlen);
-    if (nub < 0 || !ranges || seglen != DCPEXT6_SEGS * sizeof(*ranges) || !names ||
-        !uuid || uuidlen != sizeof(DCP6_UUID) || memcmp(uuid, DCP6_UUID, sizeof(DCP6_UUID)) ||
+    if (nub < 0 || !ranges || seglen != DCPEXT6_SEGS * sizeof(*ranges) || !names || !uuid ||
+        uuidlen != sizeof(DCP6_UUID) || memcmp(uuid, DCP6_UUID, sizeof(DCP6_UUID)) ||
         dcp6_adt_u32(nub, "pre-loaded", &loaded) || loaded != 1)
-        bail("dcpext firmware metadata invalid\n");
+        bail("%s firmware metadata invalid\n", inst->name);
     if (!dcp6_seg_name_is(names, nameslen, 1, "__DATA") ||
         !dcp6_seg_name_is(names, nameslen, 2, "__OS_LOG"))
         return -1;
@@ -2138,8 +2222,8 @@ static int dcpext6_publish(void *dt)
         struct dcp6_seg *s = &segs[i];
         *s = (struct dcp6_seg){r.phys, ALIGN_UP((u64)r.size, SZ_16K), r.remap, r.unk};
         if (s->flags != flags[i] || !r.size || s->size > DCP6_SEG_MAX_SIZE ||
-            (s->phys & (SZ_16K - 1)) || s->phys < dram_base ||
-            s->phys + s->size < s->phys || s->phys + s->size > dram_base + dram_size)
+            (s->phys & (SZ_16K - 1)) || s->phys < dram_base || s->phys + s->size < s->phys ||
+            s->phys + s->size > dram_base + dram_size)
             return -1;
         if (i == SEG_OSLOG) {
             if (s->remap != s->phys || s->size > DCP6_OSLOG_MAX)
@@ -2177,7 +2261,8 @@ static int dcpext6_publish(void *dt)
             snprintf(name, sizeof(name), "%s@%lx", i == SEG_TEXT ? "dcp-text" : DCP6_OSLOG_NODE,
                      s->phys);
             node = dcp6_find_resv(dt, name, s->phys, s->size);
-            if (node < 0 || (i == SEG_TEXT && fdt_node_check_compatible(dt, node, "apple,asc-mem")) ||
+            if (node < 0 ||
+                (i == SEG_TEXT && fdt_node_check_compatible(dt, node, "apple,asc-mem")) ||
                 (i == SEG_OSLOG && (!fdt_getprop(dt, node, DCP6_OSLOG_PROP, NULL) ||
                                     fdt_getprop(dt, node, "iommu-addresses", NULL))))
                 return -1;
@@ -2185,7 +2270,8 @@ static int dcpext6_publish(void *dt)
         } else {
             if (dcp6_resv_conflict(dt, s->phys, s->size, alias))
                 return -1;
-            snprintf(name, sizeof(name), "dcpext0-%s@%lx", i == SEG_DATA ? "data" : "heap", s->phys);
+            snprintf(name, sizeof(name), "%s-%s@%lx", inst->resv, i == SEG_DATA ? "data" : "heap",
+                     s->phys);
             mr[i] = cpu_to_fdt32(dcp6_add_resv(dt, name, s->phys, s->size, "apple,asc-mem"));
             node = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(mr[i]));
         }
@@ -2207,28 +2293,19 @@ static int dcpext6_publish(void *dt)
     return 0;
 }
 
-static void dcpext6_handoff(void *dt)
+static void dcpext6_handoff(void *dt, const struct dcpext6_inst *inst)
 {
-    int chosen = fdt_path_offset(dt, "/chosen"), len = 0;
-    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t6030-dcpext", &len);
-    if (!opt || len != 2 || memcmp(opt, "1", 2))
-        return;
     void *scratch = dcp6_scratch(dt);
     if (!scratch)
         return;
-    if (dcpext6_publish(scratch)) {
-        dlog("dcpext memory handoff rejected; panel handoff unchanged\n");
+    if (dcpext6_publish(scratch, inst)) {
+        dlog("%s memory handoff rejected; panel handoff unchanged\n", inst->name);
         free(scratch);
         return;
     }
     if (!dcp6_commit(dt, scratch))
-        dlog("dcpext memory handoff published; CPU untouched, node disabled\n");
+        dlog("%s memory handoff published; CPU untouched, node disabled\n", inst->name);
 }
-
-#define DISPEXT6_BASE 0x2d1304000UL
-#define DISPEXT6_MARKER "apple,t6030-dispext-handoff"
-#define DISPEXT6_DART_PATH "/soc/iommu@2d1304000"
-#define DISPEXT6_SCANOUT_PATH "/soc/dcp@2d2c00000/scanout"
 
 struct dispext6_tables {
     u64 lo[2], hi[2];
@@ -2236,17 +2313,17 @@ struct dispext6_tables {
 };
 
 /* Read only, including on refusal. Never restart or lock the display DART. */
-static int dispext6_check_inner(struct dispext6_tables *t)
+static int dispext6_check_inner(const struct dcpext6_inst *inst, struct dispext6_tables *t)
 {
     const u32 sid[2] = {0, 4};
     /* Do not access the external display aperture unless its CPU domain is on. */
-    if ((read32(0x3507003e0UL) & 0xf0) != 0xf0)
+    if ((read32(DISPEXT6_PMGR + inst->ps_reg) & 0xf0) != 0xf0)
         return -1;
-    if (!(read32(DISPEXT6_BASE + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR))
+    if (!(read32(inst->disp_dart + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR))
         return -1;
     for (int i = 0; i < 2; i++) {
-        t->tcr[i] = read32(DISPEXT6_BASE + DART_T8110_TCR(sid[i]));
-        t->ttbr[i] = read32(DISPEXT6_BASE + DART_T8110_TTBR(sid[i]));
+        t->tcr[i] = read32(inst->disp_dart + DART_T8110_TCR(sid[i]));
+        t->ttbr[i] = read32(inst->disp_dart + DART_T8110_TTBR(sid[i]));
         if (!(t->tcr[i] & DART_T8110_TCR_TRANSLATE) ||
             (t->tcr[i] & (DART_T8110_TCR_BYPASS_DART | DART_T8110_TCR_FOUR_LEVEL)) ||
             !(t->ttbr[i] & DART_T8110_TTBR_VALID))
@@ -2262,26 +2339,25 @@ static int dispext6_check_inner(struct dispext6_tables *t)
     return 0;
 }
 
-static int dispext6_publish(void *dt)
+static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
 {
     struct dispext6_tables t;
-    const char *adt_path = "/arm-io/dart-dispext0";
+    const char *adt_path = inst->adt_disp;
     const char *pt_names[2] = {"pt-region-0", "pt-region-4"};
-    const char *ext_path = "/soc/dcp@2d2c00000";
+    const char *ext_path = inst->dcp_path;
     u64 base, vm_base, vm_size, dram_base, dram_size;
     u32 irq;
     int a = adt_path_offset(adt, adt_path);
     int ext = fdt_path_offset(dt, ext_path), len;
     const fdt32_t *ready = ext < 0 ? NULL : fdt_getprop(dt, ext, DCPEXT6_MARKER, &len);
-    if (chip_id != T6030 || os_firmware.version != V14_7 || a < 0 || ext < 0 ||
-        !ready || len != 4 || fdt32_ld(ready) != 1 ||
-        dcp6_status_disabled(dt, ext, "dcpext0") ||
-        fdt_path_offset(dt, DISPEXT6_DART_PATH) != -FDT_ERR_NOTFOUND ||
-        fdt_path_offset(dt, DISPEXT6_SCANOUT_PATH) != -FDT_ERR_NOTFOUND)
+    if (chip_id != T6030 || os_firmware.version != V14_7 || a < 0 || ext < 0 || !ready ||
+        len != 4 || fdt32_ld(ready) != 1 || dcp6_status_disabled(dt, ext, inst->alias) ||
+        fdt_path_offset(dt, inst->dart_path) != -FDT_ERR_NOTFOUND ||
+        fdt_path_offset(dt, inst->scanout_path) != -FDT_ERR_NOTFOUND)
         return -1;
-    if (dcp6_adt_reg(adt_path, 0, &base) || base != DISPEXT6_BASE ||
-        dcp6_adt_reg(adt_path, 1, &base) || base != 0x2d1300000UL ||
-        dcp6_adt_u32(a, "interrupts", &irq) || irq != 651 ||
+    if (dcp6_adt_reg(adt_path, 0, &base) || base != inst->disp_dart ||
+        dcp6_adt_reg(adt_path, 1, &base) || base != inst->disp_reg1 ||
+        dcp6_adt_u32(a, "interrupts", &irq) || irq != inst->disp_irq ||
         dcp6_adt_u64(a, "vm-base", &vm_base) || vm_base != DCP6_DART_VM_BASE ||
         dcp6_adt_u64(a, "vm-size", &vm_size) || vm_size != DCP6_DART_VM_SIZE ||
         dcp6_dram(&dram_base, &dram_size))
@@ -2298,7 +2374,7 @@ static int dispext6_publish(void *dt)
     if (dcp6_overlaps(t.lo[0], t.hi[0] - t.lo[0], t.lo[1], t.hi[1] - t.lo[1]))
         return -1;
 
-    int fw = dcp6_check_iommu(dt, ext, "dcpext0", 5, 0x2d130c000UL, DCP6_DART_VM_BASE,
+    int fw = dcp6_check_iommu(dt, ext, inst->alias, DCP6_SID_DCP, inst->dart, DCP6_DART_VM_BASE,
                               DCP6_DART_VM_SIZE);
     if (fw < 0)
         return -1;
@@ -2319,27 +2395,28 @@ static int dispext6_publish(void *dt)
     u32 pd = fdt32_ld(prop);
     parent = fdt_node_offset_by_phandle(dt, pd);
     const char *label = parent < 0 ? NULL : fdt_getprop(dt, parent, "label", &len);
-    if (!label || len != sizeof("dispext0_cpu") || memcmp(label, "dispext0_cpu", len))
+    if (!label || len < 0 || (size_t)len != strlen(inst->ps_label) + 1 ||
+        memcmp(label, inst->ps_label, len))
         return -1;
-    if (parent != fdt_path_offset(dt, "/soc/power-management@350700000/power-controller@3e0") ||
+    if (parent != fdt_path_offset(dt, inst->ps_path) ||
         fdt_node_check_compatible(dt, parent, "apple,t6030-pmgr-pwrstate"))
         return -1;
     prop = fdt_getprop(dt, parent, "#power-domain-cells", &len);
     if (!prop || len != 4 || fdt32_ld(prop))
         return -1;
     prop = fdt_getprop(dt, parent, "reg", &len);
-    if (!prop || len != 8 || fdt32_ld(prop) != 0x3e0 || fdt32_ld(prop + 1) != 4)
+    if (!prop || len != 8 || fdt32_ld(prop) != inst->ps_reg || fdt32_ld(prop + 1) != 4)
         return -1;
 
     int guard = dcp6_guard_begin();
-    int ret = dispext6_check_inner(&t);
+    int ret = dispext6_check_inner(inst, &t);
     if (dcp6_guard_end(guard) || ret)
         return -1;
 
     fdt32_t mr[2], state[6];
     for (int i = 0; i < 2; i++) {
         char name[80];
-        snprintf(name, sizeof(name), "dispext0-pt%d@%lx", i ? 4 : 0, t.lo[i]);
+        snprintf(name, sizeof(name), "%s-pt%d@%lx", inst->disp, i ? 4 : 0, t.lo[i]);
         u32 ph = dcp6_add_resv(dt, name, t.lo[i], t.hi[i] - t.lo[i], NULL);
         if (!ph)
             return -1;
@@ -2349,10 +2426,10 @@ static int dispext6_publish(void *dt)
         state[3 * i + 2] = cpu_to_fdt32(t.ttbr[i]);
     }
     int soc = fdt_path_offset(dt, "/soc");
-    int dart = fdt_add_subnode(dt, soc, "iommu@2d1304000");
+    int dart = fdt_add_subnode(dt, soc, inst->dart_name);
     const char compat[] = "apple,t6030-dart\0apple,t8110-dart";
     const char names[] = "sid0-page-tables\0sid4-page-tables";
-    fdt64_t reg[] = {cpu_to_fdt64(DISPEXT6_BASE), cpu_to_fdt64(0x4000)};
+    fdt64_t reg[] = {cpu_to_fdt64(inst->disp_dart), cpu_to_fdt64(0x4000)};
     fdt64_t range[] = {cpu_to_fdt64(vm_base), cpu_to_fdt64(vm_size)};
     fdt32_t interrupts[] = {cpu_to_fdt32(0), cpu_to_fdt32(irq), cpu_to_fdt32(4)};
     if (dart < 0 || fdt_setprop(dt, dart, "compatible", compat, sizeof(compat)) ||
@@ -2368,7 +2445,7 @@ static int dispext6_publish(void *dt)
         fdt_setprop(dt, dart, "apple,inherited-dart-state", state, sizeof(state)) ||
         fdt_setprop_u32(dt, dart, DISPEXT6_MARKER, 1))
         return -1;
-    u32 ph = dcp6_phandle(dt, DISPEXT6_DART_PATH);
+    u32 ph = dcp6_phandle(dt, inst->dart_path);
     ext = fdt_path_offset(dt, ext_path);
     int scanout = fdt_add_subnode(dt, ext, "scanout");
     fdt32_t iommu[] = {cpu_to_fdt32(ph), cpu_to_fdt32(0)};
@@ -2383,22 +2460,59 @@ static int dispext6_publish(void *dt)
     return 0;
 }
 
-static void dispext6_handoff(void *dt)
+static void dispext6_handoff(void *dt, const struct dcpext6_inst *inst)
 {
-    int chosen = fdt_path_offset(dt, "/chosen"), len;
-    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t6030-dispext", &len);
-    if (!opt || len != 2 || memcmp(opt, "1", 2))
-        return;
     void *scratch = dcp6_scratch(dt);
     if (!scratch)
         return;
-    if (dispext6_publish(scratch)) {
-        dlog("display DART handoff rejected; existing handoffs unchanged\n");
+    if (dispext6_publish(scratch, inst)) {
+        dlog("%sdisplay DART handoff rejected; existing handoffs unchanged\n", inst->log);
         free(scratch);
         return;
     }
     if (!dcp6_commit(dt, scratch))
-        dlog("empty external display DART handoff published; hardware untouched\n");
+        dlog("%sempty external display DART handoff published; hardware untouched\n", inst->log);
+}
+
+/* A /chosen flag set to "1" (by the device tree or a boot.bin config line chosen.<name>=1) */
+static bool dcpext6_flag(void *dt, const char *name)
+{
+    int chosen = fdt_path_offset(dt, "/chosen"), len = 0;
+    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, name, &len);
+    return opt && len == 2 && !memcmp(opt, "1", 2);
+}
+
+/* An optional processor is handed off only if both the ADT and the device tree have it */
+static bool dcpext6_present(void *dt, const struct dcpext6_inst *inst)
+{
+    if (adt_path_offset(adt, inst->adt_dcp) < 0 || adt_path_offset(adt, inst->adt_nub) < 0) {
+        dlog("%s: not in the ADT, no handoff\n", inst->name);
+        return false;
+    }
+    if (!fdt_get_alias(dt, inst->alias)) {
+        dlog("%s: the device tree does not describe it, no handoff\n", inst->name);
+        return false;
+    }
+    return true;
+}
+
+/* dcpext0, then dcpext1; each processor's memory handoff before its display DART handoff */
+static void dcpext6_handoffs(void *dt)
+{
+    bool mem = dcpext6_flag(dt, "asahi,t6030-dcpext");
+    bool disp = dcpext6_flag(dt, "asahi,t6030-dispext");
+
+    if (!mem && !disp)
+        return;
+    for (size_t i = 0; i < ARRAY_SIZE(dcpext6_insts); i++) {
+        const struct dcpext6_inst *inst = &dcpext6_insts[i];
+        if (inst->optional && !dcpext6_present(dt, inst))
+            continue;
+        if (mem)
+            dcpext6_handoff(dt, inst);
+        if (disp)
+            dispext6_handoff(dt, inst);
+    }
 }
 
 /* Always returns 0: nothing here may stop the boot */
@@ -2433,9 +2547,7 @@ int dt_set_display_handoff(void *dt)
         dcp6_handoff(dt);
     else
         dlog("not armed (no chosen.%s=1): no display handoff\n", dcp6.soc->optin);
-    if (dcp6.soc->ext) {
-        dcpext6_handoff(dt);
-        dispext6_handoff(dt);
-    }
+    if (dcp6.soc->ext)
+        dcpext6_handoffs(dt);
     return 0;
 }
