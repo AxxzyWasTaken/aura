@@ -294,6 +294,17 @@ build-cfg src/../build/build_cfg.h &:
 	$(QUIET)cmp -s build/build_cfg.h build/build_cfg.tmp 2>/dev/null || \
 	( mv -f build/build_cfg.tmp build/build_cfg.h && echo "  CFG   build/build_cfg.h" )
 
+# The built-in boot logos are linked gzip-compressed; fb.c inflates them on first use
+build/bootlogo_%.bin.gz: data/bootlogo_%.bin
+	$(QUIET)echo "  GZIP  $@"
+	$(QUIET)mkdir -p "$(dir $@)"
+	$(QUIET)gzip -9 -n -c $< > $@
+
+build/bootlogo_%.o: build/bootlogo_%.bin.gz
+	$(QUIET)echo "  BIN   $@"
+	$(QUIET)mkdir -p "$(dir $@)"
+	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
+
 build/%.bin: data/%.bin
 	$(QUIET)echo "  IMG   $@"
 	$(QUIET)mkdir -p "$(dir $@)"

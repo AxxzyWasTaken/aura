@@ -11,6 +11,8 @@
 #include "utils.h"
 #include "xnuboot.h"
 
+#include "tinf/tinf.h"
+
 #define FB_DEPTH_MASK 0xff
 
 fb_t fb;
@@ -45,30 +47,66 @@ static struct {
     bool active;
 } console;
 
-extern u8 _binary_build_bootlogo_48_bin_start[];
-extern u8 _binary_build_bootlogo_128_bin_start[];
-extern u8 _binary_build_bootlogo_256_bin_start[];
+extern u8 _binary_build_bootlogo_48_bin_gz_start[], _binary_build_bootlogo_48_bin_gz_end[];
+extern u8 _binary_build_bootlogo_128_bin_gz_start[], _binary_build_bootlogo_128_bin_gz_end[];
+extern u8 _binary_build_bootlogo_256_bin_gz_start[], _binary_build_bootlogo_256_bin_gz_end[];
 
 extern u8 _binary_build_font_bin_start[];
 extern u8 _binary_build_font_retina_bin_start[];
 
-const struct image logo_48 = {
-    .ptr = (void *)_binary_build_bootlogo_48_bin_start,
-    .width = 48,
-    .height = 48,
+/*
+ * The built-in boot logos are linked gzip-compressed (see the Makefile) and inflated into .bss
+ * the first time one is used. That keeps about 330 KiB of pixels out of the part of the image
+ * that is loaded from the file, which must stay small (see _file_end in m1n1-raw.ld).
+ */
+struct builtin_logo {
+    struct image img;
+    const u8 *gz, *gz_end;
+    bool inflated;
 };
 
-const struct image logo_128 = {
-    .ptr = (void *)_binary_build_bootlogo_128_bin_start,
-    .width = 128,
-    .height = 128,
+static u32 logo_48_px[48 * 48] ALIGNED(64);
+static u32 logo_128_px[128 * 128] ALIGNED(64);
+static u32 logo_256_px[256 * 256] ALIGNED(64);
+
+static struct builtin_logo logo_48 = {
+    {logo_48_px, 48, 48},
+    _binary_build_bootlogo_48_bin_gz_start,
+    _binary_build_bootlogo_48_bin_gz_end,
+    false,
 };
 
-const struct image logo_256 = {
-    .ptr = (void *)_binary_build_bootlogo_256_bin_start,
-    .width = 256,
-    .height = 256,
+static struct builtin_logo logo_128 = {
+    {logo_128_px, 128, 128},
+    _binary_build_bootlogo_128_bin_gz_start,
+    _binary_build_bootlogo_128_bin_gz_end,
+    false,
 };
+
+static struct builtin_logo logo_256 = {
+    {logo_256_px, 256, 256},
+    _binary_build_bootlogo_256_bin_gz_start,
+    _binary_build_bootlogo_256_bin_gz_end,
+    false,
+};
+
+/* The logo's pixels, inflated once. A logo that does not inflate to its exact size stays blank. */
+static const struct image *builtin_logo(struct builtin_logo *l)
+{
+    unsigned int size = l->img.width * l->img.height * 4;
+    unsigned int len = size;
+    unsigned int gz_len = l->gz_end - l->gz;
+
+    if (l->inflated)
+        return &l->img;
+    l->inflated = true;
+    if (tinf_gzip_uncompress(l->img.ptr, &len, l->gz, &gz_len) != TINF_OK || len != size) {
+        printf("fb: built-in %ux%u logo did not inflate, left blank\n", l->img.width,
+               l->img.height);
+        memset(l->img.ptr, 0, size);
+    }
+    return &l->img;
+}
 
 struct image custom_logo = {};
 
@@ -422,17 +460,17 @@ void fb_init(bool clear)
 
     // This is the touchbar, make everything tiny
     if (chip_id == T8012) {
-        logo = &logo_48;
+        logo = builtin_logo(&logo_48);
         console.font.ptr = _binary_build_font_bin_start;
         console.font.width = 8;
         console.font.height = 16;
     } else if (cur_boot_args.video.depth & FB_DEPTH_FLAG_RETINA) {
-        logo = &logo_256;
+        logo = builtin_logo(&logo_256);
         console.font.ptr = _binary_build_font_retina_bin_start;
         console.font.width = 16;
         console.font.height = 32;
     } else {
-        logo = &logo_128;
+        logo = builtin_logo(&logo_128);
         console.font.ptr = _binary_build_font_bin_start;
         console.font.width = 8;
         console.font.height = 16;
