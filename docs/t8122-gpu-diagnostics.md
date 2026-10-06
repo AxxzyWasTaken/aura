@@ -196,3 +196,16 @@ conditions. On mismatch it leaves the claim absent. Even on success the GPU
 and mailbox nodes stay disabled; no GPU firmware is started and no render node
 can result from this test. A later Linux experiment must still validate power,
 firmware startup and the J613 hardware configuration before enabling them.
+
+## Separate J613 ASC register preflight
+
+The `air/t8122-asc-preflight` experiment additionally accepts
+`/chosen/asahi,t8122-gpu-asc-preflight = "1"`. Only after the exact J613
+identity, loaded image metadata and UAT/firmware reservations pass does it
+enable the GPU and mailbox nodes together in the FDT. The status edits are
+published atomically from a copy, so an unsuccessful edit leaves both nodes
+disabled. A matching Aurora diagnostic kernel can then read SGX identity and
+pulse the ASC RUN control once before returning `ENODEV`. No UAT setup, RTKit
+handshake, firmware initdata, GPU job or DRM render node is part of this test.
+The boot opt-in is separate from image admission and has not been enabled or
+booted on J613 yet.

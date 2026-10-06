@@ -2030,6 +2030,41 @@ static void t8122_admit_image_metadata(void *dt, const struct gfx_fw_image_info 
     printf("FDT: GPU: T8122 J613 exact image metadata admitted; GPU and ASC remain disabled\n");
 }
 
+/* Separate one-boot ASC register preflight. Publish both status changes only
+ * after all J613 identity, image, reservation and opt-in checks have passed.
+ * Linux's diagnostic driver still returns ENODEV without RTKit or DRM setup.
+ */
+static void t8122_enable_asc_preflight(void *dt)
+{
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int gpu = fdt_path_offset(dt, "/soc/gpu@292400000");
+    int mailbox = fdt_path_offset(dt, "/soc/mbox@292408000");
+    if (chosen < 0 || gpu < 0 || mailbox < 0 || !t8122_identity_matches_j613(dt))
+        return;
+    int len = 0;
+    const char *optin = fdt_getprop(dt, chosen, "asahi,t8122-gpu-asc-preflight", &len);
+    if (!optin || len != sizeof("1") || memcmp(optin, "1", sizeof("1")))
+        return;
+    const fdt32_t *compat = fdt_getprop(dt, gpu, "apple,firmware-compat", &len);
+    if (!compat || len != 3 * sizeof(*compat) || fdt32_ld(&compat[0]) != 14 ||
+        fdt32_ld(&compat[1]) != 8 || fdt32_ld(&compat[2]) != 3)
+        return;
+
+    size_t size = fdt_totalsize(dt);
+    void *copy = malloc(size);
+    if (!copy)
+        return;
+    memcpy(copy, dt, size);
+    if (!g15_set_status(copy, "/soc/mbox@292408000", "okay") &&
+        !g15_set_status(copy, "/soc/gpu@292400000", "okay")) {
+        memcpy(dt, copy, size);
+        printf("FDT: GPU: T8122 J613 one-boot ASC register preflight enabled\n");
+    } else {
+        printf("FDT: GPU: T8122 ASC preflight status change failed; GPU and ASC stay disabled\n");
+    }
+    free(copy);
+}
+
 /*
  * Export the four T8122 UAT carveouts from this boot's ADT. Their physical
  * addresses depend on the installed RAM size: a J615's fixed addresses are
@@ -2130,6 +2165,7 @@ static int dt_set_gpu_t8122(void *dt)
            "GPU and ASC remain disabled\n");
     t8122_read_powered_identity(dt, gpu);
     t8122_admit_image_metadata(dt, &image);
+    t8122_enable_asc_preflight(dt);
     return 0;
 }
 
