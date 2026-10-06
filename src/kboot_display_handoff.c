@@ -197,7 +197,8 @@ struct dcp_soc {
     const char *disp_compat;
     const char *marker; /* set to <1> on dcp, display and piodma by the handoff */
     const char *optin;  /* /chosen property: the boot.bin config line chosen.<optin>=1 arms */
-    bool always;        /* reserve, lock and check on every boot, not only when armed */
+    bool always;        /* reserve, lock and check on every boot, not only when armed; otherwise
+                           dart-dcp is only locked by a handoff whose checks have all passed */
     bool oslog_always;  /* reserve the __OS_LOG buffers on every boot, even when not armed */
     bool describe;      /* log the ADT values the handoff and the device tree need */
     bool adt_psreg;     /* the display power state is what /arm-io/dcp's ADT clock-gates name */
@@ -318,6 +319,7 @@ static struct {
     bool mmio_ok;     /* display domain on and the register reads below did not fault */
     bool dcp_running; /* ASC CPU_CONTROL RUN */
     bool dcp_locked;  /* dart-dcp PROTECT_TTBR_TCR set (by iBoot or by us) */
+    bool lock_due;    /* not always: dart-dcp is to be locked once the handoff's checks pass */
     bool disp_locked; /* dart-disp0 PROTECT_TTBR_TCR set */
     bool segs_ok;     /* iop-dcp-nub segments parsed and checked */
     struct dcp6_seg segs[DCP6_SEGS_MAX];
@@ -1231,6 +1233,21 @@ static void dcp6_describe_streams(const char *what, u64 base)
             dlog("%s SID %d: TCR 0x%x TTBR 0x%x\n", what, sid, tcr[sid], ttbr[sid]);
 }
 
+/* Sets dart-dcp's PROTECT_TTBR_TCR (prot: PROTECT as read), which stays set until reset */
+static bool dcp6_lock_dcp(u32 prot)
+{
+    int g = dcp6_guard_begin();
+    write32(dcp6.dart_dcp + DART_T8110_PROTECT, prot | DART_T8110_PROTECT_TTBR_TCR);
+    u32 after = read32(dcp6.dart_dcp + DART_T8110_PROTECT);
+    if (dcp6_guard_end(g) || !(after & DART_T8110_PROTECT_TTBR_TCR)) {
+        dlog("locking dart-dcp failed (PROTECT 0x%x)\n", after);
+        return false;
+    }
+    dcp6.dcp_locked = true;
+    dlog("dart-dcp locked (PROTECT 0x%x)\n", after);
+    return true;
+}
+
 static void dcp6_check_hw(void)
 {
     const struct dcp_soc *soc = dcp6.soc;
@@ -1301,16 +1318,30 @@ static void dcp6_check_hw(void)
         dlog("dry run: no %s DCP firmware image is pinned, leaving dart-dcp unlocked\n", soc->name);
         return;
     }
-
-    g = dcp6_guard_begin();
-    write32(dcp6.dart_dcp + DART_T8110_PROTECT, prot_dcp | DART_T8110_PROTECT_TTBR_TCR);
-    u32 after = read32(dcp6.dart_dcp + DART_T8110_PROTECT);
-    if (dcp6_guard_end(g) || !(after & DART_T8110_PROTECT_TTBR_TCR)) {
-        dlog("locking dart-dcp failed (PROTECT 0x%x)\n", after);
+    if (!soc->always) {
+        /* The lock stays until reset: only a handoff that passed every check sets it */
+        dcp6.lock_due = true;
+        dlog("dart-dcp left unlocked until the handoff's checks pass\n");
         return;
     }
-    dcp6.dcp_locked = true;
-    dlog("dart-dcp locked (PROTECT 0x%x)\n", after);
+    dcp6_lock_dcp(prot_dcp);
+}
+
+/* The lock for a handoff whose checks all passed: PROTECT is read again, then set if needed */
+static bool dcp6_lock_now(void)
+{
+    int g = dcp6_guard_begin();
+    u32 prot = read32(dcp6.dart_dcp + DART_T8110_PROTECT);
+    if (dcp6_guard_end(g)) {
+        dlog("reading dart-dcp PROTECT faulted, not locking it\n");
+        return false;
+    }
+    dcp6.lock_due = false;
+    if (prot & DART_T8110_PROTECT_TTBR_TCR) {
+        dcp6.dcp_locked = true;
+        return true;
+    }
+    return dcp6_lock_dcp(prot);
 }
 
 /* ---- firmware segments of the internal DCP ---- */
@@ -1917,7 +1948,8 @@ static int dcp6_check_adt(void)
         dcp6_adt_u32(nub, "running", &running) || running != 1)
         bail("iBoot did not leave the dcp firmware loaded and running\n");
 
-    if (!dcp6.mmio_ok || !dcp6.dcp_running || !dcp6.dcp_locked || !dcp6.disp_locked)
+    if (!dcp6.mmio_ok || !dcp6.dcp_running || !(dcp6.dcp_locked || dcp6.lock_due) ||
+        !dcp6.disp_locked)
         bail("DCP not running or its DARTs not locked\n");
     if (!dcp6.segs_ok)
         bail("dcp firmware segments not usable\n");
@@ -2105,6 +2137,12 @@ static __attribute__((noinline)) void dcp6_handoff(void *dt)
         return;
     if (dcp6_publish(scratch, &n)) {
         dlog("DT write failed (full?); handoff NOT published, nothing changed\n");
+        free(scratch);
+        return;
+    }
+    /* Every check passed and the device tree is ready: now the lock, if it is still due */
+    if (dcp6.lock_due && !dcp6_lock_now()) {
+        dlog("armed, but handoff NOT published; display nodes untouched\n");
         free(scratch);
         return;
     }
