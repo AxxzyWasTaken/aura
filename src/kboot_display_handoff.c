@@ -34,12 +34,14 @@
  *
  * T8122 (M3): nothing unless the boot.bin config line chosen.asahi,t8122-dcp=1 is set (or, with
  * oslog_always, only the __OS_LOG reservations). Armed, it does a dry run: the ADT values a T8122
- * handoff and device tree need are logged, the __OS_LOG buffers are reserved, and the DCP state
- * and page tables are read and checked as on T6030, with addresses, firmware segments and DART
- * windows taken from the ADT instead of fixed values. The display CPU power state register comes
- * from the T8122 PMGR description and is only read once an ADT clock-gate of /arm-io/dcp names
- * it. While no T8122 DCP firmware image is pinned below, dart-dcp is not locked and the handoff is
- * never published.
+ * handoff and device tree need are logged (including every clock-gate and power-gate of the
+ * display nodes resolved through the ADT's PMGR table, the panel properties and the PMP nub's
+ * values), the __OS_LOG buffers are reserved, and the DCP state and page tables are read and
+ * checked as on T6030, with addresses, firmware segments and DART windows taken from the ADT
+ * instead of fixed values. The display power state is taken from the ADT too: the power state
+ * registers the clock-gates of /arm-io/dcp resolve to (a virtual device by its nearest real
+ * parents). The DCP and its DARTs are only read while all of them are on. While no T8122 DCP
+ * firmware image is pinned below, dart-dcp is not locked and the handoff is never published.
  *
  * Fail-soft: dt_set_display_handoff() always returns 0; a failed check is logged and changes
  * nothing. Transactional: DT edits are made on a scratch copy that replaces the DT only if every
@@ -119,6 +121,11 @@
 #define DCP6_DEF_LEN      16
 #define DCP6_NUBS_MAX     10
 #define DCP6_NUB          "/arm-io/dcp/iop-dcp-nub"
+#define DCP6_PS_MAX       8  /* power states (or parents) followed per ADT gate list */
+#define DCP6_GATE_DEPTH   8  /* PMGR parent levels followed */
+#define DCP6_GATES_MAX    32 /* entries per clock-gates/power-gates list */
+#define DCP6_VALUE_MAX    64 /* longest panel/dcp property value printed */
+#define DCP6_PMP_VALUE    16 /* longest iop-pmp-nub property value printed */
 
 #define SEG_FLAGS_DATA  0
 #define SEG_FLAGS_TEXT  1
@@ -171,7 +178,7 @@ struct dcp_soc {
     bool always;        /* reserve, lock and check on every boot, not only when armed */
     bool oslog_always;  /* reserve the __OS_LOG buffers on every boot, even when not armed */
     bool describe;      /* log the ADT values the handoff and the device tree need */
-    bool check_psreg;   /* pmgr_disp_cpu must be an ADT clock-gate of /arm-io/dcp */
+    bool adt_psreg;     /* the display power state is what /arm-io/dcp's ADT clock-gates name */
     bool ext;           /* T6030 dcpext0 memory and dispext0 DART handoffs */
     const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only */
     u32 os_fw;          /* enum fw_version the kernel's DCP interface is written for */
@@ -179,7 +186,7 @@ struct dcp_soc {
     /* Nonzero: the ADT must say the same. Zero: taken from the ADT. */
     u64 coproc, dart_dcp, dart_disp;
     u64 vm_base, vm_size; /* both DARTs' DVA window (vm-base, vm-size, apple,dma-range) */
-    u64 pmgr_disp_cpu;    /* display CPU power state register */
+    u64 pmgr_disp_cpu;    /* display CPU power state register (with adt_psreg: compared only) */
     const struct dcp6_seg_def *segs; /* fixed iop-dcp-nub layout, or NULL: derived from the ADT */
     int nsegs;
     const char *const *nubs; /* owners whose __OS_LOG is reserved, or NULL: every dcp/dcpextN */
@@ -216,9 +223,10 @@ static const struct dcp_soc dcp_soc_t6030 = {
 };
 
 /*
- * T8122 (M3 MacBook Air J613/J615). Addresses, segments and DART windows come from the ADT. The
- * display CPU power state is ps_disp_cpu of the T8122 PMGR description (pmgr 0x2d0700000, state
- * 0x10000), as for T6030. No firmware image is pinned yet, so this is a dry run only.
+ * T8122 (M3 MacBook Air J613/J615). Addresses, segments, DART windows and the display power state
+ * come from the ADT. pmgr_disp_cpu is ps_disp_cpu of the open T8122 PMGR device tree (pmgr
+ * 0x2d0700000, state 0x10000); it is only compared with the ADT's, for the device tree. No firmware
+ * image is pinned yet, so this is a dry run only.
  */
 static const char *const dcp_boards_t8122[] = {"apple,j613", "apple,j615", NULL};
 
@@ -239,7 +247,7 @@ static const struct dcp_soc dcp_soc_t8122 = {
      */
     .oslog_always = false,
     .describe = true,
-    .check_psreg = true,
+    .adt_psreg = true,
     .uuid = NULL,
     .os_fw = V14_7,
     .os_fw_name = "14.7",
@@ -726,19 +734,149 @@ static void dcp6_describe_u64(int node, const char *path, const char *prop)
         dlog("ADT %s %s: 0x%lx\n", path, prop, v);
 }
 
+/* Property names, eight per line, each line with the log prefix */
 static void dcp6_describe_names(int node, const char *path)
 {
-    dlog("ADT %s properties:", path);
     int n = 0;
     ADT_FOREACH_PROPERTY(adt, node, prop)
     {
-        printf("%s%s", n % 8 ? " " : "\n  ", prop->name);
-        n++;
+        if (n % 8 == 0)
+            dlog("ADT %s properties:", path);
+        printf(" %s", prop->name);
+        if (++n % 8 == 0)
+            printf("\n");
+    }
+    if (n % 8)
+        printf("\n");
+}
+
+/* Text: printable characters, NUL-terminated, NULs only between non-empty strings */
+static bool dcp6_is_text(const u8 *v, u32 len)
+{
+    if (len < 2 || !v[0] || v[len - 1])
+        return false;
+    for (u32 i = 0; i + 1 < len; i++) {
+        if (!v[i] ? !v[i + 1] : (v[i] < 0x20 || v[i] > 0x7e))
+            return false;
+    }
+    return true;
+}
+
+/*
+ * One ADT property: its size and, if it is at most `max` bytes, its value as little-endian u32
+ * words (or bytes, for a length that is not a multiple of 4), followed by the text if it is text
+ */
+static void dcp6_describe_bytes(const char *path, const char *name, const u8 *v, u32 len, u32 max)
+{
+    dlog("ADT %s %s: %u bytes", path, name, len);
+    if (!len || len > max || len > DCP6_VALUE_MAX) {
+        printf("\n");
+        return;
+    }
+    printf(",");
+    if (len % 4 == 0) {
+        for (u32 i = 0; i < len; i += 4) {
+            u32 x;
+            memcpy(&x, v + i, sizeof(x));
+            printf(" 0x%x", x);
+        }
+    } else {
+        printf(" ");
+        for (u32 i = 0; i < len; i++)
+            printf("%02x", v[i]);
+    }
+    if (dcp6_is_text(v, len)) {
+        char text[DCP6_VALUE_MAX];
+        for (u32 i = 0; i + 1 < len; i++)
+            text[i] = v[i] ? v[i] : ',';
+        text[len - 1] = 0;
+        printf(" \"%s\"", text);
     }
     printf("\n");
 }
 
-/* compatible, every reg (translated), interrupts and clock-gates (resolved to PMGR states) */
+static void dcp6_describe_value(int node, const char *path, const char *name, u32 max)
+{
+    u32 len = 0;
+    const u8 *v = adt_getprop(adt, node, name, &len);
+    if (!v)
+        dlog("ADT %s %s: absent\n", path, name);
+    else
+        dcp6_describe_bytes(path, name, v, len, max);
+}
+
+/*
+ * The PMGR devices that `g` depends on: its parents, their parents and so on, breadth first, at
+ * most DCP6_PS_MAX of them. ADT and PMGR table only.
+ */
+static void dcp6_describe_parents(const struct pmgr_gate *g)
+{
+    u16 ids[DCP6_PS_MAX];
+    int n = 0, more = 0;
+
+    /* Pass 0 takes g's parents, pass k the parents of ids[k - 1]; n never exceeds DCP6_PS_MAX */
+    for (int pass = 0; pass <= n; pass++) {
+        const u16 *parent = g->parent;
+        struct pmgr_gate p;
+        if (pass > 0) {
+            if (pmgr_device_gate(g->die, ids[pass - 1], &p) < 0 || !p.found)
+                continue;
+            parent = p.parent;
+        }
+        for (int k = 0; k < 2; k++) {
+            bool seen = !parent[k] || parent[k] == g->id;
+            for (int j = 0; j < n && !seen; j++)
+                seen = ids[j] == parent[k];
+            if (seen)
+                continue;
+            if (n < DCP6_PS_MAX)
+                ids[n++] = parent[k];
+            else
+                more = 1;
+        }
+    }
+    for (int j = 0; j < n; j++) {
+        struct pmgr_gate p;
+        printf("%s", j ? ", " : "; parents ");
+        if (pmgr_device_gate(g->die, ids[j], &p) < 0 || !p.found)
+            printf("0x%x (not a PMGR device)", ids[j]);
+        else if (p.virt)
+            printf("%.16s (virtual)", p.name);
+        else
+            printf("%.16s 0x%lx", p.name, p.psreg);
+    }
+    if (more)
+        printf(", ...");
+}
+
+/*
+ * Every entry of the clock-gates or power-gates list of an ADT node, resolved through the ADT's
+ * PMGR table: the entry, the device's name, its power state register (or that it is virtual) and
+ * the devices it depends on. ADT and PMGR table only: no register is read here.
+ */
+static void dcp6_describe_gates(const char *path, const char *prop)
+{
+    for (u32 i = 0; i < DCP6_GATES_MAX; i++) {
+        struct pmgr_gate g;
+        if (pmgr_adt_gate(path, prop, i, &g) < 0)
+            break;
+        dlog("ADT %s %s[%u]: 0x%x", path, prop, i, g.entry);
+        if (!g.found) {
+            printf(" not a PMGR device\n");
+            continue;
+        }
+        if (g.virt)
+            printf(" %.16s, virtual", g.name);
+        else if (g.psreg)
+            printf(" %.16s, power state 0x%lx", g.name, g.psreg);
+        else
+            printf(" %.16s, no power state register", g.name);
+        dcp6_describe_parents(&g);
+        printf("\n");
+    }
+}
+
+/* compatible, every reg (translated), interrupts, clock-gates and power-gates (resolved) */
 static int dcp6_describe_node(const char *path)
 {
     int p[8];
@@ -756,14 +894,74 @@ static int dcp6_describe_node(const char *path)
     }
     if (adt_getprop(adt, node, "interrupts", NULL))
         dcp6_describe_u32s(node, path, "interrupts");
-    for (u32 i = 0; i < 8; i++) {
-        u64 ps;
-        const char *name;
-        if (pmgr_adt_device_psreg(path, i, &ps, &name) < 0)
-            break;
-        dlog("ADT %s clock-gates[%u]: %.16s, power state 0x%lx\n", path, i, name, ps);
-    }
+    dcp6_describe_gates(path, "clock-gates");
+    dcp6_describe_gates(path, "power-gates");
     return node;
+}
+
+/*
+ * The panel properties of /arm-io/disp0 and the small properties of /arm-io/dcp: values of the
+ * small ones, sizes only of the tables
+ */
+static void dcp6_describe_panel(void)
+{
+    static const char *const disp0_values[] = {
+        "dot-pitch",   "display-default-color", "max-scaling-ratio", "color-accuracy-index",
+        "KSF_version",
+    };
+    static const char *const disp0_sizes[] = {
+        "display-timing-info",
+        "temperature-compensation",
+        "bics-param-set",
+    };
+    static const char *const dcp_values[] = {"hdcp-channels", "role", "iop-version"};
+    static const char dp_switch[] = "dp-switch-";
+
+    int node = adt_path_offset(adt, "/arm-io/disp0");
+    if (node >= 0) {
+        for (size_t i = 0; i < ARRAY_SIZE(disp0_values); i++)
+            dcp6_describe_value(node, "/arm-io/disp0", disp0_values[i], DCP6_VALUE_MAX);
+        for (size_t i = 0; i < ARRAY_SIZE(disp0_sizes); i++)
+            dcp6_describe_value(node, "/arm-io/disp0", disp0_sizes[i], 0);
+    }
+    node = adt_path_offset(adt, "/arm-io/dcp");
+    if (node >= 0) {
+        for (size_t i = 0; i < ARRAY_SIZE(dcp_values); i++)
+            dcp6_describe_value(node, "/arm-io/dcp", dcp_values[i], DCP6_VALUE_MAX);
+        ADT_FOREACH_PROPERTY(adt, node, prop)
+        {
+            if (!strncmp(prop->name, dp_switch, sizeof(dp_switch) - 1))
+                dcp6_describe_bytes("/arm-io/dcp", prop->name, prop->value, prop->size,
+                                    DCP6_VALUE_MAX);
+        }
+        dcp6_describe_value(node, "/arm-io/dcp", "audio", 0);
+    }
+}
+
+/*
+ * The values the T6030 PMP export (dt_fill_pmp() in kboot.c) passes, read the same way: board-id
+ * and dram-vendor-id of /chosen, and every property of iop-pmp-nub, with its value if it is at
+ * most 16 bytes. Logged only: nothing is passed to the OS for this SoC.
+ */
+static void dcp6_describe_pmp(void)
+{
+    static const char path[] = "/arm-io/pmp/iop-pmp-nub";
+
+    int chosen = adt_path_offset(adt, "/chosen");
+    if (chosen >= 0) {
+        dcp6_describe_value(chosen, "/chosen", "board-id", DCP6_PMP_VALUE);
+        dcp6_describe_value(chosen, "/chosen", "dram-vendor-id", DCP6_PMP_VALUE);
+    }
+    int nub = adt_path_offset(adt, path);
+    if (nub < 0) {
+        dlog("ADT %s: absent\n", path);
+        return;
+    }
+    dlog("ADT %s: %d properties\n", path, adt_get_property_count(adt, nub));
+    ADT_FOREACH_PROPERTY(adt, nub, prop)
+    {
+        dcp6_describe_bytes(path, prop->name, prop->value, prop->size, DCP6_PMP_VALUE);
+    }
 }
 
 static void dcp6_describe_dart(const char *path)
@@ -838,6 +1036,7 @@ static __attribute__((noinline)) void dcp6_describe(void)
         dcp6_describe_dart(darts[i]);
     for (size_t i = 0; i < ARRAY_SIZE(nubs); i++)
         dcp6_describe_segs(nubs[i]);
+    dcp6_describe_pmp();
 
     int node = adt_path_offset(adt, "/arm-io/disp0");
     if (node >= 0)
@@ -845,6 +1044,7 @@ static __attribute__((noinline)) void dcp6_describe(void)
     node = adt_path_offset(adt, "/arm-io/dcp");
     if (node >= 0)
         dcp6_describe_names(node, "/arm-io/dcp");
+    dcp6_describe_panel();
 
     u64 vram;
     if (dcp6_adt_reg("/vram", 0, &vram))
@@ -858,19 +1058,101 @@ static __attribute__((noinline)) void dcp6_describe(void)
 
 /* ---- DCP CPU state, DART lock state, dart-dcp lock ---- */
 
-/* The power state read below must be one the ADT names for the DCP */
-static int dcp6_check_psreg(void)
+/* A power state is on: actually on, or targeted on with automatic power management */
+static bool dcp6_ps_on(u32 ps)
 {
-    for (u32 i = 0; i < 8; i++) {
-        u64 ps;
-        const char *name;
-        if (pmgr_adt_device_psreg("/arm-io/dcp", i, &ps, &name) < 0)
-            break;
-        if (ps == dcp6.soc->pmgr_disp_cpu)
-            return 0;
+    return FIELD_GET(PMGR_PS_ACTUAL, ps) == PMGR_PS_ACTIVE ||
+           (FIELD_GET(PMGR_PS_TARGET, ps) == PMGR_PS_ACTIVE && (ps & PMGR_AUTO_ENABLE));
+}
+
+struct dcp6_ps {
+    u64 addr;
+    const char *name;
+};
+
+/* Add g's power state register, or, for a virtual device, those of its nearest real parents */
+static int dcp6_ps_add(struct dcp6_ps *ps, int *n, const struct pmgr_gate *g, int depth)
+{
+    if (!g->found)
+        return -1;
+    if (!g->virt) {
+        if (!g->psreg)
+            return -1;
+        for (int i = 0; i < *n; i++)
+            if (ps[i].addr == g->psreg)
+                return 0;
+        if (*n >= DCP6_PS_MAX)
+            return -1;
+        ps[(*n)++] = (struct dcp6_ps){g->psreg, g->name};
+        return 0;
     }
-    bail("no /arm-io/dcp clock-gate is the display CPU power state 0x%lx, not touching the DCP\n",
-         dcp6.soc->pmgr_disp_cpu);
+    if (depth >= DCP6_GATE_DEPTH)
+        return -1;
+    for (int k = 0; k < 2; k++) {
+        struct pmgr_gate p;
+        if (!g->parent[k])
+            continue;
+        if (pmgr_device_gate(g->die, g->parent[k], &p) < 0 || dcp6_ps_add(ps, n, &p, depth + 1))
+            return -1;
+    }
+    return 0;
+}
+
+/*
+ * The display power state from the ADT: the power state registers that the clock-gates of
+ * /arm-io/dcp resolve to through the ADT's PMGR table, a virtual device by its nearest real
+ * parents. Returns how many, or -1 if an entry does not resolve or none has a register.
+ */
+static int dcp6_adt_ps(struct dcp6_ps *ps)
+{
+    int n = 0;
+    for (u32 i = 0; i < DCP6_GATES_MAX; i++) {
+        struct pmgr_gate g;
+        if (pmgr_adt_gate("/arm-io/dcp", "clock-gates", i, &g) < 0)
+            break;
+        if (dcp6_ps_add(ps, &n, &g, 0))
+            bail("ADT /arm-io/dcp clock-gates[%u] 0x%x does not resolve to PMGR power states, not "
+                 "touching the DCP\n",
+                 i, g.entry);
+    }
+    if (!n)
+        bail("no ADT /arm-io/dcp clock-gate has a PMGR power state, not touching the DCP\n");
+    return n;
+}
+
+/*
+ * Read (only) every display power state register the ADT names. The DCP and its DARTs are only
+ * accessed if all of them are on.
+ */
+static int dcp6_adt_power_on(void)
+{
+    struct dcp6_ps ps[DCP6_PS_MAX];
+    u32 val[DCP6_PS_MAX];
+    bool all_on = true, dt_same = false;
+
+    int n = dcp6_adt_ps(ps);
+    if (n < 0)
+        return -1;
+
+    int g = dcp6_guard_begin();
+    for (int i = 0; i < n; i++)
+        val[i] = read32(ps[i].addr);
+    if (dcp6_guard_end(g))
+        bail("reading the display power state faulted, not touching the DCP\n");
+
+    for (int i = 0; i < n; i++) {
+        bool on = dcp6_ps_on(val[i]);
+        dlog("display power state (ADT /arm-io/dcp): %.16s 0x%lx = 0x%x, %s\n", ps[i].name,
+             ps[i].addr, val[i], on ? "on" : "NOT on");
+        all_on &= on;
+        dt_same |= ps[i].addr == dcp6.soc->pmgr_disp_cpu;
+    }
+    if (dcp6.soc->pmgr_disp_cpu)
+        dlog("open PMGR DT display CPU state 0x%lx: %s\n", dcp6.soc->pmgr_disp_cpu,
+             dt_same ? "the same register" : "NOT one of these");
+    if (!all_on)
+        bail("display power domain not active, not touching the DCP\n");
+    return 0;
 }
 
 /* Dry run: the DART streams in use, read only */
@@ -910,20 +1192,23 @@ static void dcp6_check_hw(void)
     dcp6.coproc = coproc;
     dcp6.dart_dcp = dart_dcp;
     dcp6.dart_disp = dart_disp;
-    if (soc->check_psreg && dcp6_check_psreg())
-        return;
 
     /*
      * The DCP blocks are only accessed while the display power domain is on: actually on, or
      * targeted on with automatic power management (which ungates on access)
      */
-    int g = dcp6_guard_begin();
-    u32 ps = read32(soc->pmgr_disp_cpu);
-    bool on = FIELD_GET(PMGR_PS_ACTUAL, ps) == PMGR_PS_ACTIVE ||
-              (FIELD_GET(PMGR_PS_TARGET, ps) == PMGR_PS_ACTIVE && (ps & PMGR_AUTO_ENABLE));
-    if (dcp6_guard_end(g) || !on) {
-        dlog("display power domain not active (0x%x), not touching the DCP\n", ps);
-        return;
+    int g;
+    if (soc->adt_psreg) {
+        if (dcp6_adt_power_on())
+            return;
+    } else {
+        g = dcp6_guard_begin();
+        u32 ps = read32(soc->pmgr_disp_cpu);
+        bool on = dcp6_ps_on(ps);
+        if (dcp6_guard_end(g) || !on) {
+            dlog("display power domain not active (0x%x), not touching the DCP\n", ps);
+            return;
+        }
     }
 
     g = dcp6_guard_begin();

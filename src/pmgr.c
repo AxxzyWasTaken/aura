@@ -337,34 +337,56 @@ int pmgr_adt_power_disable_index(const char *path, u32 index)
     return pmgr_adt_device_set_mode(path, index, PMGR_PS_PWRGATE, false);
 }
 
-/*
- * Read only: the power state register and name of clock-gates[index] of the ADT node at path.
- * Returns -1 past the last entry, for a virtual device, or before pmgr_init().
- */
-int pmgr_adt_device_psreg(const char *path, u32 index, u64 *addr, const char **name)
+static void pmgr_gate_fill(u8 die, u16 id, struct pmgr_gate *gate)
 {
-    const u32 *devices;
     const struct pmgr_device *device;
-    u32 n_devices;
+
+    gate->id = id;
+    gate->die = die;
+    gate->found = id && !pmgr_find_device(id, &device);
+    gate->virt = false;
+    gate->name = NULL;
+    gate->psreg = 0;
+    gate->parent[0] = gate->parent[1] = 0;
+    if (!gate->found)
+        return;
+    gate->name = device->name;
+    gate->virt = device->flags & PMGR_FLAG_VIRTUAL;
+    pmgr_adt_get_parents(device, gate->parent);
+    if (!gate->virt)
+        gate->psreg = pmgr_device_get_addr(die, device);
+}
+
+/*
+ * Read only, ADT only: entry `index` of the clock-gates or power-gates list `prop` of the ADT node
+ * at `path`, resolved through the ADT's PMGR table. Returns -1 past the last entry, without that
+ * list, or before pmgr_init(); 0 otherwise, also for an entry that is not a PMGR device.
+ */
+int pmgr_adt_gate(const char *path, const char *prop, u32 index, struct pmgr_gate *gate)
+{
+    u32 len = 0, entry;
 
     if (!pmgr_initialized)
         return -1;
     int node = adt_path_offset(adt, path);
     if (node < 0)
         return -1;
-    devices = adt_getprop(adt, node, "clock-gates", &n_devices);
-    if (!devices || index >= n_devices / 4)
+    const u32 *entries = adt_getprop(adt, node, prop, &len);
+    if (!entries || index >= len / 4)
         return -1;
+    memcpy(&entry, &entries[index], sizeof(entry));
+    gate->entry = entry;
+    pmgr_gate_fill(FIELD_GET(PMGR_DIE_ID, entry), FIELD_GET(PMGR_DEVICE_ID, entry), gate);
+    return 0;
+}
 
-    u32 id = devices[index];
-    if (pmgr_find_device(FIELD_GET(PMGR_DEVICE_ID, id), &device) ||
-        (device->flags & PMGR_FLAG_VIRTUAL))
+/* Read only, ADT only: PMGR device `id` on `die`, such as a parent of another one */
+int pmgr_device_gate(u8 die, u16 id, struct pmgr_gate *gate)
+{
+    if (!pmgr_initialized || !id)
         return -1;
-    uintptr_t ps = pmgr_device_get_addr(FIELD_GET(PMGR_DIE_ID, id), device);
-    if (!ps)
-        return -1;
-    *addr = ps;
-    *name = device->name;
+    gate->entry = FIELD_PREP(PMGR_DIE_ID, die) | id;
+    pmgr_gate_fill(die, id, gate);
     return 0;
 }
 
