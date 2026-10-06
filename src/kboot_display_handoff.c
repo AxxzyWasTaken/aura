@@ -38,9 +38,9 @@
  * asahi,t6030-dispext=1, its empty, locked display DART and a scanout child
  * (apple,t6030-dispext-handoff).
  *
- * T8122 (M3): nothing unless the boot.bin config line chosen.asahi,t8122-dcp=1 is set (or, with
- * oslog_always, only the __OS_LOG reservations). Armed, it does a dry run: the ADT values a T8122
- * handoff and device tree need are logged (including every clock-gate and power-gate of the
+ * T8122 (M3): the __OS_LOG reservations on every boot (oslog_always), and nothing else unless the
+ * boot.bin config line chosen.asahi,t8122-dcp=1 is set. Armed, it does a dry run: the ADT values a
+ * T8122 handoff and device tree need are logged (including every clock-gate and power-gate of the
  * display nodes resolved through the ADT's PMGR table, the panel properties and the PMP nub's
  * values), the __OS_LOG buffers are reserved, and the DCP state and page tables are read and
  * checked as on T6030, with addresses, firmware segments and DART windows taken from the ADT
@@ -266,10 +266,10 @@ static const struct dcp_soc dcp_soc_t8122 = {
     .optin = "asahi,t8122-dcp",
     /*
      * On a J613 the dcp __OS_LOG buffer was seen inside the RAM handed to Linux on every boot
-     * checked. Set this to reserve it on every T8122 boot, as on T6030; off until a T8122 boot
-     * with this m1n1 has shown the reservation.
+     * checked, and armed J613 boots have shown the reservation. Reserve it on every T8122 boot,
+     * as on T6030: it only keeps the running DCP's buffer away from Linux.
      */
-    .oslog_always = false,
+    .oslog_always = true,
     .describe = true,
     .adt_psreg = true,
     .uuid = DCP8_UUID,
