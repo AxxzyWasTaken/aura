@@ -1863,7 +1863,8 @@ static int t8122_identity_node(void *dt)
         fdt_setprop_u32(dt, node, "id-version", 0) ||
         fdt_setprop_u32(dt, node, "core-mask-0", 0) ||
         fdt_setprop_u32(dt, node, "core-mask-1", 0) ||
-        fdt_setprop_u32(dt, node, "core-mask-2", 0)) {
+        fdt_setprop_u32(dt, node, "core-mask-2", 0) ||
+        fdt_setprop_u32(dt, node, "id-counts-1", 0)) {
         fdt_del_node(dt, node);
         return -1;
     }
@@ -1882,11 +1883,13 @@ static int t8122_identity_power_enable(void *context)
     return pmgr_adt_power_enable("/arm-io/sgx");
 }
 
-static int t8122_identity_read(void *context, u32 *id, u32 masks[3])
+static int t8122_identity_read(void *context, u32 *id, u32 masks[3], u32 *counts)
 {
     u64 sgx_base = *(u64 *)context;
     int before = g15_guard_begin();
     *id = read32(sgx_base + G15_SGX_ID_VERSION);
+    /* Core topology, as drm/asahi reads it; published, not checked */
+    *counts = read32(sgx_base + G15_SGX_ID_COUNTS_1);
     masks[0] = read32(sgx_base + G15_SGX_CORE_MASK);
     masks[1] = read32(sgx_base + G15_SGX_CORE_MASK + 4);
     masks[2] = read32(sgx_base + G15_SGX_CORE_MASK + 8);
@@ -1950,10 +1953,15 @@ static void t8122_read_powered_identity(void *dt, int gpu)
         t8122_identity_set_u32(dt, node, "core-mask-0", identity.core_mask[0]) ||
         t8122_identity_set_u32(dt, node, "core-mask-1", identity.core_mask[1]) ||
         t8122_identity_set_u32(dt, node, "core-mask-2", identity.core_mask[2]) ||
+        t8122_identity_set_u32(dt, node, "id-counts-1", identity.id_counts_1) ||
         t8122_identity_set_u32(dt, node, "probe-result", identity.result))
         printf("FDT: GPU: T8122 could not publish powered identity result\n");
     printf("FDT: GPU: T8122 bounded powered identity result %u; GPU and ASC remain disabled\n",
            identity.result);
+    printf("FDT: GPU: T8122 powered identity: ID_VERSION 0x%08x ID_COUNTS_1 0x%08x core masks "
+           "0x%x 0x%x 0x%x\n",
+           identity.id_version, identity.id_counts_1, identity.core_mask[0], identity.core_mask[1],
+           identity.core_mask[2]);
 }
 
 /*

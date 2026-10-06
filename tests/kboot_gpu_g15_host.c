@@ -864,6 +864,71 @@ static void t8122_small_dt(void)
     assert(pmgr_disables == 1 && pmgr_off == 1);
 }
 
+/*
+ * The reservation-only diagnostic with the powered identity probe: the probe reads ID_VERSION,
+ * ID_COUNTS_1 and the core masks under the guard and publishes them, and releases the power.
+ */
+static u32 identity_u32(const char *name)
+{
+    int n = fdt_path_offset(dtbuf, "/chosen/asahi,t8122-gpu-powered-identity"), len = 0;
+    assert(n >= 0);
+    const fdt32_t *v = fdt_getprop(dtbuf, n, name, &len);
+    assert(v && len == 4);
+    return fdt32_to_cpu(*v);
+}
+
+static void prepare_powered_identity(void)
+{
+    struct fixture f = t8122_fx;
+    f.optin = NULL;
+    prepare(&f);
+    CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"),
+                           "asahi,t8122-gpu-handoff-diag", "1"));
+    CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"), "asahi,t8122-gpu-power-diag",
+                           "1"));
+}
+
+static void t8122_powered_identity(void)
+{
+    prepare_powered_identity();
+    run();
+    assert(log_has("T8122 UAT and firmware reservations supplied from ADT"));
+    assert(identity_u32("schema-version") == 1);
+    assert(identity_u32("probe-result") == T8122_ID_PASS);
+    assert(identity_u32("id-version") == 0x07022000);
+    assert(identity_u32("id-counts-1") == 0x0001010a);
+    assert(identity_u32("core-mask-0") == 0xff);
+    assert(identity_u32("core-mask-1") == 0 && identity_u32("core-mask-2") == 0);
+    assert(log_has("ID_VERSION 0x07022000 ID_COUNTS_1 0x0001010a core masks 0xff 0x0 0x0"));
+    assert(strstr(trace_buf, "pmgr enable /arm-io/sgx\nread32 0x290d04000\nread32 0x290d04010\n"));
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(unguarded_faults == 0);
+}
+
+static void t8122_powered_identity_counts(void)
+{
+    /* Any ID_COUNTS_1 is published as read; it does not change the result */
+    prepare_powered_identity();
+    mmio_set(SGX_BASE + 0xd04010, 0x00020203, 0);
+    run();
+    assert(identity_u32("probe-result") == T8122_ID_PASS);
+    assert(identity_u32("id-counts-1") == 0x00020203);
+    assert(pmgr_disables == 1 && pmgr_off == 1 && unguarded_faults == 0);
+}
+
+static void t8122_powered_identity_counts_fault(void)
+{
+    /* A fault on ID_COUNTS_1 is a read fault, caught by the guard; the power is released */
+    prepare_powered_identity();
+    mmio_set(SGX_BASE + 0xd04010, 0, 1);
+    run();
+    assert(identity_u32("probe-result") == T8122_ID_READ_FAULT);
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+    assert(unguarded_faults == 0);
+}
+
 static void t8122_with_diag_optin(void)
 {
     /* The full setup takes precedence over the reservation-only diagnostic */
@@ -909,6 +974,9 @@ static const struct {
     {"t8122-release-fails", t8122_release_fails},
     {"t8122-small-dt", t8122_small_dt},
     {"t8122-with-diag-optin", t8122_with_diag_optin},
+    {"t8122-powered-identity", t8122_powered_identity},
+    {"t8122-powered-identity-counts", t8122_powered_identity_counts},
+    {"t8122-powered-identity-counts-fault", t8122_powered_identity_counts_fault},
 #endif
 };
 
