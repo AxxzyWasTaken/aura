@@ -2,8 +2,12 @@
 /*
  * Host test of the T6030 display ADT facts (src/kboot_display_facts.c) and of the atc-phy3 lane
  * tunable rule (src/kboot_atc.c). Synthetic ADTs in the boot loader's binary layout, an ADT
- * reader with the boot loader's bounds (a lookup the boot loader would panic on fails the test)
+ * library with the boot loader's bounds (a lookup the boot loader would panic on fails the test)
  * and real libfdt. Any register access fails the test. Run by tests/run-t6030-display.sh.
+ *
+ * The facts export reads the ADT itself: it fails the test if it calls the ADT library. It is
+ * also run on malformed ADTs (unreadable property names, sizes past the end, bad counts, deep
+ * nesting) and on 2000 corrupted or cut ones, each in an allocation of exactly its size.
  *
  *   t6030-display-host checks       every scenario's own checks
  *   t6030-display-host atc <name>   one ATC scenario: a digest per PHY node and the log, for the
@@ -25,6 +29,7 @@
 u32 board_id, chip_id;
 void *adt;
 static u32 adt_size;
+static int in_facts; /* the facts export reads the ADT itself, never through the ADT library */
 static char logbuf[1 << 16];
 static size_t loglen;
 static int fail_malloc;
@@ -69,7 +74,7 @@ static size_t blen, bcap;
 static struct {
     size_t hdr;
     int kids;
-} open_nodes[16];
+} open_nodes[32];
 static int depth;
 
 static void b_put(const void *p, size_t n)
@@ -130,7 +135,8 @@ static void prop_fill(const char *name, u32 len, u8 fill)
     free(v);
 }
 
-static void node_begin(const char *name)
+/* A node without its name property yet */
+static void node_open(void)
 {
     u32 hdr[2] = {0, 0};
 
@@ -142,12 +148,42 @@ static void node_begin(const char *name)
     open_nodes[depth].kids = 0;
     depth++;
     b_put(hdr, sizeof(hdr));
+}
+
+static void node_begin(const char *name)
+{
+    node_open();
     prop_str("name", name);
 }
 
 static void node_end(void)
 {
     depth--;
+}
+
+/* A property header that claims `size` bytes of value, followed by `have` bytes of zeros */
+static void prop_claim(const char *name, size_t namelen, u32 size, u32 have)
+{
+    char field[32];
+    static const u8 zero[64];
+
+    CHECK(depth > 0 && !open_nodes[depth - 1].kids && have <= sizeof(zero));
+    (*b_u32(open_nodes[depth - 1].hdr))++;
+    memset(field, 0, sizeof(field));
+    memcpy(field, name, min(namelen, sizeof(field)));
+    b_put(field, sizeof(field));
+    b_put(&size, sizeof(size));
+    b_put(zero, have);
+}
+
+/* A property whose 32-byte name field has no terminator and bytes that are not UTF-8 */
+static void prop_bad_name(void)
+{
+    char name[32];
+
+    memset(name, 0xff, sizeof(name));
+    memcpy(name, "bad", 3);
+    prop_claim(name, sizeof(name), 4, 4);
 }
 
 /* The ADT in an allocation of exactly its size, so that a read past its end is caught */
@@ -175,9 +211,15 @@ static u32 rd32(int off)
     return v;
 }
 
+u32 adt_get_size(void)
+{
+    return adt_size;
+}
+
 /* A node the boot loader accepts; anything else would be a panic there */
 static void node_ok(int off)
 {
+    CHECK(!in_facts);
     CHECK(off >= 0 && off % 4 == 0 && (u32)off + 8 <= adt_size);
     u32 pc = rd32(off), cc = rd32(off + 4);
     CHECK(pc >= 1 && pc <= 2048 && cc <= 2048);
@@ -185,6 +227,7 @@ static void node_ok(int off)
 
 static int prop_next(int poff)
 {
+    CHECK(!in_facts);
     CHECK(poff % 4 == 0 && (u32)poff + 36 <= adt_size);
     return poff + 36 + ((rd32(poff + 32) + 3) & ~3u);
 }
@@ -254,6 +297,7 @@ int adt_next_sibling_offset(const void *a, int off)
 const void *adt_getprop(const void *a, int node, const char *name, u32 *lenp)
 {
     (void)a;
+    CHECK(!in_facts);
     int p = node + 8;
     node_ok(node);
     for (u32 i = 0; i < rd32(node); i++) {
@@ -311,6 +355,7 @@ static int child_named(int node, const char *name, size_t n)
 int adt_path_offset_trace(const void *a, const char *path, int *offsets)
 {
     (void)a;
+    CHECK(!in_facts);
     int node = 0, d = 0;
 
     CHECK(path[0] == '/');
@@ -360,6 +405,7 @@ static int ncells(int node, const char *name, u32 *v)
 int adt_get_reg(const void *a, int *path, const char *pname, int idx, u64 *paddr, u64 *psize)
 {
     (void)a;
+    CHECK(!in_facts);
     int n = 0;
     u32 ac, sc, len = 0;
 
@@ -470,7 +516,51 @@ struct shape {
     int many_props;       /* this many extra properties on every PHY */
     bool huge_reg;        /* dcpext0 reg over 1 KiB */
     bool no_armio;
+    bool bad_names; /* properties with unreadable names before the ones that are looked up */
+    int malformed;  /* a malformed /arm-io node after dart-dispext0: MAL_* */
+    int nest;       /* a chain of this many nested nodes below /arm-io, before dcpext1 */
 };
+
+enum {
+    MAL_NONE,
+    MAL_SIZE,      /* a property size past the end of the ADT */
+    MAL_SIZE_FLAG, /* a property size with its top bit set */
+    MAL_NOPROPS,   /* a property count of 0 */
+    MAL_KIDS,      /* a child count over 2048 */
+    MAL_NR,
+};
+
+static void broken_node(int kind)
+{
+    node_begin("broken");
+    switch (kind) {
+        case MAL_SIZE:
+            prop_claim("x", 1, 0xfff00, 4);
+            break;
+        case MAL_SIZE_FLAG:
+            prop_claim("x", 1, 0x80000004u, 4);
+            break;
+        case MAL_NOPROPS:
+            *b_u32(open_nodes[depth - 1].hdr) = 0;
+            break;
+        case MAL_KIDS:
+            *b_u32(open_nodes[depth - 1].hdr + 4) = 3000;
+            break;
+    }
+    node_end();
+}
+
+static void nested(int n)
+{
+    char name[16];
+
+    if (!n)
+        return;
+    snprintf(name, sizeof(name), "nest%d", n);
+    node_begin(name);
+    nested(n - 1);
+    node_end();
+}
 
 static void atc_phy(int i, const struct shape *s)
 {
@@ -535,6 +625,15 @@ static void build_adt(const struct shape *s)
         prop_u32s("#address-cells", 1, 2);
         prop_u32s("#size-cells", 1, 2);
         prop_u32s("ranges", 6, 0, 0, (u32)ARMIO_BASE, (u32)(ARMIO_BASE >> 32), 0, 0x100);
+        if (s->bad_names) {
+            /* Before its name: the library's lookup of any later /arm-io node reads it first */
+            u64 p = 0x200004000ULL, z = 0x1000;
+            node_open();
+            prop_bad_name();
+            prop_str("name", "xbar-bad");
+            reg_entries(1, &p, &z);
+            node_end();
+        }
         for (int i = 0; i < 4; i++)
             if (i < 3 || s->atc3)
                 atc_phy(i, s);
@@ -542,6 +641,14 @@ static void build_adt(const struct shape *s)
             node_begin("dcpext0");
             prop_str("compatible", "dcpext,t6030");
             prop_fill("reg", 2000, 1);
+            node_end();
+        } else if (s->bad_names) {
+            u64 p = 0x2d2c00000ULL, z = 0x4000;
+            node_begin("dcpext0");
+            prop_bad_name();
+            prop_str("compatible", "dcpext,t6030");
+            reg_entries(1, &p, &z);
+            prop_u32s("interrupts", 1, 634);
             node_end();
         } else {
             simple("dcpext0", "dcpext,t6030", 0x2d2c00000ULL, 0x4000, 634);
@@ -554,6 +661,9 @@ static void build_adt(const struct shape *s)
         reg_entries(2, p2, z2);
         prop_u32s("interrupts", 1, 651);
         node_end();
+        if (s->malformed)
+            broken_node(s->malformed);
+        nested(s->nest);
         if (s->ext1) {
             simple("dcpext1", "dcpext,t6030", 0x2d6c00000ULL, 0x4000, 672);
             simple("dispext1", "dispext,t6030", 0x2d6000000ULL, 0x100000, 678);
@@ -729,6 +839,13 @@ static u32 logged_bytes(void)
 
 /* ---- facts scenarios ---- */
 
+static void facts(void *fdt)
+{
+    in_facts = 1;
+    dt_display_facts_t6030(fdt);
+    in_facts = 0;
+}
+
 #define FACTS "/chosen/asahi,t6030-display-facts"
 
 static void *run_facts(const struct shape *s, int fdt_size, u64 *before)
@@ -737,7 +854,7 @@ static void *run_facts(const struct shape *s, int fdt_size, u64 *before)
     void *fdt = make_fdt(fdt_size, false);
     *before = digest_without_facts(fdt);
     reset_log();
-    dt_display_facts_t6030(fdt);
+    facts(fdt);
     CHECK(!fdt_check_header(fdt));
     CHECK(digest_without_facts(fdt) == *before);
     return fdt;
@@ -872,6 +989,125 @@ static void facts_bounds(void)
     free(fdt);
 }
 
+/*
+ * Malformed ADTs, which the ADT library's lookups by name would stop the boot on: published, with
+ * what was found before the malformed entry, and nothing read outside the ADT (ASan).
+ */
+static void facts_malformed(void)
+{
+    struct shape s = {.atc3 = true, .ext1 = true, .finds = true, .bad_names = true};
+    u64 before;
+    void *fdt = run_facts(&s, 256 * 1024, &before);
+    int len;
+
+    /* Unreadable names before name, compatible and reg: everything is still found */
+    CHECK(strstr(logbuf, "published"));
+    CHECK(has_str(fdt, FACTS "/dcpext0", "adt,compatible", "dcpext,t6030"));
+    CHECK(getp(fdt, FACTS "/dcpext0", "translated-reg", &len) && len == 16);
+    CHECK(getp(fdt, FACTS "/atc-phy3", "translated-reg", &len) && len == 5 * 16);
+    CHECK(fdt_path_offset(fdt, FACTS "/dart-dispext1") >= 0);
+    CHECK(has_str(fdt, FACTS, "skipped", "/arm-io/xbar-bad: property 0 has an unusable name"));
+    CHECK(has_str(fdt, FACTS "/xbar-bad", "adt-property-names", "name"));
+    CHECK(fdt_path_offset(fdt, FACTS "/l4-xbar") >= 0);
+    CHECK(!has_str(fdt, FACTS, "skipped", "malformed"));
+    free(fdt);
+
+    /* A malformed node after dart-dispext0: the nodes before it, and a line saying so */
+    for (int m = MAL_SIZE; m < MAL_NR; m++) {
+        struct shape b = {.atc3 = true, .ext1 = true, .finds = true, .malformed = m};
+        fdt = run_facts(&b, 256 * 1024, &before);
+        CHECK(strstr(logbuf, "published"));
+        CHECK(getp(fdt, FACTS "/atc-phy3", "translated-reg", &len) && len == 5 * 16);
+        CHECK(fdt_path_offset(fdt, FACTS "/dart-dispext0") >= 0);
+        CHECK(fdt_path_offset(fdt, FACTS "/dp-crossbar2") >= 0);
+        CHECK(fdt_path_offset(fdt, FACTS "/dcpext1") < 0);
+        CHECK(has_str(fdt, FACTS, "skipped",
+                      "/arm-io: malformed ADT entry among its children; "
+                      "later ones not read"));
+        CHECK(has_str(fdt, FACTS, "skipped", "/arm-io/dcpext1 absent"));
+        CHECK(has_str(fdt, FACTS, "skipped",
+                      "/arm-io: malformed ADT entry among its children; "
+                      "the search stopped"));
+        CHECK(fdt_path_offset(fdt, FACTS "/l4-xbar") < 0);
+        free(fdt);
+    }
+
+    /* Twelve levels of nesting are followed; twenty are taken as malformed */
+    struct shape n12 = {.atc3 = true, .ext1 = true, .finds = true, .nest = 12};
+    fdt = run_facts(&n12, 256 * 1024, &before);
+    CHECK(fdt_path_offset(fdt, FACTS "/dcpext1") >= 0);
+    CHECK(fdt_path_offset(fdt, FACTS "/l4-xbar") >= 0);
+    CHECK(!has_str(fdt, FACTS, "skipped", "malformed"));
+    free(fdt);
+    struct shape n20 = {.atc3 = true, .ext1 = true, .finds = true, .nest = 20};
+    fdt = run_facts(&n20, 256 * 1024, &before);
+    CHECK(strstr(logbuf, "published"));
+    CHECK(fdt_path_offset(fdt, FACTS "/dart-dispext0") >= 0);
+    CHECK(fdt_path_offset(fdt, FACTS "/dcpext1") < 0);
+    CHECK(has_str(fdt, FACTS, "skipped", "malformed"));
+    free(fdt);
+}
+
+static u64 rng = 0x9e3779b97f4a7c15ULL;
+
+static u32 rnd(u32 n)
+{
+    rng ^= rng << 13;
+    rng ^= rng >> 7;
+    rng ^= rng << 17;
+    return (u32)(rng >> 16) % n;
+}
+
+/*
+ * Corrupted and truncated ADTs: header words set to edge values, random bytes, cuts. The export
+ * may publish or not, but must not read outside the ADT, use the ADT library or change anything
+ * else in the device tree.
+ */
+static void facts_fuzz(void)
+{
+    struct shape s = {.atc3 = true, .ext1 = true, .finds = true, .bad_names = true};
+    static const u32 edge[] = {
+        0,       1,        3,          4,           0x7ff,       0x800,       0x801,
+        0xfff00, 0x100000, 0x7fffffff, 0x80000000u, 0x80000004u, 0xfffffffcu, 0xffffffffu,
+    };
+    int published = 0;
+
+    build_adt(&s);
+    u32 size = adt_size;
+    u8 *orig = malloc(size);
+    memcpy(orig, adt, size);
+
+    for (int iter = 0; iter < 2000; iter++) {
+        u32 n = size;
+        if (iter % 4 == 3)
+            n = rnd(size + 1); /* a cut ADT */
+        free(adt);
+        adt = malloc(n ? n : 1);
+        memcpy(adt, orig, n);
+        adt_size = n;
+        for (int k = 1 + rnd(4); k > 0 && n >= 4; k--) {
+            u32 off = rnd(n - 3) & ~3u, v;
+            if (rnd(2)) {
+                v = edge[rnd(ARRAY_SIZE(edge))];
+                memcpy((u8 *)adt + off, &v, 4);
+            } else {
+                ((u8 *)adt)[off + rnd(4)] ^= 1 + rnd(255);
+            }
+        }
+        u64 before;
+        void *fdt = make_fdt(256 * 1024, false);
+        before = digest_without_facts(fdt);
+        reset_log();
+        facts(fdt);
+        CHECK(!fdt_check_header(fdt));
+        CHECK(digest_without_facts(fdt) == before);
+        published += !!strstr(logbuf, "published (");
+        free(fdt);
+    }
+    free(orig);
+    CHECK(published > 50); /* the corruption often misses what the export reads */
+}
+
 /* Not published: the DT stays byte for byte as it was */
 static void facts_refusals(void)
 {
@@ -888,7 +1124,7 @@ static void facts_refusals(void)
         memcpy(orig, fdt, size);
         reset_log();
         fail_malloc = mode == 2;
-        dt_display_facts_t6030(fdt);
+        facts(fdt);
         fail_malloc = 0;
         CHECK(!memcmp(orig, fdt, size));
         if (mode != 1)
@@ -1014,6 +1250,8 @@ int main(int argc, char **argv)
     facts_missing();
     facts_bounds();
     facts_refusals();
+    facts_malformed();
+    facts_fuzz();
     atc_checks();
     free(adt);
     free(bld);
