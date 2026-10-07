@@ -1041,9 +1041,46 @@ static void calc_power_t6030(u32 count, const struct perf_state *core, float lea
  */
 #define G15G_STANDIN_LEAK 6412.0f
 
+/*
+ * T8122 (G15G) leakage fuse, prepared but off. The J613's GPU leakage is in two words of the
+ * T8122 efuse page, T8122_LEAK_FUSE_WORD0/1. Read at boot, they would give each Mac its own
+ * leakage, as g15s_read_leak() does on T6030, in place of G15G_STANDIN_LEAK. Their bit layout and
+ * scaling are not known yet, so t8122_leak_fuse_decode is NULL: nothing reads the fuse page and
+ * the experiment keeps the stand-in. To turn it on, write the decoder and point
+ * t8122_leak_fuse_decode at it. A fault, or words that do not decode to a positive leakage, then
+ * stop the setup (fail-soft) instead of falling back to the stand-in.
+ */
+#define T8122_LEAK_FUSE_WORD0 0x2e42c8128UL
+#define T8122_LEAK_FUSE_WORD1 0x2e42c812cUL
+
+static int (*const t8122_leak_fuse_decode)(u32 word0, u32 word1, float *leak) = NULL;
+
+/* 0: *leak is this Mac's, from the fuse; 1: the layout is not known, nothing was read; -1: error */
+static int g15g_read_leak_fuse(float *leak)
+{
+    if (!t8122_leak_fuse_decode)
+        return 1;
+
+    int before = g15_guard_begin();
+    u32 word0 = read32(T8122_LEAK_FUSE_WORD0);
+    u32 word1 = read32(T8122_LEAK_FUSE_WORD1);
+    if (g15_guard_end(before))
+        bail("FDT: GPU: fault reading the T8122 leakage fuse at 0x%lx\n", T8122_LEAK_FUSE_WORD0);
+    if (t8122_leak_fuse_decode(word0, word1, leak) || !(*leak > 0.0f))
+        bail("FDT: GPU: T8122 leakage fuse words 0x%08x 0x%08x do not decode\n", word0, word1);
+
+    return 0;
+}
+
 static int g15g_standin_read_leak(const struct g15_soc *soc, float *leak)
 {
     UNUSED(soc);
+
+    int fuse = g15g_read_leak_fuse(leak);
+    if (fuse <= 0)
+        return fuse;
+
+    printf("FDT: GPU: T8122 leakage fuse: bit layout not known, using the stand-in\n");
     *leak = G15G_STANDIN_LEAK;
     return 0;
 }

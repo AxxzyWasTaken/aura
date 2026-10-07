@@ -1271,6 +1271,9 @@ static void expect_standin_handoff(const u32 *max_pwr)
     assert(log_has("FW: GFX: identified image g15g build c0, firmware 14.8.3"));
     assert(log_has("FDT: GPU: T8122 power model: stand-in (not measured; does not limit clocks)"));
     assert(!log_has("perf-states-sram present but unused"));
+    /* The leakage fuse read is off until its layout is known: no fuse access, the stand-in */
+    assert(log_has("FDT: GPU: T8122 leakage fuse: bit layout not known, using the stand-in"));
+    assert(!strstr(trace_buf, "0x2e42c812"));
     assert(log_has("FDT: GPU: Leakage: 6412.000"));
     assert(log_has("FDT: GPU: T8122 GPU enabled (firmware 14.8.3)"));
     assert(log_has("ADT: GPU: 39 power-management values, fast-die sensor mask 0x2, SRAM floor "
