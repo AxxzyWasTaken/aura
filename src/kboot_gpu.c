@@ -575,6 +575,8 @@ struct g15_soc {
     bool power_closure;
     /* Also accept the firmware images firmware.c lists as experimental */
     bool fw_experimental;
+    /* Add the ADT's power-management values to the gpu node, see g15_power_props[] */
+    bool power_props;
     /* NULL while not known: the setup then stops before it touches the GPU */
     int (*read_leak)(const struct g15_soc *soc, float *leak);
     void (*calc_power)(u32 count, const struct perf_state *core, float leak, u32 enabled_cores,
@@ -714,8 +716,12 @@ static int g15_get_pstates(const struct g15_soc *soc, int sgx, u32 *count_out, u
             bail("ADT: GPU: perf state %u (%u Hz) is above the last one (%u Hz)\n", i, ps[i].freq,
                  ps[count - 1].freq);
 
-    /* A perf-states-sram table is not used: SRAM follows max(core, 789 mV) */
-    if (adt_getprop(adt, sgx, "perf-states-sram", NULL))
+    /*
+     * A perf-states-sram table is not passed on: the kernel sets SRAM to max(core voltage,
+     * apple,min-sram-microvolt). With power_props that floor is taken from it, see
+     * g15_get_power_props().
+     */
+    if (!soc->power_props && adt_getprop(adt, sgx, "perf-states-sram", NULL))
         printf("ADT: GPU: note: perf-states-sram present but unused on %s\n", soc->gpu_name);
 
     *count_out = count;
@@ -1105,6 +1111,152 @@ static int g15_set_status(void *dt, const char *path, const char *status)
         bail("FDT: GPU: %s not found\n", path);
     if (fdt_setprop_string(dt, node, "status", status))
         bail("FDT: GPU: failed to set %s status to %s\n", path, status);
+    return 0;
+}
+
+/*
+ * Power-management values for a SoC whose device tree does not carry them (T8122: drm/asahi then
+ * takes them from the boot loader). Each is one 32-bit cell, apple,X from the ADT sgx node's gpu-X
+ * (apple,se-target from gpu-se-tgt), copied as it is: the float ones are IEEE-754 bit patterns in
+ * both. g15_get_power_props() also adds
+ * - apple,fast-die0-sensor-mask, the 32-bit gpu-fast-die0-sensor-mask widened to 64 bits,
+ * - apple,min-sram-microvolt, the lowest SRAM voltage of the ADT pstates,
+ * - apple,idleoff-standby-timer, only when the ADT has gpu-idleoff-standby-timer.
+ */
+static const struct {
+    const char *adt;
+    const char *dt;
+} g15_power_props[] = {
+    {"gpu-perf-base-pstate", "apple,perf-base-pstate"},
+    {"gpu-avg-power-filter-tc-ms", "apple,avg-power-filter-tc-ms"},
+    {"gpu-avg-power-ki-only", "apple,avg-power-ki-only"},
+    {"gpu-avg-power-kp", "apple,avg-power-kp"},
+    {"gpu-avg-power-min-duty-cycle", "apple,avg-power-min-duty-cycle"},
+    {"gpu-avg-power-target-filter-tc", "apple,avg-power-target-filter-tc"},
+    {"gpu-fast-die0-integral-gain", "apple,fast-die0-integral-gain"},
+    {"gpu-fast-die0-proportional-gain", "apple,fast-die0-proportional-gain"},
+    {"gpu-perf-boost-ce-step", "apple,perf-boost-ce-step"},
+    {"gpu-perf-boost-min-util", "apple,perf-boost-min-util"},
+    {"gpu-perf-filter-drop-threshold", "apple,perf-filter-drop-threshold"},
+    {"gpu-perf-filter-time-constant", "apple,perf-filter-time-constant"},
+    {"gpu-perf-filter-time-constant2", "apple,perf-filter-time-constant2"},
+    {"gpu-perf-integral-gain", "apple,perf-integral-gain"},
+    {"gpu-perf-integral-gain2", "apple,perf-integral-gain2"},
+    {"gpu-perf-integral-min-clamp", "apple,perf-integral-min-clamp"},
+    {"gpu-perf-proportional-gain", "apple,perf-proportional-gain"},
+    {"gpu-perf-proportional-gain2", "apple,perf-proportional-gain2"},
+    {"gpu-perf-tgt-utilization", "apple,perf-tgt-utilization"},
+    {"gpu-power-sample-period", "apple,power-sample-period"},
+    {"gpu-ppm-filter-time-constant-ms", "apple,ppm-filter-time-constant-ms"},
+    {"gpu-ppm-ki", "apple,ppm-ki"},
+    {"gpu-ppm-kp", "apple,ppm-kp"},
+    {"gpu-pwr-filter-time-constant", "apple,pwr-filter-time-constant"},
+    {"gpu-pwr-integral-gain", "apple,pwr-integral-gain"},
+    {"gpu-pwr-integral-min-clamp", "apple,pwr-integral-min-clamp"},
+    {"gpu-pwr-min-duty-cycle", "apple,pwr-min-duty-cycle"},
+    {"gpu-pwr-proportional-gain", "apple,pwr-proportional-gain"},
+    {"gpu-pwr-sample-period-aic-clks", "apple,pwr-sample-period-aic-clks"},
+    {"gpu-se-engagement-criteria", "apple,se-engagement-criteria"},
+    {"gpu-se-filter-time-constant", "apple,se-filter-time-constant"},
+    {"gpu-se-filter-time-constant-1", "apple,se-filter-time-constant-1"},
+    {"gpu-se-inactive-threshold", "apple,se-inactive-threshold"},
+    {"gpu-se-ki", "apple,se-ki"},
+    {"gpu-se-ki-1", "apple,se-ki-1"},
+    {"gpu-se-kp", "apple,se-kp"},
+    {"gpu-se-kp-1", "apple,se-kp-1"},
+    {"gpu-se-reset-criteria", "apple,se-reset-criteria"},
+    {"gpu-se-tgt", "apple,se-target"},
+};
+
+struct g15_power_values {
+    u32 val[ARRAY_SIZE(g15_power_props)];
+    u32 fast_die_mask;
+    u32 min_sram_uv;
+    bool have_idleoff;
+    u32 idleoff;
+};
+
+/*
+ * Read and check every value g15_set_power_props() adds, before anything else changes. `core` is
+ * the perf-states table g15_get_pstates() checked.
+ */
+static int g15_get_power_props(int sgx, u32 count, u32 table_count, const struct perf_state *core,
+                               struct g15_power_values *pv)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(g15_power_props); i++)
+        if (g15_adt_u32(sgx, g15_power_props[i].adt, &pv->val[i]))
+            bail("ADT: GPU: missing or invalid %s\n", g15_power_props[i].adt);
+
+    if (g15_adt_u32(sgx, "gpu-fast-die0-sensor-mask", &pv->fast_die_mask))
+        bail("ADT: GPU: missing or invalid gpu-fast-die0-sensor-mask\n");
+
+    /* Optional, but one cell when present */
+    u32 len = 0;
+    pv->have_idleoff = adt_getprop(adt, sgx, "gpu-idleoff-standby-timer", &len) != NULL;
+    if (pv->have_idleoff && g15_adt_u32(sgx, "gpu-idleoff-standby-timer", &pv->idleoff))
+        bail("ADT: GPU: malformed gpu-idleoff-standby-timer (len %u)\n", len);
+
+    /* The SRAM floor: the lowest SRAM voltage of the active pstates, from the first table */
+    u32 min_mv = 0;
+    len = 0;
+    const struct perf_state *sram = adt_getprop(adt, sgx, "perf-states-sram", &len);
+    if (!sram || len != sizeof(*sram) * count * table_count)
+        bail("ADT: GPU: invalid or missing perf-states-sram (len %u)\n", len);
+    for (u32 i = 1; i < count; i++) {
+        u32 mv = sram[i].volt;
+        if (mv < G15_PS_MIN_MV || mv > G15_PS_MAX_MV)
+            bail("ADT: GPU: perf state %u has bad SRAM voltage %u mV\n", i, mv);
+        if (!min_mv || mv < min_mv)
+            min_mv = mv;
+    }
+    pv->min_sram_uv = min_mv * 1000;
+
+    /*
+     * The kernel gives every pstate SRAM at max(core voltage, floor). Refuse an ADT that asks for
+     * more SRAM voltage than that anywhere. Zero entries of later tables stand for table 0's, as
+     * in g15_set_opps().
+     */
+    for (u32 t = 0; t < table_count; t++) {
+        for (u32 i = 1; i < count; i++) {
+            u32 core_mv = core[t * count + i].volt, sram_mv = sram[t * count + i].volt;
+            if (!core_mv)
+                core_mv = core[i].volt;
+            if (!sram_mv)
+                sram_mv = sram[i].volt;
+            if (sram_mv > max(core_mv, min_mv))
+                bail("ADT: GPU: perf state %u/%u SRAM %u mV is above max(core %u mV, floor %u mV); "
+                     "not supported\n",
+                     t, i, sram_mv, core_mv, min_mv);
+        }
+    }
+
+    printf("ADT: GPU: %u power-management values, fast-die sensor mask 0x%x, SRAM floor %u mV, "
+           "idle-off standby timer %s\n",
+           (u32)ARRAY_SIZE(g15_power_props), pv->fast_die_mask, min_mv,
+           pv->have_idleoff ? "present" : "absent (kernel default)");
+    return 0;
+}
+
+static int g15_set_power_props(void *dt, const struct g15_power_values *pv)
+{
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        bail("FDT: GPU: gpu alias lost\n");
+
+    int err = 0;
+    for (size_t i = 0; i < ARRAY_SIZE(g15_power_props) && !err; i++)
+        err = fdt_setprop_u32(dt, gpu, g15_power_props[i].dt, pv->val[i]);
+    if (!err)
+        err = fdt_setprop_u64(dt, gpu, "apple,fast-die0-sensor-mask", pv->fast_die_mask);
+    if (!err)
+        err = fdt_setprop_u32(dt, gpu, "apple,min-sram-microvolt", pv->min_sram_uv);
+    if (!err && pv->have_idleoff)
+        err = fdt_setprop_u32(dt, gpu, "apple,idleoff-standby-timer", pv->idleoff);
+    if (err)
+        bail("FDT: GPU: failed to add the power-management properties (%d)\n", err);
+
+    printf("FDT: GPU: %u power-management properties added from the ADT\n",
+           (u32)ARRAY_SIZE(g15_power_props) + 2 + pv->have_idleoff);
     return 0;
 }
 
@@ -1649,6 +1801,11 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     if (g15_get_pstates(soc, sgx, &perf_state_count, &perf_state_table_count, &perf_states))
         return -1;
 
+    struct g15_power_values power_values;
+    if (soc->power_props && g15_get_power_props(sgx, perf_state_count, perf_state_table_count,
+                                                perf_states, &power_values))
+        return -1;
+
     struct g15_region regions[G15_NUM_REGIONS];
     for (int i = 0; i < G15_NUM_REGIONS; i++) {
         regions[i] = g15_region_names[i];
@@ -1736,6 +1893,8 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     if (g15_set_float_array(dt, "apple,core-leak-coef", leak, clusters))
         return -1;
     if (g15_set_float_array(dt, "apple,sram-leak-coef", 0.0f, clusters))
+        return -1;
+    if (soc->power_props && g15_set_power_props(dt, &power_values))
         return -1;
 
     for (int i = 0; i < G15_NUM_REGIONS; i++) {
