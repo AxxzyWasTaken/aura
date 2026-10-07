@@ -1028,8 +1028,9 @@ static void calc_power_t6030(u32 count, const struct perf_state *core, float lea
 }
 
 /*
- * T8122 (G15G) stand-in power model, for experiments only: G15G's leakage fuse and power model are
- * not known, so these numbers are not measured.
+ * T8122 (G15G) stand-in power model, for experiments only: G15G's power model is not known, and its
+ * decoded leakage fuse (t8122_leak_fuse_decode()) is used only on request, so these numbers are not
+ * measured.
  * - Scaling: calc_power_t6030() for the Air's enabled cores (8 or 10). Its dynamic term is per
  *   G15S core, so it comes to enabled_cores / G15S_MAX_CORES of a G15S's.
  * - Why it overstates: the static term is not scaled down, although G15G has one cluster of 10
@@ -1042,46 +1043,53 @@ static void calc_power_t6030(u32 count, const struct perf_state *core, float lea
 #define G15G_STANDIN_LEAK 6412.0f
 
 /*
- * T8122 (G15G) leakage fuse, prepared but off. The J613's GPU leakage is in two words of the
- * T8122 efuse page, T8122_LEAK_FUSE_WORD0/1. Read at boot, they would give each Mac its own
- * leakage, as g15s_read_leak() does on T6030, in place of G15G_STANDIN_LEAK. Their bit layout and
- * scaling are not known yet, so t8122_leak_fuse_decode is NULL: nothing reads the fuse page and
- * the experiment keeps the stand-in. To turn it on, write the decoder and point
- * t8122_leak_fuse_decode at it. A fault, or words that do not decode to a positive leakage, then
- * stop the setup (fail-soft) instead of falling back to the stand-in.
+ * T8122 (G15G) leakage fuse. On a J613, every boot reads the two fuse words
+ * (T8122_LEAK_FUSE_WORD0/1, t8122_leak_fuse_export() below) and decodes two fields:
+ * - field A, 14 bits: bits 31:29 of word 0 are its low 3 bits, bits 10:0 of word 1 its high 11;
+ * - field B, 10 bits: bits 20:11 of word 1.
+ * The other bits are not used. The values are 2 x (A + 1) and B + 1. Both are logged and
+ * exported to the kernel as /chosen/asahi,t8122-gpu-leak-fuse (two IEEE-754 single cells, in that
+ * order). The GPU setup keeps G15G_STANDIN_LEAK unless chosen.asahi,t8122-gpu-fuse-leakage=1
+ * asks it to use the first value instead, as g15s_read_leak() uses the T6030 fuse.
  */
 #define T8122_LEAK_FUSE_WORD0 0x2e42c8128UL
 #define T8122_LEAK_FUSE_WORD1 0x2e42c812cUL
+#define T8122_LEAK_FUSE_PROP  "asahi,t8122-gpu-leak-fuse"
+#define T8122_LEAK_FUSE_OPTIN "asahi,t8122-gpu-fuse-leakage"
 
-static int (*const t8122_leak_fuse_decode)(u32 word0, u32 word1, float *leak) = NULL;
+struct t8122_leak_fuse {
+    u32 field_a, field_b;
+    float value[2];
+};
 
-/* 0: *leak is this Mac's, from the fuse; 1: the layout is not known, nothing was read; -1: error */
-static int g15g_read_leak_fuse(float *leak)
+/* This boot's decoded fuse (valid), and whether the GPU setup is to use it (use) */
+static struct t8122_leak_fuse t8122_fuse;
+static bool t8122_fuse_valid, t8122_fuse_use;
+
+static void t8122_leak_fuse_decode(u32 word0, u32 word1, struct t8122_leak_fuse *fuse)
 {
-    if (!t8122_leak_fuse_decode)
-        return 1;
-
-    int before = g15_guard_begin();
-    u32 word0 = read32(T8122_LEAK_FUSE_WORD0);
-    u32 word1 = read32(T8122_LEAK_FUSE_WORD1);
-    if (g15_guard_end(before))
-        bail("FDT: GPU: fault reading the T8122 leakage fuse at 0x%lx\n", T8122_LEAK_FUSE_WORD0);
-    if (t8122_leak_fuse_decode(word0, word1, leak) || !(*leak > 0.0f))
-        bail("FDT: GPU: T8122 leakage fuse words 0x%08x 0x%08x do not decode\n", word0, word1);
-
-    return 0;
+    fuse->field_a = (word0 >> 29) | ((word1 & 0x7ff) << 3);
+    fuse->field_b = (word1 >> 11) & 0x3ff;
+    fuse->value[0] = 2.0f * (float)(fuse->field_a + 1);
+    fuse->value[1] = (float)(fuse->field_b + 1);
 }
 
 static int g15g_standin_read_leak(const struct g15_soc *soc, float *leak)
 {
     UNUSED(soc);
 
-    int fuse = g15g_read_leak_fuse(leak);
-    if (fuse <= 0)
-        return fuse;
-
-    printf("FDT: GPU: T8122 leakage fuse: bit layout not known, using the stand-in\n");
-    *leak = G15G_STANDIN_LEAK;
+    if (!t8122_fuse_use) {
+        printf("FDT: GPU: T8122 leakage: the stand-in%s\n",
+               t8122_fuse_valid ? " (the fuse values are exported only)" : "");
+        *leak = G15G_STANDIN_LEAK;
+        return 0;
+    }
+    if (!t8122_fuse_valid)
+        bail("FDT: GPU: chosen.%s=1, but this boot has no T8122 leakage fuse values\n",
+             T8122_LEAK_FUSE_OPTIN);
+    *leak = t8122_fuse.value[0];
+    printf("FDT: GPU: T8122 leakage: %u, from this Mac's fuse (chosen.%s=1)\n",
+           (u32)t8122_fuse.value[0], T8122_LEAK_FUSE_OPTIN);
     return 0;
 }
 
@@ -1787,8 +1795,8 @@ static void g15_disable(void *dt)
  *   recursively and checks that it is off again (as the T8122 powered identity probe does);
  * - the gpu node's mailbox is enabled with it when the DT keeps it disabled (see g15_get_mbox()).
  * Not known yet, so an armed T8122 setup stops before it touches the GPU: the G15G firmware images
- * (firmware_gfx_version() has none for T8122), the leakage fuse and the power model. The stand-in
- * experiment (g15_soc_t8122_standin) fills these in.
+ * (firmware_gfx_version() has none for T8122) and the power model; the leakage fuse is decoded but
+ * not used by default. The stand-in experiment (g15_soc_t8122_standin) fills these in.
  */
 static const struct g15_soc g15_soc_t6030 = {
     .chip = T6030,
@@ -2089,6 +2097,47 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
 static int dt_set_gpu_t8122(void *dt);
 
 /*
+ * On a J613 (the device tree's root is apple,j613), read the two leakage fuse words under the
+ * exception guard, before anything powers the GPU, then log and export the decoded values (see
+ * t8122_leak_fuse_decode()). It changes nothing else: the GPU setup uses them only with
+ * chosen.asahi,t8122-gpu-fuse-leakage=1. A fault or a full device tree is logged, and the boot
+ * goes on without the property.
+ */
+static void t8122_leak_fuse_export(void *dt)
+{
+    t8122_fuse_valid = false;
+    t8122_fuse_use = g15_optin(dt, T8122_LEAK_FUSE_OPTIN);
+    if (fdt_node_check_compatible(dt, 0, "apple,j613"))
+        return;
+
+    int before = g15_guard_begin();
+    u32 word0 = read32(T8122_LEAK_FUSE_WORD0);
+    u32 word1 = read32(T8122_LEAK_FUSE_WORD1);
+    if (g15_guard_end(before)) {
+        printf("FDT: GPU: T8122 leakage fuse: the read faulted; nothing exported\n");
+        return;
+    }
+
+    t8122_leak_fuse_decode(word0, word1, &t8122_fuse);
+    t8122_fuse_valid = true;
+    printf("FDT: GPU: T8122 leakage fuse: field A 0x%04x, field B 0x%03x; values %u and %u\n",
+           t8122_fuse.field_a, t8122_fuse.field_b, (u32)t8122_fuse.value[0],
+           (u32)t8122_fuse.value[1]);
+
+    u32 cells[2];
+    memcpy(&cells[0], &t8122_fuse.value[0], sizeof(cells[0]));
+    memcpy(&cells[1], &t8122_fuse.value[1], sizeof(cells[1]));
+    fdt32_t prop[2] = {cpu_to_fdt32(cells[0]), cpu_to_fdt32(cells[1])};
+    int chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen < 0 || fdt_setprop(dt, chosen, T8122_LEAK_FUSE_PROP, prop, sizeof(prop)))
+        printf("FDT: GPU: T8122 leakage fuse: could not add /chosen/%s\n", T8122_LEAK_FUSE_PROP);
+    else
+        printf("FDT: GPU: T8122 leakage fuse values in /chosen/%s; %s\n", T8122_LEAK_FUSE_PROP,
+               t8122_fuse_use ? "the GPU setup uses the first (chosen." T8122_LEAK_FUSE_OPTIN "=1)"
+                              : "the GPU setup does not use them");
+}
+
+/*
  * T8122: the GPU setup runs only with chosen.asahi,t8122-gpu=1; there is no dry run on a default
  * boot. Without it, the reservation-only diagnostic (dt_set_gpu_t8122()) runs if it is opted in.
  * With chosen.asahi,t8122-gpu-power-standin=1 as well, the setup is the stand-in experiment
@@ -2096,6 +2145,8 @@ static int dt_set_gpu_t8122(void *dt);
  */
 static int dt_set_gpu_t8122_select(void *dt)
 {
+    t8122_leak_fuse_export(dt);
+
     bool standin = g15_optin(dt, "asahi,t8122-gpu-power-standin");
 
     if (!g15_optin(dt, g15_soc_t8122.optin)) {

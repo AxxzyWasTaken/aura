@@ -1271,9 +1271,10 @@ static void expect_standin_handoff(const u32 *max_pwr)
     assert(log_has("FW: GFX: identified image g15g build c0, firmware 14.8.3"));
     assert(log_has("FDT: GPU: T8122 power model: stand-in (not measured; does not limit clocks)"));
     assert(!log_has("perf-states-sram present but unused"));
-    /* The leakage fuse read is off until its layout is known: no fuse access, the stand-in */
-    assert(log_has("FDT: GPU: T8122 leakage fuse: bit layout not known, using the stand-in"));
+    /* Not a J613 root here: no fuse read, and the stand-in leakage */
+    assert(log_has("FDT: GPU: T8122 leakage: the stand-in\n"));
     assert(!strstr(trace_buf, "0x2e42c812"));
+    assert(prop_len(dtbuf, "/chosen", "asahi,t8122-gpu-leak-fuse") < 0);
     assert(log_has("FDT: GPU: Leakage: 6412.000"));
     assert(log_has("FDT: GPU: T8122 GPU enabled (firmware 14.8.3)"));
     assert(log_has("ADT: GPU: 39 power-management values, fast-die sensor mask 0x2, SRAM floor "
@@ -1539,6 +1540,200 @@ static void t8122_j613_standin_wrong_id(void)
     assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
     assert(log_has("not a G15G"));
 }
+
+/*
+ * The T8122 leakage fuse (t8122_leak_fuse_decode(), t8122_leak_fuse_export()). Every fuse word
+ * here is synthetic: no unit's values.
+ */
+static u32 float_bits(float f)
+{
+    u32 v;
+    memcpy(&v, &f, sizeof(v));
+    return v;
+}
+
+static void t8122_fuse_decode(void)
+{
+    static const struct {
+        u32 word0, word1, a, b, v0, v1;
+    } cases[] = {
+        /* nothing set */
+        {0x00000000, 0x00000000, 0x0000, 0x000, 2, 1},
+        /* only the unused bits set: word 0 bits 28:0, word 1 bits 31:21 */
+        {0x1fffffff, 0xffe00000, 0x0000, 0x000, 2, 1},
+        /* each field's lowest and highest bit on its own */
+        {0x20000000, 0x00000000, 0x0001, 0x000, 4, 1},          /* word 0 bit 29: A bit 0 */
+        {0x80000000, 0x00000000, 0x0004, 0x000, 10, 1},         /* word 0 bit 31: A bit 2 */
+        {0x00000000, 0x00000001, 0x0008, 0x000, 18, 1},         /* word 1 bit 0: A bit 3 */
+        {0x00000000, 0x00000400, 0x2000, 0x000, 16386, 1},      /* word 1 bit 10: A bit 13 */
+        {0x00000000, 0x00000800, 0x0000, 0x001, 2, 2},          /* word 1 bit 11: B bit 0 */
+        {0x00000000, 0x00100000, 0x0000, 0x200, 2, 513},        /* word 1 bit 20: B bit 9 */
+        /* every field bit set, and every bit set */
+        {0xe0000000, 0x001fffff, 0x3fff, 0x3ff, 32768, 1024},
+        {0xffffffff, 0xffffffff, 0x3fff, 0x3ff, 32768, 1024},
+        /* a mixed pattern */
+        {0xa0000000, 0x000aaaaa, 0x1555, 0x155, 10924, 342},
+    };
+    for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+        struct t8122_leak_fuse f;
+        t8122_leak_fuse_decode(cases[i].word0, cases[i].word1, &f);
+        if (f.field_a != cases[i].a || f.field_b != cases[i].b ||
+            float_bits(f.value[0]) != float_bits((float)cases[i].v0) ||
+            float_bits(f.value[1]) != float_bits((float)cases[i].v1)) {
+            fprintf(stderr, "case %zu: 0x%08x 0x%08x -> A 0x%x B 0x%x %f %f\n", i, cases[i].word0,
+                    cases[i].word1, f.field_a, f.field_b, f.value[0], f.value[1]);
+            assert(0);
+        }
+    }
+}
+
+/* A T8122 default boot (no GPU switch), with a J613 root if `j613` and these fuse words */
+static void prepare_fuse(int j613, u32 word0, u32 word1, int fault)
+{
+    struct fixture f = t8122_fx;
+    f.optin = NULL;
+    prepare(&f);
+    if (j613)
+        CHK(fdt_setprop_string(dtbuf, 0, "compatible", "apple,j613"));
+    mmio_set(T8122_LEAK_FUSE_WORD0, word0, fault);
+    mmio_set(T8122_LEAK_FUSE_WORD1, word1, 0);
+}
+
+static void expect_fuse_prop(u32 v0, u32 v1)
+{
+    int len = 0;
+    const fdt32_t *p = fdt_getprop(dtbuf, fdt_path_offset(dtbuf, "/chosen"),
+                                   "asahi,t8122-gpu-leak-fuse", &len);
+    assert(p && len == 8);
+    assert(fdt32_to_cpu(p[0]) == float_bits((float)v0) && fdt32_to_cpu(p[1]) == float_bits((float)v1));
+}
+
+static void t8122_j613_fuse_export(void)
+{
+    /* A default J613 boot: the two reads, the log and the property, and nothing else */
+    prepare_fuse(1, 0xa0000000, 0x000aaaaa, 0);
+    char *before = dump_path(dtbuf, "/");
+    run();
+    expect_fuse_prop(10924, 342);
+    assert(log_has("FDT: GPU: T8122 leakage fuse: field A 0x1555, field B 0x155; values 10924 and 342\n"));
+    assert(log_has("FDT: GPU: T8122 leakage fuse values in /chosen/asahi,t8122-gpu-leak-fuse; "
+                   "the GPU setup does not use them\n"));
+    assert(!strcmp(trace_buf, "read32 0x2e42c8128\nread32 0x2e42c812c\n"));
+    assert(mmio_reads == 2 && !pmgr_enables && !exc_count && !unguarded_faults);
+    CHK(fdt_delprop(dtbuf, fdt_path_offset(dtbuf, "/chosen"), "asahi,t8122-gpu-leak-fuse"));
+    char *after = dump_path(dtbuf, "/");
+    assert(!strcmp(before, after));
+    free(before);
+    free(after);
+}
+
+static void t8122_fuse_not_j613(void)
+{
+    /* Another T8122 root: the fuse is not read */
+    prepare_fuse(0, 0xa0000000, 0x000aaaaa, 0);
+    static u8 before[sizeof(dtbuf)];
+    memcpy(before, dtbuf, sizeof(dtbuf));
+    run();
+    assert(!memcmp(before, dtbuf, sizeof(dtbuf)));
+    assert(!trace_len && !mmio_reads && !log_has("leakage fuse"));
+}
+
+static void t8122_j613_fuse_fault(void)
+{
+    /* A faulting read is caught, logged, and the boot goes on without the property */
+    prepare_fuse(1, 0, 0, 1);
+    run();
+    assert(prop_len(dtbuf, "/chosen", "asahi,t8122-gpu-leak-fuse") < 0);
+    assert(log_has("FDT: GPU: T8122 leakage fuse: the read faulted; nothing exported\n"));
+    assert(exc_count == 1 && !unguarded_faults && !pmgr_enables);
+}
+
+/* The stand-in experiment on a J613 root with fuse words; `use` sets the fuse switch */
+static void prepare_j613_standin_fuse(int use, int fault)
+{
+    prepare_j613_setup(0x3ff, 1);
+    CHK(fdt_setprop_string(dtbuf, 0, "compatible", "apple,j613"));
+    mmio_set(T8122_LEAK_FUSE_WORD0, 0xa0000000, fault);
+    mmio_set(T8122_LEAK_FUSE_WORD1, 0x000aaaaa, 0);
+    if (use)
+        CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"),
+                               "asahi,t8122-gpu-fuse-leakage", "1"));
+}
+
+static void t8122_j613_standin_fuse_off(void)
+{
+    /*
+     * Without the switch the GPU handoff is byte for byte the stand-in experiment's: the same gpu
+     * node, OPP table and reserved memory as a run with no fuse at all.
+     */
+    prepare_j613_setup(0x3ff, 1);
+    run();
+    char *gpu0 = dump_path(dtbuf, "/soc/gpu@292400000");
+    char *opp0 = dump_path(dtbuf, "/opp-table-gpu");
+    char *resv0 = dump_path(dtbuf, "/reserved-memory");
+
+    prepare_j613_standin_fuse(0, 0);
+    run();
+    char *gpu1 = dump_path(dtbuf, "/soc/gpu@292400000");
+    char *opp1 = dump_path(dtbuf, "/opp-table-gpu");
+    char *resv1 = dump_path(dtbuf, "/reserved-memory");
+    assert(!strcmp(gpu0, gpu1) && !strcmp(opp0, opp1) && !strcmp(resv0, resv1));
+    assert(gpu_u32("apple,core-leak-coef") == float_bits(6412.0f));
+    assert(log_has("FDT: GPU: T8122 leakage: the stand-in (the fuse values are exported only)\n"));
+    assert(log_has("FDT: GPU: T8122 GPU enabled (firmware 14.8.3)"));
+    expect_fuse_prop(10924, 342);
+    free(gpu0), free(opp0), free(resv0), free(gpu1), free(opp1), free(resv1);
+}
+
+static void t8122_j613_standin_fuse_on(void)
+{
+    /* chosen.asahi,t8122-gpu-fuse-leakage=1: the first value takes the stand-in's place */
+    prepare_j613_standin_fuse(1, 0);
+    run();
+    assert(gpu_u32("apple,core-leak-coef") == float_bits(10924.0f));
+    assert(gpu_u32("apple,sram-leak-coef") == 0);
+    assert(log_has("FDT: GPU: T8122 leakage: 10924, from this Mac's fuse "
+                   "(chosen.asahi,t8122-gpu-fuse-leakage=1)\n"));
+    assert(log_has("the GPU setup uses the first (chosen.asahi,t8122-gpu-fuse-leakage=1)"));
+    assert(log_has("FDT: GPU: Leakage: 10924.000"));
+    assert(log_has("FDT: GPU: T8122 GPU enabled (firmware 14.8.3)"));
+    expect_fuse_prop(10924, 342);
+    /* The power table follows the leakage: every OPP above the off state has more power */
+    int opps = fdt_path_offset(dtbuf, "/opp-table-gpu"), opp, n = 0, len;
+    fdt_for_each_subnode(opp, dtbuf, opps)
+    {
+        const fdt32_t *uw = fdt_getprop(dtbuf, opp, "opp-microwatt", &len);
+        assert(uw && len == 4);
+        if (n++)
+            assert(fdt32_to_cpu(*uw) > 0);
+    }
+    assert(n == 14);
+}
+
+static void t8122_j613_standin_fuse_on_fault(void)
+{
+    /* The switch with no fuse values: the setup refuses, it does not fall back to the stand-in */
+    prepare_j613_standin_fuse(1, 1);
+    run();
+    expect_gpu_off(dtbuf);
+    assert(log_has("FDT: GPU: chosen.asahi,t8122-gpu-fuse-leakage=1, but this boot has no T8122 "
+                   "leakage fuse values\n"));
+    assert(log_has("T8122 GPU setup failed"));
+    assert(prop_len(dtbuf, "/chosen", "asahi,t8122-gpu-leak-fuse") < 0);
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+}
+
+static void t8122_j613_standin_fuse_not_j613(void)
+{
+    /* The switch on another T8122 root: no fuse values, so the setup refuses */
+    prepare_j613_setup(0x3ff, 1);
+    CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"), "asahi,t8122-gpu-fuse-leakage",
+                           "1"));
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!strstr(trace_buf, "0x2e42c812"));
+    assert(log_has("but this boot has no T8122 leakage fuse values"));
+}
 #endif
 
 static const struct {
@@ -1600,6 +1795,14 @@ static const struct {
     {"t8122-j613-standin-g15s-image", t8122_j613_standin_g15s_image},
     {"t8122-j613-standin-no-room", t8122_j613_standin_no_room},
     {"t8122-j613-standin-wrong-id", t8122_j613_standin_wrong_id},
+    {"t8122-fuse-decode", t8122_fuse_decode},
+    {"t8122-j613-fuse-export", t8122_j613_fuse_export},
+    {"t8122-fuse-not-j613", t8122_fuse_not_j613},
+    {"t8122-j613-fuse-fault", t8122_j613_fuse_fault},
+    {"t8122-j613-standin-fuse-off", t8122_j613_standin_fuse_off},
+    {"t8122-j613-standin-fuse-on", t8122_j613_standin_fuse_on},
+    {"t8122-j613-standin-fuse-on-fault", t8122_j613_standin_fuse_on_fault},
+    {"t8122-j613-standin-fuse-not-j613", t8122_j613_standin_fuse_not_j613},
 #endif
 };
 
