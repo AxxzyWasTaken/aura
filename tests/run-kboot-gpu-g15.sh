@@ -5,7 +5,8 @@
 #
 # Runs every scenario of tests/kboot_gpu_g15_host.c against this tree. With BASE_REF (a git ref
 # of this repository, e.g. aurora7), the T6030 scenarios are also built against that ref's
-# kboot_gpu.c and firmware.c, and their DT, bus/PMGR traces and logs must be identical.
+# kboot_gpu.c and firmware.c, and their DT, bus/PMGR traces and logs must be identical. If that
+# ref has the T8122 setup (e.g. aurora12), so are the T8122 scenarios without the stand-in switch.
 set -eu
 cd "$(dirname "$0")/.."
 root=$(pwd)
@@ -49,7 +50,13 @@ echo "PASS: $pass G15 scenarios"
 if [ -n "$base" ]; then
     mkdir -p "$tmp/base-tree"
     git archive "$base" | tar -x -C "$tmp/base-tree"
-    build "$tmp/base-tree" "$tmp/base"
+    what=T6030
+    if grep -q g15_soc_t8122 "$tmp/base-tree/src/kboot_gpu.c"; then
+        build "$tmp/base-tree" "$tmp/base" -DG15_T8122_BASE
+        what="T6030 and T8122 (no stand-in switch)"
+    else
+        build "$tmp/base-tree" "$tmp/base"
+    fi
     same=0
     for s in $("$tmp/base/kboot-gpu-g15" list); do
         "$tmp/base/kboot-gpu-g15" "$s" > "$tmp/base/$s.out" 2>&1 || {
@@ -64,5 +71,5 @@ if [ -n "$base" ]; then
         fi
         same=$((same + 1))
     done
-    echo "PASS: $same T6030 scenarios identical to $base (DT, bus and PMGR traces, log)"
+    echo "PASS: $same $what scenarios identical to $base (DT, bus and PMGR traces, log)"
 fi

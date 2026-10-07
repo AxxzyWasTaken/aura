@@ -7,7 +7,9 @@
  * Usage: kboot-gpu-g15 <scenario>   prints the resulting DT, bus and PMGR traces and the log.
  *        kboot-gpu-g15 list         prints the scenario names.
  * T6030 scenarios also build against an older kboot_gpu.c, so the run script can check that the
- * T6030 results did not change. T8122 scenarios need G15_NEW (this tree) and assert on results.
+ * T6030 results did not change. T8122 scenarios need G15_NEW (this tree) and assert on results;
+ * the ones without the stand-in switch also build with G15_T8122_BASE, against an older tree with
+ * the T8122 setup, so the run script can check that they did not change either.
  */
 #include <assert.h>
 #include <stdarg.h>
@@ -126,7 +128,7 @@ struct hprop {
 struct hnode {
     const char *path;
     int nprops;
-    struct hprop props[48];
+    struct hprop props[64];
 };
 
 static struct hnode hnodes[16];
@@ -251,6 +253,7 @@ int adt_get_reg(const void *tree, int *path, const char *prop, int idx, u64 *add
 
 static u32 fw_hdr[0x38 / 4];
 static char fw_version_str[64] = "RTKit-test";
+static u64 fw_text = FW_TEXT; /* where the bus serves the firmware text (header, version) */
 
 struct mmio {
     u64 addr;
@@ -283,9 +286,9 @@ static u32 bus_fault(u64 addr)
 
 u32 host_read32(u64 addr)
 {
-    if (addr >= FW_TEXT + 0x4200 && addr < FW_TEXT + 0x4200 + sizeof(fw_hdr)) {
-        trace("read32 fw+0x%lx\n", addr - FW_TEXT);
-        return fw_hdr[(addr - FW_TEXT - 0x4200) / 4];
+    if (addr >= fw_text + 0x4200 && addr < fw_text + 0x4200 + sizeof(fw_hdr)) {
+        trace("read32 fw+0x%lx\n", addr - fw_text);
+        return fw_hdr[(addr - fw_text - 0x4200) / 4];
     }
     for (int i = 0; i < n_mmio; i++)
         if (mmio[i].addr == addr) {
@@ -302,8 +305,8 @@ u32 host_read32(u64 addr)
 u8 host_read8(u64 addr)
 {
     u64 off = fw_hdr[3];
-    if (addr >= FW_TEXT + off && addr < FW_TEXT + off + sizeof(fw_version_str))
-        return fw_version_str[addr - FW_TEXT - off];
+    if (addr >= fw_text + off && addr < fw_text + off + sizeof(fw_version_str))
+        return fw_version_str[addr - fw_text - off];
     trace("read8 0x%lx UNMAPPED\n", addr);
     return bus_fault(addr);
 }
@@ -505,29 +508,43 @@ static void setup_dt(void *dt, const struct fixture *fx)
 
 /* ---------- output ---------- */
 
-static void dump_node(const void *dt, int node, int depth)
+static void dump_node_to(FILE *out, const void *dt, int node, int depth)
 {
     int prop;
-    fprintf(stdout, "%*s%s {\n", depth * 2, "", depth ? fdt_get_name(dt, node, NULL) : "/");
+    fprintf(out, "%*s%s {\n", depth * 2, "", depth ? fdt_get_name(dt, node, NULL) : "/");
     fdt_for_each_property_offset(prop, dt, node)
     {
         const char *name;
         int len;
         const u8 *v = fdt_getprop_by_offset(dt, prop, &name, &len);
-        fprintf(stdout, "%*s%s =", depth * 2 + 2, "", name);
+        fprintf(out, "%*s%s =", depth * 2 + 2, "", name);
         for (int i = 0; i < len; i++)
-            fprintf(stdout, " %02x", v[i]);
-        fprintf(stdout, ";\n");
+            fprintf(out, " %02x", v[i]);
+        fprintf(out, ";\n");
     }
     int child;
-    fdt_for_each_subnode(child, dt, node) dump_node(dt, child, depth + 1);
-    fprintf(stdout, "%*s}\n", depth * 2, "");
+    fdt_for_each_subnode(child, dt, node) dump_node_to(out, dt, child, depth + 1);
+    fprintf(out, "%*s}\n", depth * 2, "");
+}
+
+/* The dump of the subtree at `path`, in a malloc()ed string */
+static char *dump_path(const void *dt, const char *path)
+{
+    char *buf = NULL;
+    size_t size = 0;
+    FILE *out = open_memstream(&buf, &size);
+    assert(out);
+    int node = fdt_path_offset(dt, path);
+    assert(node >= 0);
+    dump_node_to(out, dt, node, 0);
+    fclose(out);
+    return buf;
 }
 
 static void report(const void *dt)
 {
     fprintf(stdout, "== dt\n");
-    dump_node(dt, 0, 0);
+    dump_node_to(stdout, dt, 0, 0);
     fprintf(stdout, "== trace\n%s", trace_buf);
     fprintf(stdout, "== log\n%s", log_buf);
 }
@@ -571,7 +588,7 @@ static void expect_gpu_off(const void *dt)
 /* ---------- scenarios ---------- */
 
 static const struct fixture t6030_fx = {T6030, "apple,agx-t6030", "asahi,t6030-gpu", 2, 0, 65536};
-#ifdef G15_NEW
+#if defined(G15_NEW) || defined(G15_T8122_BASE)
 static const struct fixture t8122_fx = {T8122, "apple,agx-t8122", "asahi,t8122-gpu", 1, 1, 65536};
 #endif
 
@@ -590,6 +607,9 @@ static void prepare(const struct fixture *f)
     exc_guard = GUARD_OFF;
     exc_count = 0;
     os_firmware = fw_versions[V14_7];
+    fw_text = FW_TEXT;
+    ram_min = 0x10000000000;
+    ram_size = 0x1e0000000;
     setup_adt(&fx);
     setup_bus(&fx);
     setup_dt(dtbuf, &fx);
@@ -710,10 +730,41 @@ static void t6030_wrong_compat(void)
     run();
 }
 
-#ifdef G15_NEW
 /*
- * T8122. With this tree's tables the setup must refuse before any GPU access: the G15G image,
- * leakage fuse and power model are not known yet.
+ * T6030 with the T8122 stand-in switch set too: the same log, bus and PMGR traces and GPU, OPP and
+ * reserved-memory nodes as without it (and, through the run script, as an older tree).
+ */
+static void t6030_standin_switch(void)
+{
+    prepare(&t6030_fx);
+    run();
+    static char log0[sizeof(log_buf)], trace0[sizeof(trace_buf)];
+    memcpy(log0, log_buf, sizeof(log_buf));
+    memcpy(trace0, trace_buf, sizeof(trace_buf));
+    static const char *const paths[] = {"/soc", "/opp-table-gpu", "/reserved-memory"};
+    char *nodes0[3];
+    for (int i = 0; i < 3; i++)
+        nodes0[i] = dump_path(dtbuf, paths[i]);
+
+    prepare(&t6030_fx);
+    CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"),
+                           "asahi,t8122-gpu-power-standin", "1"));
+    run();
+    assert(!strcmp(log0, log_buf) && !strcmp(trace0, trace_buf));
+    for (int i = 0; i < 3; i++) {
+        char *nodes = dump_path(dtbuf, paths[i]);
+        assert(!strcmp(nodes0[i], nodes));
+        free(nodes);
+        free(nodes0[i]);
+    }
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "okay"));
+}
+
+#if defined(G15_NEW) || defined(G15_T8122_BASE)
+/*
+ * T8122 without the stand-in switch. The setup must refuse before any GPU access: the G15G image,
+ * leakage fuse and power model are not known. These also build against an older tree with the
+ * T8122 setup (G15_T8122_BASE), and their results must not have changed.
  */
 static void t8122_default(void)
 {
@@ -737,6 +788,150 @@ static void t8122_armed_refuses(void)
     assert(log_has("FW: GFX: image uuid"));
     assert(log_has("T8122 GPU setup failed"));
 }
+
+/*
+ * A 10-core J613 (M3 Air, 16 GB): its ADT pstates, power-management values, UAT regions, firmware
+ * segments and G15G firmware image, and its powered identity, with `core_mask` 0x3ff (10 cores) or
+ * 0x37e (8 cores). Armed with chosen.asahi,t8122-gpu=1, plus the stand-in switch if `standin`.
+ */
+static const u8 g15g_c0_uuid[16] = {0xdf, 0x69, 0x7f, 0x05, 0xf6, 0xb5, 0x33, 0xef,
+                                    0xa1, 0x37, 0x61, 0xc4, 0xa7, 0x3d, 0x66, 0x6a};
+
+static const struct {
+    const char *name;
+    u32 val;
+} j613_power[] = {
+    {"gpu-perf-base-pstate", 0x00000001},
+    {"gpu-avg-power-filter-tc-ms", 0x00000028},
+    {"gpu-avg-power-ki-only", 0x428c0000},
+    {"gpu-avg-power-kp", 0x3ff9999a},
+    {"gpu-avg-power-min-duty-cycle", 0x0000001e},
+    {"gpu-avg-power-target-filter-tc", 0x00000001},
+    {"gpu-fast-die0-integral-gain", 0x43e10000},
+    {"gpu-fast-die0-proportional-gain", 0x42080000},
+    {"gpu-perf-boost-ce-step", 0x00000032},
+    {"gpu-perf-boost-min-util", 0x0000005a},
+    {"gpu-perf-filter-drop-threshold", 0x00000000},
+    {"gpu-perf-filter-time-constant", 0x00000005},
+    {"gpu-perf-filter-time-constant2", 0x000000c8},
+    {"gpu-perf-integral-gain", 0x3f4c28f6},
+    {"gpu-perf-integral-gain2", 0x3f4c28f6},
+    {"gpu-perf-integral-min-clamp", 0x00000000},
+    {"gpu-perf-proportional-gain", 0x40accccd},
+    {"gpu-perf-proportional-gain2", 0x40accccd},
+    {"gpu-perf-tgt-utilization", 0x00000055},
+    {"gpu-power-sample-period", 0x00000008},
+    {"gpu-ppm-filter-time-constant-ms", 0x00000064},
+    {"gpu-ppm-ki", 0x42c23333},
+    {"gpu-ppm-kp", 0x4039999a},
+    {"gpu-pwr-filter-time-constant", 0x00000139},
+    {"gpu-pwr-integral-gain", 0x3ca59586},
+    {"gpu-pwr-integral-min-clamp", 0x00000000},
+    {"gpu-pwr-min-duty-cycle", 0x0000001e},
+    {"gpu-pwr-proportional-gain", 0x40a90fdb},
+    {"gpu-pwr-sample-period-aic-clks", 0x00030d40},
+    {"gpu-se-engagement-criteria", 0x00000258},
+    {"gpu-se-filter-time-constant", 0x00000009},
+    {"gpu-se-filter-time-constant-1", 0x00000003},
+    {"gpu-se-inactive-threshold", 0x000009c4},
+    {"gpu-se-ki", 0xc2480000},
+    {"gpu-se-ki-1", 0xc2c80000},
+    {"gpu-se-kp", 0xc0a00000},
+    {"gpu-se-kp-1", 0xc1200000},
+    {"gpu-se-reset-criteria", 0x00000032},
+    {"gpu-se-tgt", 0x00000578},
+    {"gpu-fast-die0-sensor-mask", 0x00000002},
+};
+
+#define J613_FW_TEXT 0x1000084c000UL
+#define J613_FW_DATA 0x10001888000UL
+
+static void prepare_j613_setup(u32 core_mask, int standin)
+{
+    prepare(&t8122_fx);
+
+    hset_u32("/arm-io", "chip-revision", 0x20);
+    static const struct perf_state ps[14] = {
+        {0, 125},          {338000000, 630},  {618000000, 690},  {796000000, 720},
+        {836000000, 760},  {928000000, 760},  {952000000, 810},  {1056000000, 810},
+        {1053000000, 870}, {1170000000, 870}, {1152000000, 910}, {1278000000, 910},
+        {1204000000, 935}, {1338000000, 935},
+    };
+    static const struct perf_state sram[14] = {
+        {0, 790},          {338000000, 790},  {618000000, 790},  {796000000, 790},
+        {836000000, 790},  {928000000, 790},  {952000000, 810},  {1056000000, 810},
+        {1053000000, 870}, {1170000000, 870}, {1152000000, 910}, {1278000000, 910},
+        {1204000000, 935}, {1338000000, 935},
+    };
+    hset_u32("/arm-io/sgx", "perf-state-count", 14);
+    hset_u32("/arm-io/sgx", "gpu-num-perf-states", 13);
+    hset_u32("/arm-io/sgx", "perf-state-table-count", 1);
+    hset("/arm-io/sgx", "perf-states", ps, sizeof(ps));
+    hset("/arm-io/sgx", "perf-states-sram", sram, sizeof(sram));
+    hset_u64("/arm-io/sgx", "gfx-handoff-base", 0x103fff70000UL);
+    hset_u64("/arm-io/sgx", "gfx-handoff-size", 0x4000);
+    hset_u64("/arm-io/sgx", "gfx-shared-region-base", 0x103fff78000UL);
+    hset_u64("/arm-io/sgx", "gfx-shared-region-size", 0x40000);
+    hset_u64("/arm-io/sgx", "gpu-region-base", 0x103fffb8000UL);
+    hset_u64("/arm-io/sgx", "gpu-region-size", 0x4000);
+    hset_u64("/arm-io/sgx", "gfx-shared-l2-region-base", 0x103fff74000UL);
+    hset_u64("/arm-io/sgx", "gfx-shared-l2-region-size", 0x4000);
+    for (size_t i = 0; i < ARRAY_SIZE(j613_power); i++)
+        hset_u32("/arm-io/sgx", j613_power[i].name, j613_power[i].val);
+
+    struct adt_segment_ranges seg[2] = {
+        {J613_FW_TEXT, FW_VA, J613_FW_TEXT, 0x64000, 1},
+        {J613_FW_DATA, FW_VA + 0x64000, J613_FW_DATA, 0xb0000, 0},
+    };
+    hset("/arm-io/gfx-asc", "segment-ranges", seg, sizeof(seg));
+    hset("/arm-io/gfx-asc/iop-gfx-nub", "segment-ranges", seg, sizeof(seg));
+    hset_u64("/chosen", "dram-base", DRAM_BASE);
+    hset_u64("/chosen", "dram-size", 0x400000000UL);
+    ram_base = DRAM_BASE;
+    mem_size_actual = 0x400000000UL;
+    ram_min = 0x10001f74000UL;
+    ram_size = 0x3dc4ac000UL;
+
+    fw_text = J613_FW_TEXT;
+    memcpy(&fw_hdr[5], g15g_c0_uuid, sizeof(g15g_c0_uuid));
+    fw_hdr[11] = 0x5d54a;
+    fw_hdr[12] = 0x1e8;
+    fw_hdr[13] = 0x64000;
+
+    mmio_set(SGX_BASE + 0xd04010, 0x0011010a, 0);
+    mmio_set(SGX_BASE + 0xe01500, core_mask, 0);
+
+    /* The T8122 DT's four memory regions, and no leakage placeholders */
+    int gpu = fdt_path_offset(dtbuf, "/soc/gpu@292400000");
+    fdt32_t mr[4] = {cpu_to_fdt32(12), cpu_to_fdt32(11), cpu_to_fdt32(10), cpu_to_fdt32(13)};
+    CHK(fdt_setprop(dtbuf, gpu, "memory-region", mr, sizeof(mr)));
+    static const char mrn[] = "ttbs\0pagetables\0handoff\0pagetables-l2";
+    CHK(fdt_setprop(dtbuf, gpu, "memory-region-names", mrn, sizeof(mrn)));
+    CHK(fdt_delprop(dtbuf, gpu, "apple,core-leak-coef"));
+    CHK(fdt_delprop(dtbuf, gpu, "apple,sram-leak-coef"));
+    if (standin)
+        CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"),
+                               "asahi,t8122-gpu-power-standin", "1"));
+}
+
+static void t8122_j613_switch_off(void)
+{
+    /* The J613's own G15G image, without the stand-in switch: refused as before */
+    prepare_j613_setup(0x3ff, 0);
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("the G15G leakage fuse and power model are not known yet"));
+    assert(log_has("FW: GFX: image uuid df697f05-f6b5-33ef-a137-61c4a73d666a"));
+    assert(log_has("FW: GFX: unknown GPU firmware image, not identified"));
+    assert(log_has("loaded GPU firmware is not a known ABI"));
+    assert(log_has("T8122 GPU setup failed"));
+    assert(prop_len(dtbuf, "/soc/gpu@292400000", "apple,se-target") < 0);
+}
+#endif
+
+#ifdef G15_NEW
 
 /*
  * The T8122 pipeline with the data that is still missing supplied by the test: the G15S image
@@ -1040,6 +1235,307 @@ static void t8122_with_diag_optin(void)
     expect_gpu_off(dtbuf);
     assert(log_has("handoff-diag ignored"));
 }
+
+/*
+ * The stand-in experiment on the J613 inputs: chosen.asahi,t8122-gpu=1 and
+ * chosen.asahi,t8122-gpu-power-standin=1.
+ */
+static const fdt32_t *gpu_prop(const char *name, int *len)
+{
+    int gpu = fdt_path_offset(dtbuf, "/soc/gpu@292400000");
+    assert(gpu >= 0);
+    return fdt_getprop(dtbuf, gpu, name, len);
+}
+
+static u32 gpu_u32(const char *name)
+{
+    int len = 0;
+    const fdt32_t *v = gpu_prop(name, &len);
+    assert(v && len == 4);
+    return fdt32_to_cpu(*v);
+}
+
+static void expect_standin_handoff(const u32 *max_pwr)
+{
+    const char *gpu = "/soc/gpu@292400000";
+    assert(!strcmp(status_of(dtbuf, gpu), "okay"));
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "okay"));
+    static const char *const uat[] = {"uat-handoff", "uat-pagetables", "uat-ttbs",
+                                      "uat-pagetables-l2"};
+    for (int i = 0; i < 4; i++) {
+        char p[64];
+        snprintf(p, sizeof(p), "/reserved-memory/%s", uat[i]);
+        assert(!strcmp(status_of(dtbuf, p), "okay"));
+    }
+    assert(log_has("T8122 experiment armed"));
+    assert(log_has("FW: GFX: identified image g15g build c0, firmware 14.8.3"));
+    assert(log_has("FDT: GPU: T8122 power model: stand-in (not measured; does not limit clocks)"));
+    assert(!log_has("perf-states-sram present but unused"));
+    assert(log_has("FDT: GPU: Leakage: 6412.000"));
+    assert(log_has("FDT: GPU: T8122 GPU enabled (firmware 14.8.3)"));
+    assert(log_has("ADT: GPU: 39 power-management values, fast-die sensor mask 0x2, SRAM floor "
+                   "790 mV, idle-off standby timer absent (kernel default)"));
+    assert(log_has("FDT: GPU: 41 power-management properties added from the ADT"));
+
+    /* firmware version, ABI and compat: 14.8.3 */
+    static const char *const fw[] = {"apple,firmware-version", "apple,firmware-abi",
+                                     "apple,firmware-compat"};
+    for (int i = 0; i < 3; i++) {
+        int len = 0;
+        const fdt32_t *v = gpu_prop(fw[i], &len);
+        assert(v && len == 12 && fdt32_to_cpu(v[0]) == 14 && fdt32_to_cpu(v[1]) == 8 &&
+               fdt32_to_cpu(v[2]) == 3);
+    }
+    assert(prop_len(dtbuf, gpu, "apple,m3-handoff-version") == 4);
+    assert(fdt_stringlist_search(dtbuf, fdt_path_offset(dtbuf, gpu), "memory-region-names",
+                                 "fw-text") == 4);
+    assert(fdt_stringlist_search(dtbuf, fdt_path_offset(dtbuf, gpu), "memory-region-names",
+                                 "fw-data") == 5);
+
+    /* The leakage: one cell per cluster, the stand-in for the core and 0 for SRAM */
+    float leak = 6412.0f;
+    u32 leak_bits;
+    memcpy(&leak_bits, &leak, sizeof(leak_bits));
+    assert(gpu_u32("apple,core-leak-coef") == leak_bits);
+    assert(gpu_u32("apple,sram-leak-coef") == 0);
+
+    /* Every ADT power-management value under its apple,* name, as it is */
+    for (size_t i = 0; i < ARRAY_SIZE(g15_power_props); i++) {
+        u32 want = 0;
+        for (size_t j = 0; j < ARRAY_SIZE(j613_power); j++)
+            if (!strcmp(j613_power[j].name, g15_power_props[i].adt))
+                want = j613_power[j].val;
+        assert(gpu_u32(g15_power_props[i].dt) == want);
+    }
+    assert(gpu_u32("apple,se-target") == 1400);
+    assert(gpu_u32("apple,perf-base-pstate") == 1);
+    assert(gpu_u32("apple,min-sram-microvolt") == 790000);
+    int len = 0;
+    const fdt32_t *mask = gpu_prop("apple,fast-die0-sensor-mask", &len);
+    assert(mask && len == 8 && fdt32_to_cpu(mask[0]) == 0 && fdt32_to_cpu(mask[1]) == 2);
+    assert(prop_len(dtbuf, gpu, "apple,idleoff-standby-timer") < 0);
+
+    /* One OPP per ADT pstate, in ADT order, one voltage cell, the stand-in power */
+    static const u32 hz[14] = {0,          338000000,  618000000,  796000000,  836000000,
+                               928000000,  952000000,  1056000000, 1053000000, 1170000000,
+                               1152000000, 1278000000, 1204000000, 1338000000};
+    static const u32 mv[14] = {125, 630, 690, 720, 760, 760, 810,
+                               810, 870, 870, 910, 910, 935, 935};
+    int opps = fdt_path_offset(dtbuf, "/opp-table-gpu"), n = 0, opp;
+    fdt_for_each_subnode(opp, dtbuf, opps)
+    {
+        char name[8];
+        snprintf(name, sizeof(name), "opp%02d", n);
+        assert(!strcmp(fdt_get_name(dtbuf, opp, NULL), name));
+        const fdt64_t *f = fdt_getprop(dtbuf, opp, "opp-hz", &len);
+        assert(f && len == 8 && fdt64_ld(f) == hz[n]);
+        const fdt32_t *uv = fdt_getprop(dtbuf, opp, "opp-microvolt", &len);
+        assert(uv && len == 4 && fdt32_to_cpu(*uv) == mv[n] * 1000);
+        const fdt32_t *uw = fdt_getprop(dtbuf, opp, "opp-microwatt", &len);
+        assert(uw && len == 4 && fdt32_to_cpu(*uw) == max_pwr[n]);
+        n++;
+    }
+    assert(n == 14);
+
+    /* Powered for the identity reads and left on for the kernel, as on T6030 */
+    assert(pmgr_enables == 1 && pmgr_disables == 0 && unguarded_faults == 0);
+}
+
+/*
+ * The stand-in max power table (uW) on the host's expf()/powf(); m1n1's own may differ in the last
+ * digits
+ */
+static void t8122_j613_standin_10(void)
+{
+    prepare_j613_setup(0x3ff, 1);
+    run();
+    static const u32 max_pwr[14] = {0,        7370636,  10950020, 12234028, 14239188,
+                                    15044005, 17748106, 18794802, 22305218, 23683214,
+                                    25489264, 27127520, 28513048, 30362362};
+    expect_standin_handoff(max_pwr);
+    assert(log_has("1 cluster(s) x 10 core slots"));
+    assert(log_has("Core counts: 10 \n"));
+    assert(log_has("T8122 stand-in: G15S model, dynamic power for 10 of 20 G15S cores"));
+}
+
+static void t8122_j613_standin_8(void)
+{
+    prepare_j613_setup(0x37e, 1);
+    run();
+    static const u32 max_pwr[14] = {0,        6979241,  10075828, 10997526, 12776519,
+                                    13420372, 15831849, 16669205, 19824824, 20927220,
+                                    22493598, 23804204, 25189806, 26669256};
+    expect_standin_handoff(max_pwr);
+    assert(log_has("Core counts: 8 \n"));
+    assert(log_has("T8122 stand-in: G15S model, dynamic power for 8 of 20 G15S cores"));
+}
+
+static void t8122_j613_standin_only(void)
+{
+    /* The stand-in switch alone arms nothing: logged, and the boot is the default one */
+    prepare_j613_setup(0x3ff, 1);
+    fdt_delprop(dtbuf, fdt_path_offset(dtbuf, "/chosen"), "asahi,t8122-gpu");
+    static u8 before[sizeof(dtbuf)];
+    memcpy(before, dtbuf, sizeof(dtbuf));
+    run();
+    assert(!memcmp(before, dtbuf, sizeof(dtbuf)));
+    assert(!trace_len && !pmgr_enables && !mmio_reads);
+    assert(log_has("asahi,t8122-gpu-power-standin ignored: it needs chosen.asahi,t8122-gpu=1"));
+}
+
+static void t8122_j613_standin_missing_value(void)
+{
+    /* A missing ADT power-management value stops the setup before the GPU is powered */
+    prepare_j613_setup(0x3ff, 1);
+    hdel("/arm-io/sgx", "gpu-se-tgt");
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("ADT: GPU: missing or invalid gpu-se-tgt"));
+    assert(log_has("T8122 GPU setup failed"));
+    assert(prop_len(dtbuf, "/soc/gpu@292400000", "apple,se-ki") < 0);
+}
+
+static void t8122_j613_standin_bad_mask_size(void)
+{
+    /* A fast-die sensor mask that is not 4 bytes is refused the same way */
+    prepare_j613_setup(0x3ff, 1);
+    u64 mask = 2;
+    hset("/arm-io/sgx", "gpu-fast-die0-sensor-mask", &mask, sizeof(mask));
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("missing or invalid gpu-fast-die0-sensor-mask"));
+}
+
+static void t8122_j613_standin_bad_sram(void)
+{
+    /* SRAM pstates that do not match the pstate table are refused before the GPU is powered */
+    prepare_j613_setup(0x3ff, 1);
+    struct perf_state sram[13] = {{0, 790}};
+    hset("/arm-io/sgx", "perf-states-sram", sram, sizeof(sram));
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("invalid or missing perf-states-sram"));
+}
+
+static void t8122_j613_standin_idleoff_malformed(void)
+{
+    /* An ADT idle-off standby timer that is not one cell is refused before the GPU is powered */
+    prepare_j613_setup(0x3ff, 1);
+    u64 timer = 700;
+    hset("/arm-io/sgx", "gpu-idleoff-standby-timer", &timer, sizeof(timer));
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("ADT: GPU: malformed gpu-idleoff-standby-timer (len 8)"));
+    assert(prop_len(dtbuf, "/soc/gpu@292400000", "apple,idleoff-standby-timer") < 0);
+}
+
+static void set_j613_sram(u32 pstate, u32 mv)
+{
+    int node = adt_path_offset(adt, "/arm-io/sgx");
+    u32 len = 0;
+    struct perf_state *sram = (struct perf_state *)adt_getprop(adt, node, "perf-states-sram", &len);
+    assert(sram && len == 14 * sizeof(*sram));
+    sram[pstate].volt = mv;
+}
+
+static void t8122_j613_standin_sram_above(void)
+{
+    /*
+     * SRAM above max(core, floor) at any pstate cannot be passed on (the kernel would give it
+     * less): refused before the GPU is powered. Here the top pstate asks for core + 25 mV.
+     */
+    prepare_j613_setup(0x3ff, 1);
+    set_j613_sram(13, 960);
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("ADT: GPU: perf state 0/13 SRAM 960 mV is above max(core 935 mV, floor 790 mV); "
+                   "not supported"));
+    assert(log_has("T8122 GPU setup failed"));
+    assert(prop_len(dtbuf, "/soc/gpu@292400000", "apple,min-sram-microvolt") < 0);
+}
+
+static void t8122_j613_standin_sram_above_floor(void)
+{
+    /* The same below the core voltage: pstate 1 (630 mV core) asks for 800 mV, above the floor */
+    prepare_j613_setup(0x3ff, 1);
+    set_j613_sram(1, 800);
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("ADT: GPU: perf state 0/1 SRAM 800 mV is above max(core 630 mV, floor 790 mV); "
+                   "not supported"));
+}
+
+static void t8122_j613_standin_sram_below(void)
+{
+    /* SRAM below max(core, floor) is fine: the kernel then gives it more, not less */
+    prepare_j613_setup(0x3ff, 1);
+    set_j613_sram(13, 930);
+    run();
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "okay"));
+    assert(gpu_u32("apple,min-sram-microvolt") == 790000);
+    assert(log_has("T8122 GPU enabled"));
+}
+
+static void t8122_j613_standin_idleoff(void)
+{
+    /* An ADT idle-off standby timer is added too */
+    prepare_j613_setup(0x3ff, 1);
+    hset_u32("/arm-io/sgx", "gpu-idleoff-standby-timer", 700);
+    run();
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "okay"));
+    assert(gpu_u32("apple,idleoff-standby-timer") == 700);
+    assert(log_has("FDT: GPU: 42 power-management properties added from the ADT"));
+}
+
+static void t8122_j613_standin_g15s_image(void)
+{
+    /* The experiment accepts only the listed G15G image: a G15S image is not identified */
+    prepare_j613_setup(0x3ff, 1);
+    memcpy(&fw_hdr[5], g15s_a0_uuid, sizeof(g15s_a0_uuid));
+    fw_hdr[11] = 0x58e88;
+    fw_hdr[13] = 0x5c000;
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!pmgr_enables && !mmio_reads);
+    assert(log_has("FW: GFX: unknown GPU firmware image, not identified"));
+    assert(log_has("loaded GPU firmware is not a known ABI"));
+}
+
+static void t8122_j613_standin_no_room(void)
+{
+    /*
+     * Room for the OPP table but not for the power-management properties: everything is undone
+     * and the GPU power released
+     */
+    prepare_j613_setup(0x3ff, 1);
+    fdt_pack(dtbuf);
+    CHK(fdt_open_into(dtbuf, dtbuf, fdt_totalsize(dtbuf) + 0x700));
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "disabled"));
+    assert(log_has("failed to add the power-management properties"));
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+    assert(unguarded_faults == 0);
+}
+
+static void t8122_j613_standin_wrong_id(void)
+{
+    /* A failure after the power-on (here the GPU ID) releases the power, as without the switch */
+    prepare_j613_setup(0x3ff, 1);
+    mmio_set(SGX_BASE + 0xd04000, 0x07032000, 0);
+    run();
+    expect_gpu_off(dtbuf);
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+    assert(log_has("not a G15G"));
+}
 #endif
 
 static const struct {
@@ -1063,9 +1559,13 @@ static const struct {
     {"t6030-tiny-dt", t6030_tiny_dt},
     {"t6030-no-alias", t6030_no_alias},
     {"t6030-wrong-compat", t6030_wrong_compat},
-#ifdef G15_NEW
+    {"t6030-standin-switch", t6030_standin_switch},
+#if defined(G15_NEW) || defined(G15_T8122_BASE)
     {"t8122-default", t8122_default},
     {"t8122-armed-refuses", t8122_armed_refuses},
+    {"t8122-j613-switch-off", t8122_j613_switch_off},
+#endif
+#ifdef G15_NEW
     {"t8122-pipeline", t8122_pipeline},
     {"t8122-closure-on", t8122_closure_on},
     {"t8122-wrong-id", t8122_wrong_id},
@@ -1083,6 +1583,20 @@ static const struct {
     {"t8122-j613-image-admitted", t8122_j613_image_admitted},
     {"t8122-asc-preflight-enables", t8122_asc_preflight_enables},
     {"t8122-asc-preflight-full-optin-noop", t8122_asc_preflight_full_optin_noop},
+    {"t8122-j613-standin-10", t8122_j613_standin_10},
+    {"t8122-j613-standin-8", t8122_j613_standin_8},
+    {"t8122-j613-standin-only", t8122_j613_standin_only},
+    {"t8122-j613-standin-missing-value", t8122_j613_standin_missing_value},
+    {"t8122-j613-standin-bad-mask-size", t8122_j613_standin_bad_mask_size},
+    {"t8122-j613-standin-bad-sram", t8122_j613_standin_bad_sram},
+    {"t8122-j613-standin-idleoff", t8122_j613_standin_idleoff},
+    {"t8122-j613-standin-idleoff-malformed", t8122_j613_standin_idleoff_malformed},
+    {"t8122-j613-standin-sram-above", t8122_j613_standin_sram_above},
+    {"t8122-j613-standin-sram-above-floor", t8122_j613_standin_sram_above_floor},
+    {"t8122-j613-standin-sram-below", t8122_j613_standin_sram_below},
+    {"t8122-j613-standin-g15s-image", t8122_j613_standin_g15s_image},
+    {"t8122-j613-standin-no-room", t8122_j613_standin_no_room},
+    {"t8122-j613-standin-wrong-id", t8122_j613_standin_wrong_id},
 #endif
 };
 
