@@ -1027,6 +1027,37 @@ static void calc_power_t6030(u32 count, const struct perf_state *core, float lea
     }
 }
 
+/*
+ * T8122 (G15G) stand-in power model, for experiments only: G15G's leakage fuse and power model are
+ * not known, so these numbers are not measured.
+ * - Scaling: calc_power_t6030() for the Air's enabled cores (8 or 10). Its dynamic term is per
+ *   G15S core, so it comes to enabled_cores / G15S_MAX_CORES of a G15S's.
+ * - Why it overstates: the static term is not scaled down, although G15G has one cluster of 10
+ *   core slots where G15S has two, and the leakage is twice the value fused into the J516S M3
+ *   Pro's G15S (3206): about four times the J516S's static power per core slot.
+ * It is not a power limit and does not lower clocks: drm/asahi sets the firmware's power targets
+ * to the largest OPP power, so they rise with this table. The kernel's performance-state cap is
+ * what limits the clocks. To be replaced by measured numbers.
+ */
+#define G15G_STANDIN_LEAK 6412.0f
+
+static int g15g_standin_read_leak(const struct g15_soc *soc, float *leak)
+{
+    UNUSED(soc);
+    *leak = G15G_STANDIN_LEAK;
+    return 0;
+}
+
+static void calc_power_t8122_standin(u32 count, const struct perf_state *core, float leak,
+                                     u32 enabled_cores, u32 *max_pwr)
+{
+    printf("FDT: GPU: T8122 power model: stand-in (not measured; does not limit clocks)\n");
+    printf("FDT: GPU: T8122 stand-in: G15S model, dynamic power for %u of %u G15S cores, static "
+           "power unscaled\n",
+           enabled_cores, G15S_MAX_CORES);
+    calc_power_t6030(count, core, leak, enabled_cores, max_pwr);
+}
+
 /* Replace all children of the operating-points-v2 table with one OPP per ADT pstate. */
 static int g15_set_opps(void *dt, u32 opps_ph, u32 count, u32 table_count, u32 clusters,
                         const struct perf_state *perf_states, const u32 *max_pwr)
@@ -1719,7 +1750,8 @@ static void g15_disable(void *dt)
  *   recursively and checks that it is off again (as the T8122 powered identity probe does);
  * - the gpu node's mailbox is enabled with it when the DT keeps it disabled (see g15_get_mbox()).
  * Not known yet, so an armed T8122 setup stops before it touches the GPU: the G15G firmware images
- * (firmware_gfx_version() has none for T8122), the leakage fuse and the power model.
+ * (firmware_gfx_version() has none for T8122), the leakage fuse and the power model. The stand-in
+ * experiment (g15_soc_t8122_standin) fills these in.
  */
 static const struct g15_soc g15_soc_t6030 = {
     .chip = T6030,
@@ -1747,6 +1779,29 @@ static const struct g15_soc g15_soc_t8122 = {
     .dies = 1,
     .mask2_bits = 32,
     .power_closure = true,
+};
+
+/*
+ * The T8122 experiment, armed by chosen.asahi,t8122-gpu=1 together with
+ * chosen.asahi,t8122-gpu-power-standin=1: g15_soc_t8122, plus the experimental G15G firmware
+ * image, the stand-in leakage and power model, and the ADT's power-management values on the gpu
+ * node (drm/asahi takes them from the boot loader on T8122).
+ */
+static const struct g15_soc g15_soc_t8122_standin = {
+    .chip = T8122,
+    .name = "T8122",
+    .gpu_name = "G15G",
+    .compatible = "apple,agx-t8122",
+    .optin = "asahi,t8122-gpu",
+    .id_gen = 7,
+    .id_variant = 2,
+    .dies = 1,
+    .mask2_bits = 32,
+    .power_closure = true,
+    .fw_experimental = true,
+    .power_props = true,
+    .read_leak = g15g_standin_read_leak,
+    .calc_power = calc_power_t8122_standin,
 };
 
 /* Whether /chosen has `name` = "1" */
@@ -1999,15 +2054,28 @@ static int dt_set_gpu_t8122(void *dt);
 /*
  * T8122: the GPU setup runs only with chosen.asahi,t8122-gpu=1; there is no dry run on a default
  * boot. Without it, the reservation-only diagnostic (dt_set_gpu_t8122()) runs if it is opted in.
+ * With chosen.asahi,t8122-gpu-power-standin=1 as well, the setup is the stand-in experiment
+ * (g15_soc_t8122_standin); on its own that line is only logged as ignored.
  */
 static int dt_set_gpu_t8122_select(void *dt)
 {
-    if (!g15_optin(dt, g15_soc_t8122.optin))
+    bool standin = g15_optin(dt, "asahi,t8122-gpu-power-standin");
+
+    if (!g15_optin(dt, g15_soc_t8122.optin)) {
+        if (standin)
+            printf("FDT: GPU: asahi,t8122-gpu-power-standin ignored: it needs "
+                   "chosen.asahi,t8122-gpu=1\n");
         return dt_set_gpu_t8122(dt);
+    }
 
     if (g15_optin(dt, "asahi,t8122-gpu-handoff-diag"))
         printf("FDT: GPU: asahi,t8122-gpu-handoff-diag ignored: chosen.asahi,t8122-gpu=1 runs "
                "the GPU setup\n");
+    if (standin) {
+        printf("FDT: GPU: T8122 experiment armed (chosen.asahi,t8122-gpu-power-standin=1): "
+               "experimental G15G firmware image, stand-in power model\n");
+        return dt_set_gpu_g15(dt, &g15_soc_t8122_standin);
+    }
     return dt_set_gpu_g15(dt, &g15_soc_t8122);
 }
 
