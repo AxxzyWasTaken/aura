@@ -224,6 +224,11 @@ void firmware_parse_version(const char *s, u32 *out);
  * a known image of the SoC `chip`
  */
 const struct fw_version_info *firmware_gfx_version(u32 chip);
+/*
+ * The same, but with `experimental` also accepting the images listed as experimental: their ABI is
+ * taken to be that of the version they are listed with, without having been validated
+ */
+const struct fw_version_info *firmware_gfx_version_ex(u32 chip, bool experimental);
 
 /* Diagnostic identity only. A valid header does not establish a supported GPU ABI. */
 struct gfx_fw_image_info {

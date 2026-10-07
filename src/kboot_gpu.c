@@ -573,6 +573,8 @@ struct g15_soc {
      * it recursively and checks that it is off again.
      */
     bool power_closure;
+    /* Also accept the firmware images firmware.c lists as experimental */
+    bool fw_experimental;
     /* NULL while not known: the setup then stops before it touches the GPU */
     int (*read_leak)(const struct g15_soc *soc, float *leak);
     void (*calc_power)(u32 count, const struct perf_state *core, float leak, u32 enabled_cores,
@@ -1629,7 +1631,7 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
      * 14.8.3 and 14.7 share one iBoot string. Nothing else (in particular no GPU
      * register) is touched unless it is positively the 14.8.3 G15 ABI drm/asahi supports.
      */
-    const struct fw_version_info *gfx_fw = firmware_gfx_version(soc->chip);
+    const struct fw_version_info *gfx_fw = firmware_gfx_version_ex(soc->chip, soc->fw_experimental);
     bool have_model = soc->read_leak && soc->calc_power;
     if (!have_model)
         printf("FDT: GPU: the %s leakage fuse and power model are not known yet\n", soc->gpu_name);

@@ -324,6 +324,7 @@ struct gfx_fw_image {
     u32 patchbay_off;
     u32 patchbay_size;
     u32 text_size;
+    bool experimental; /* identified only by firmware_gfx_version_ex(chip, true) */
 };
 
 // clang-format off
@@ -336,10 +337,14 @@ static const struct gfx_fw_image gfx_fw_images[] = {
                                        0x94, 0x41, 0x99, 0x50, 0x18, 0x78, 0x29, 0x55},
      0x58e88, 0x1e8, 0x5c000},
     /*
-     * T8122 (M3, G15G): no image is listed yet, so firmware_gfx_version(T8122) identifies nothing.
-     * An entry needs the UUID, patchbay offset/size and text size that firmware_gfx_version()
-     * logs ("FW: GFX: image uuid ...") for the image loaded on an M3 Air.
+     * T8122 (M3, G15G): the image iBoot loads on the M3 Air (J613, chip revision C0, RTKit
+     * 2419.140.12). Experimental: its ABI is taken to be the 14.8.3 G15S one and is not validated,
+     * so firmware_gfx_version(T8122) still identifies nothing and only the opt-in T8122 experiment
+     * accepts it.
      */
+    {T8122, V14_8_3, "g15g build c0", {0xdf, 0x69, 0x7f, 0x05, 0xf6, 0xb5, 0x33, 0xef,
+                                       0xa1, 0x37, 0x61, 0xc4, 0xa7, 0x3d, 0x66, 0x6a},
+     0x5d54a, 0x1e8, 0x64000, true},
 };
 // clang-format on
 
@@ -456,9 +461,10 @@ bool firmware_gfx_rtkit_version(char out[GFX_FW_VERSION_MAX])
 
 /*
  * Returns the firmware version whose GPU ABI is loaded in gfx-asc memory, or NULL if the loaded
- * image could not be positively identified as one of `chip`'s known images. Never faults the boot.
+ * image could not be positively identified as one of `chip`'s known images (with `experimental`,
+ * the experimental ones included). Never faults the boot.
  */
-const struct fw_version_info *firmware_gfx_version(u32 chip)
+const struct fw_version_info *firmware_gfx_version_ex(u32 chip, bool experimental)
 {
     int node = adt_path_offset(adt, "/arm-io/gfx-asc");
     if (node < 0) {
@@ -514,7 +520,7 @@ const struct fw_version_info *firmware_gfx_version(u32 chip)
         for (size_t j = 0; j < ARRAY_SIZE(gfx_fw_images); j++) {
             const struct gfx_fw_image *img = &gfx_fw_images[j];
 
-            if (img->chip != chip)
+            if (img->chip != chip || (img->experimental && !experimental))
                 continue;
             if (memcmp(uuid, img->uuid, sizeof(img->uuid)) || hdr[11] != img->patchbay_off ||
                 hdr[12] != img->patchbay_size || hdr[13] != img->text_size)
@@ -534,6 +540,11 @@ const struct fw_version_info *firmware_gfx_version(u32 chip)
 
     printf("FW: GFX: no image-info header found, GPU firmware not identified\n");
     return NULL;
+}
+
+const struct fw_version_info *firmware_gfx_version(u32 chip)
+{
+    return firmware_gfx_version_ex(chip, false);
 }
 
 int firmware_init(void)
