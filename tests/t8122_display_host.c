@@ -399,7 +399,9 @@ static u32 ttbr_of(u64 l1)
 /* ---- the J613-shaped world ---- */
 
 #define TB         0x10000000000ULL
-#define J613_UUID  "90F849E1-B422-367E-B389-50246F8DEC47"
+static bool fw25;
+#define J613_UUID (fw25 ? "C042E95C-B9D8-3F0E-94B3-582A08AA6FDD" : "90F849E1-B422-367E-B389-50246F8DEC47")
+#define HANDOFF (fw25 ? "apple,j613-25g83-mapping-handoff" : "apple,t8122-handoff")
 #define DART_DCP   0x28d30c000ULL
 #define DART_DISP0 0x28d304000ULL
 #define DCP_COPROC 0x28ec00000ULL
@@ -569,7 +571,7 @@ static bool available(const void *dt, int node)
 static bool marker_set(const void *dt, int node)
 {
     int len;
-    const fdt32_t *v = fdt_getprop(dt, node, "apple,t8122-handoff", &len);
+    const fdt32_t *v = fdt_getprop(dt, node, HANDOFF, &len);
     return v && len == 4 && fdt32_ld(v) == 1;
 }
 
@@ -720,8 +722,8 @@ static int contract_check(const void *dt)
     check(uuid && !strcmp(uuid, J613_UUID), "drm: dcp apple,firmware-uuid is %s", J613_UUID);
     int len;
     const fdt32_t *compat = fdt_getprop(dt, dcp, "apple,firmware-compat", &len);
-    check(compat && len == 12 && fdt32_ld(compat) == 14 && fdt32_ld(compat + 1) == 7 &&
-              fdt32_ld(compat + 2) == 0,
+    check(compat && len == 12 && fdt32_ld(compat) == (fw25 ? 26 : 14) && fdt32_ld(compat + 1) == (fw25 ? 6 : 7) &&
+              fdt32_ld(compat + 2) == (fw25 ? 2 : 0),
           "drm: dcp apple,firmware-compat is 14.7.0");
 
     int oslog = segment_region(dt, dcp, SEG_OSLOG);
@@ -748,7 +750,7 @@ static int contract_check(const void *dt)
     int pio = fdt_subnode_offset(dt, dcp, "piodma");
     u32 sid_pio = ~0u;
     int dart_pio = pio >= 0 ? single_ref(dt, pio, "iommus", 1, &sid_pio) : -1;
-    check(pio >= 0 && available(dt, pio) && marker_set(dt, pio),
+    check(pio >= 0 && (fw25 ? status_is(dt, pio, "disabled") : available(dt, pio)) && marker_set(dt, pio),
           "drm: the dcp has an available \"piodma\" child marked apple,t8122-handoff");
     check(pio >= 0 && dart_pio == dart_disp && sid_pio == 4,
           "drm: piodma iommus is the display's DART, stream 4");
@@ -831,7 +833,7 @@ static void contract_selftest(const void *published)
                 ret = fdt_delprop(copy, disp, "memory-region-names");
                 break;
             case 1:
-                ret = fdt_setprop_string(copy, pio, "status", "disabled");
+                ret = fdt_setprop_string(copy, pio, "status", fw25 ? "okay" : "disabled");
                 break;
             case 2: {
                 fdt32_t v[3] = {cpu_to_fdt32(14), cpu_to_fdt32(8), cpu_to_fdt32(3)};
@@ -842,7 +844,7 @@ static void contract_selftest(const void *published)
                 ret = fdt_delprop(copy, segment_region(copy, dcp, SEG_OSLOG), "apple,dcp-os-log");
                 break;
             case 4:
-                ret = fdt_delprop(copy, disp, "apple,t8122-handoff");
+                ret = fdt_delprop(copy, disp, HANDOFF);
                 break;
             case 5: {
                 int i = fdt_stringlist_search(copy, disp, "memory-region-names", "framebuffer");
@@ -867,6 +869,7 @@ int main(int argc, char **argv)
         return 2;
     }
     const char *sc = argv[2];
+    fw25 = getenv("J613_25G83") != NULL;
     struct opts o = {0};
     bool publish = true;
     if (!strcmp(sc, "unarmed")) {
@@ -887,6 +890,10 @@ int main(int argc, char **argv)
     } else if (!strcmp(sc, "power-off")) {
         o.armed = o.power_off = true;
         publish = false;
+    } else if (!strcmp(sc, "missing-clock") || !strcmp(sc, "wrong-os") ||
+               !strcmp(sc, "missing-profile")) {
+        o.armed = true;
+        publish = false;
     } else {
         fprintf(stderr, "unknown scenario %s\n", sc);
         return 2;
@@ -901,6 +908,23 @@ int main(int argc, char **argv)
         return 2;
 
     world_j613(&o);
+    if (fw25) {
+        os_firmware = (struct fw_version_info){V26_6_2, "26.6.2", {26, 6, 2}, 3, "mBoot-18000.161.10"};
+        int dcp = fdt_path_offset(dt, "dcp");
+        fdt_setprop_u32(dt, dcp, "apple,j613-25g83-profile", 1);
+        fdt32_t compat[] = {cpu_to_fdt32(26), cpu_to_fdt32(6), cpu_to_fdt32(2)};
+        fdt_setprop(dt, fdt_path_offset(dt, "dcp"), "apple,firmware-compat", compat, sizeof(compat));
+        fdt_setprop_string(dt, fdt_path_offset(dt, "disp0-piodma"), "status", "disabled");
+        u32 ids[2] = {345, 416}, frequencies[161] = {0};
+        frequencies[89] = 712000000;
+        prop_set("/arm-io/disp0", "clock-ids", ids, sizeof(ids));
+        if (strcmp(sc, "missing-clock"))
+            prop_set("/arm-io", "clock-frequencies", frequencies, sizeof(frequencies));
+        if (!strcmp(sc, "wrong-os"))
+            os_firmware.version = V14_7;
+        if (!strcmp(sc, "missing-profile"))
+            fdt_delprop(dt, fdt_path_offset(dt, "dcp"), "apple,j613-25g83-profile");
+    }
     if (o.armed)
         fdt_setprop_string(dt, fdt_path_offset(dt, "/chosen"), "asahi,t8122-dcp", "1");
 
@@ -923,8 +947,18 @@ int main(int argc, char **argv)
     if (!o.armed)
         check(mmio_writes == 0, "unarmed: no MMIO write");
 
-    if (publish)
+    if (publish) {
         contract_check(dt);
+        if (fw25) {
+            int len, chosen = fdt_path_offset(dt, "/chosen");
+            const fdt32_t *clock = fdt_getprop(dt, chosen, "apple,j613-25g83-display-clock-adt", &len);
+            check(clock && len == 20 && fdt32_ld(clock) == 1 && fdt32_ld(clock+1) == 345 &&
+                  fdt32_ld(clock+2) == 416 && fdt32_ld(clock+3) == 712000000 && !fdt32_ld(clock+4),
+                  "25G83 same-boot clock cells");
+            check(!fdt_getprop(dt, fdt_path_offset(dt, "dcp"), "apple,t8122-handoff", NULL),
+                  "25G83 never publishes 14.x marker");
+        }
+    }
     else
         refusal_check(dt);
     if (!strcmp(sc, "contract-selftest"))

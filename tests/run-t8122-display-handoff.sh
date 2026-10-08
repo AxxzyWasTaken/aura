@@ -33,10 +33,12 @@ dtbs="$tmp/fixture.dtb"
 [ -n "${J613_DTB:-}" ] && dtbs="$dtbs $J613_DTB"
 
 fail=0
+extra=""
+[ -n "${J613_25G83:-}" ] && extra="missing-clock wrong-os missing-profile"
 for dtb in $dtbs; do
     echo "### $(basename "$dtb")"
     for s in unarmed publish repeat wrong-image not-running outside-segment power-off \
-        contract-selftest; do
+        contract-selftest $extra; do
         if ! "$tmp/t8122-display-host" "$dtb" "$s" > "$tmp/$s.log" 2>&1; then
             fail=1
             cat "$tmp/$s.log"

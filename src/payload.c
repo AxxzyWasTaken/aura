@@ -9,6 +9,7 @@
 #include "chainload.h"
 #include "cpufreq.h"
 #include "display.h"
+#include "firmware.h"
 #include "heapblock.h"
 #include "kboot.h"
 #include "mitigations.h"
@@ -16,6 +17,7 @@
 #include "utils.h"
 
 #include "libfdt/libfdt.h"
+#include "payload_profile.h"
 #include "minilzlib/minlzma.h"
 #include "tinf/tinf.h"
 
@@ -42,6 +44,7 @@ static const u8 custom_logo_magic[] = {'m', '1', 'n', '1', '_', 'l', 'o', 'g',
 static char expect_compatible[256];
 static struct kernel_header *kernel = NULL;
 static void *fdt = NULL;
+static int fdt_rank;
 static char *chainload_spec = NULL;
 
 static void *load_one_payload(void *start, size_t size);
@@ -111,9 +114,11 @@ static void *decompress_xz(void *p, size_t size)
 
 static void *load_fdt(void *p, size_t size)
 {
-    if (fdt_node_check_compatible(p, 0, expect_compatible) == 0) {
+    int rank = payload_profile_rank(p, os_firmware.version == V26_6_2);
+    if (rank && rank >= fdt_rank && fdt_node_check_compatible(p, 0, expect_compatible) == 0) {
         printf("Found a devicetree for %s at %p\n", expect_compatible, p);
         fdt = p;
+        fdt_rank = rank;
     }
     assert(!size || size == fdt_totalsize(p));
     return ((u8 *)p) + fdt_totalsize(p);

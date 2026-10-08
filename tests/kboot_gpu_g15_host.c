@@ -18,6 +18,9 @@
 #include <string.h>
 
 #include "kboot_gpu.c"
+#ifdef G15_FW26
+#include "kboot_gpu26.c"
+#endif
 
 /* ---------- m1n1 globals and stubs ---------- */
 
@@ -1736,10 +1739,113 @@ static void t8122_j613_standin_fuse_not_j613(void)
 }
 #endif
 
+#ifdef G15_FW26
+static void prepare_25(int intent, int fault)
+{
+    prepare_j613_standin_fuse(1, fault);
+    os_firmware = fw_versions[V26_6_2];
+    hset("/arm-io/sgx", "compatible", "gpu,t8122", sizeof("gpu,t8122"));
+    struct adt_segment_ranges seg[2] = {
+        {J613_FW_TEXT, FW_VA, J613_FW_TEXT, 0x60000, 1},
+        {J613_FW_DATA, FW_VA + 0x60000, J613_FW_DATA, 0x12c000, 0},
+    };
+    hset("/arm-io/gfx-asc", "segment-ranges", seg, sizeof(seg));
+    hset("/arm-io/gfx-asc/iop-gfx-nub", "segment-ranges", seg, sizeof(seg));
+    int dcp = fdt_add_subnode(dtbuf, fdt_path_offset(dtbuf, "/soc"), "dcp");
+    CHK(dcp);
+    CHK(fdt_setprop_u32(dtbuf, dcp, "apple,j613-25g83-profile", 1));
+    fdt32_t compat[] = {cpu_to_fdt32(26), cpu_to_fdt32(6), cpu_to_fdt32(2)};
+    CHK(fdt_setprop(dtbuf, dcp, "apple,firmware-compat", compat, sizeof(compat)));
+    CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/aliases"), "dcp", "/soc/dcp"));
+    if (!intent)
+        CHK(fdt_delprop(dtbuf, fdt_path_offset(dtbuf, "/chosen"), "asahi,t8122-gpu"));
+}
+static void t8122_25_calibrated(void)
+{
+    prepare_25(1, 0);
+    run();
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "okay"));
+    assert(gpu_u32("apple,j613-25g83-gpu-handoff") == 1);
+    assert(gpu_u32("apple,gpu-power-model") == 1);
+    int len;
+    const fdt32_t *compat = gpu_prop("apple,firmware-compat", &len);
+    assert(compat && len == 12 && fdt32_ld(compat) == 26 && fdt32_ld(compat+1) == 6 && fdt32_ld(compat+2) == 2);
+    assert(gpu_u32("apple,m3-handoff-version") == 1);
+    assert(fdt_stringlist_search(dtbuf, fdt_path_offset(dtbuf, "/soc/gpu@292400000"), "memory-region-names", "fw-data") >= 0);
+    int opp = fdt_path_offset(dtbuf, "/opp-table-gpu/opp01");
+    const fdt32_t *sram = fdt_getprop(dtbuf, opp, "opp-microvolt-sram", &len);
+    assert(sram && len == 4 && fdt32_ld(sram) == 790000);
+    const fdt32_t *power = fdt_getprop(dtbuf, opp, "opp-microwatt", &len);
+    assert(power && len == 4 && fdt32_ld(power) > 0);
+    assert(!strcmp(status_of(dtbuf, "/soc/mbox@292408000"), "okay"));
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+}
+static void t8122_25_no_intent(void)
+{
+    prepare_25(0, 0); run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!pmgr_enables);
+}
+static void t8122_25_no_fuse(void)
+{
+    prepare_25(1, 1); run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!pmgr_enables && prop_len(dtbuf, "/soc/gpu@292400000", "apple,j613-25g83-gpu-handoff") < 0);
+}
+static void t8122_25_wrong_os(void)
+{
+    prepare_25(1, 0); os_firmware = fw_versions[V14_7]; run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!pmgr_enables && prop_len(dtbuf, "/soc/gpu@292400000", "apple,j613-25g83-gpu-handoff") < 0);
+}
+static void t8122_25_wrong_input_compat(void)
+{
+    prepare_25(1, 0);
+    fdt32_t compat[] = {cpu_to_fdt32(14), cpu_to_fdt32(8), cpu_to_fdt32(3)};
+    CHK(fdt_setprop(dtbuf, fdt_path_offset(dtbuf, "dcp"), "apple,firmware-compat", compat, sizeof(compat)));
+    run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!pmgr_enables && prop_len(dtbuf, "/soc/gpu@292400000", "apple,j613-25g83-gpu-handoff") < 0);
+}
+static void t8122_25_missing_calibration(void)
+{
+    prepare_25(1, 0); hdel("/arm-io/sgx", "perf-states-sram"); run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!pmgr_enables && prop_len(dtbuf, "/soc/gpu@292400000", "apple,j613-25g83-gpu-handoff") < 0);
+}
+static void t8122_25_short_calibration(void)
+{
+    prepare_25(1, 0); u32 short_sram = 790;
+    hset("/arm-io/sgx", "perf-states-sram", &short_sram, sizeof(short_sram));
+    run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!pmgr_enables);
+}
+static void t8122_25_overflow_voltage(void)
+{
+    prepare_25(1, 0); struct perf_state sram[14] = {{0}};
+    for (int i=1; i<14; i++) sram[i].volt = ~0u;
+    hset("/arm-io/sgx", "perf-states-sram", sram, sizeof(sram));
+    run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!pmgr_enables);
+}
+static void t8122_25_identity_failure(void)
+{
+    prepare_25(1, 0); mmio_set(SGX_BASE + G15_SGX_ID_VERSION, 0, 1);
+    run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+}
+#endif
+
 static const struct {
     const char *name;
     void (*fn)(void);
 } scenarios[] = {
+#ifdef G15_FW26
+    {"t8122-25-calibrated", t8122_25_calibrated},
+    {"t8122-25-wrong-input-compat", t8122_25_wrong_input_compat},
+    {"t8122-25-short-calibration", t8122_25_short_calibration},
+    {"t8122-25-overflow-voltage", t8122_25_overflow_voltage},
+    {"t8122-25-identity-failure", t8122_25_identity_failure},
+    {"t8122-25-no-intent", t8122_25_no_intent},
+    {"t8122-25-no-fuse", t8122_25_no_fuse},
+    {"t8122-25-wrong-os", t8122_25_wrong_os},
+    {"t8122-25-missing-calibration", t8122_25_missing_calibration},
+#endif
     {"t6030-dry", t6030_dry},
     {"t6030-armed", t6030_armed},
     {"t6030-unknown-fw", t6030_unknown_fw},

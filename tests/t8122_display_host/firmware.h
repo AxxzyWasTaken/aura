@@ -9,6 +9,7 @@ enum fw_version {
     V14_6 = 99,
     V14_7 = 100,
     V14_8_3 = 101,
+    V26_6_2 = 102,
 };
 struct fw_version_info {
     enum fw_version version;

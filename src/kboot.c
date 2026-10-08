@@ -2251,6 +2251,9 @@ static int dt_fill_pmp(int pmp_node)
 /* The device tree's pmp node (M1 Pro/Max/Ultra, M2, M2 Pro/Max/Ultra): as upstream has it */
 static int dt_set_pmp(void)
 {
+    /* J613 25G83 static topology is enabled only by the kernel handoff gate. */
+    if (chip_id == T8122)
+        return 0;
     int pmp_node = fdt_path_offset(dt, "pmp");
     if (pmp_node < 0) {
         printf("FDT: pmp not found in devtree\n");
@@ -2327,7 +2330,8 @@ static void dt_pass_pmp(const struct pmp_values_soc *soc)
     bool where;
     char path[40];
 
-    if (fdt_node_check_compatible(dt, 0, soc->compat) || fdt_path_offset(dt, "pmp") >= 0)
+    if (fdt_node_check_compatible(dt, 0, soc->compat) ||
+        (fdt_path_offset(dt, "pmp") >= 0 && chip_id != T8122))
         return;
 
     chosen = fdt_path_offset(dt, "/chosen");

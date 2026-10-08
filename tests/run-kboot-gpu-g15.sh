@@ -25,6 +25,10 @@ build() { # build <tree> <out> [extra cflags]; the test file is this tree's, or 
     cp "$tree/src/kboot_gpu.c" "$tree/src/firmware.c" "$out/src/"
     cp "$tests"/tests/g15_host/*.h "$tests/tests/kboot_gpu_g15_host.c" "$out/src/"
     extra=
+    if [ -f "$tree/src/kboot_gpu26.c" ]; then
+        cp "$tree/src/kboot_gpu26.c" "$out/src/"
+        set -- "$@" -DG15_FW26
+    fi
     [ -f "$tree/src/kboot_gpu_t8122_power.c" ] && extra="$tree/src/kboot_gpu_t8122_power.c"
     ${CC:-cc} -std=gnu11 -D_GNU_SOURCE -O1 -g -Wall -Wno-unused-function \
         -Wno-format-truncation -fsanitize=address,undefined -fno-omit-frame-pointer \

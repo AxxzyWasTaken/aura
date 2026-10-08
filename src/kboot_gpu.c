@@ -1849,6 +1849,69 @@ static const struct g15_soc g15_soc_t8122_standin = {
     .calc_power = calc_power_t8122_standin,
 };
 
+/* 25G83 calibration on the scratch DT: this Mac's ADT and fuse, no unit tables.
+ * The G15S-derived power model remains experimental. Release every power vote
+ * after the bounded identity read; Linux owns firmware admission and startup.
+ */
+int dt_gpu_t8122_26_calibrate(void *dt)
+{
+    int gpu = fdt_path_offset(dt, "gpu"), sgx = adt_path_offset(adt, "/arm-io/sgx");
+    u32 count, tables, clusters, enabled, cores[G15_MAX_CLUSTERS], power[MAX_PSTATES];
+    const struct perf_state *ps;
+    struct g15_power_values pv;
+    if (gpu < 0 || sgx < 0 || !t8122_fuse_valid ||
+        g15_get_pstates(&g15_soc_t8122_standin, sgx, &count, &tables, &ps) ||
+        g15_get_power_props(sgx, count, tables, ps, &pv))
+        return -1;
+    int len;
+    const fdt32_t *ref = fdt_getprop(dt, gpu, "operating-points-v2", &len);
+    if (!ref || len != 4)
+        return -1;
+    u32 opps = fdt32_ld(ref);
+    bool previous = t8122_fuse_use;
+    t8122_fuse_use = true;
+    g15_powered = false;
+    float leak;
+    int ret = g15_read_hw(dt, gpu, &g15_soc_t8122_standin, cores, &clusters, &enabled, &leak);
+    t8122_fuse_use = previous;
+    if (g15_powered && (pmgr_adt_power_disable_recursive("/arm-io/sgx") ||
+                       pmgr_adt_power_is_off("/arm-io/sgx") != 1))
+        ret = -1;
+    g15_powered = false;
+    if (ret || tables > clusters)
+        return -1;
+    calc_power_t8122_standin(count, ps, leak, enabled, power);
+    if (power[count - 1] < 1000 ||
+        g15_set_opps(dt, opps, count, tables, clusters, ps, power) ||
+        g15_set_power_props(dt, &pv) ||
+        g15_set_float_array(dt, "apple,core-leak-coef", leak, clusters) ||
+        g15_set_float_array(dt, "apple,sram-leak-coef", 0.0f, clusters))
+        return -1;
+    u32 sram_len;
+    const struct perf_state *sram = adt_getprop(adt, sgx, "perf-states-sram", &sram_len);
+    if (!sram || sram_len != sizeof(*sram) * count * tables)
+        return -1;
+    int table = fdt_node_offset_by_phandle(dt, opps), node, i = 0;
+    fdt_for_each_subnode(node, dt, table) {
+        if (i >= (int)count)
+            return -1;
+        fdt32_t voltage[G15_MAX_CLUSTERS];
+        for (u32 t = 0; t < clusters; t++) {
+            u32 mv = t < tables ? sram[t * count + i].volt : 0;
+            voltage[t] = cpu_to_fdt32((mv ? mv : sram[i].volt) * 1000);
+        }
+        if (fdt_setprop(dt, node, "opp-microvolt-sram", voltage, clusters * sizeof(fdt32_t)))
+            return -1;
+        i++;
+    }
+    gpu = fdt_path_offset(dt, "gpu");
+    if (i != (int)count || gpu < 0 ||
+        fdt_setprop_u32(dt, gpu, "apple,gpu-power-model", 1))
+        return -1;
+    return fdt_setprop_string(dt, gpu, "apple,j613-gpu-power-model",
+                             "g15s-fuse-scaled-experimental");
+}
+
 /* Whether /chosen has `name` = "1" */
 static bool g15_optin(void *dt, const char *name)
 {
@@ -2530,8 +2593,16 @@ int dt_set_gpu(void *dt)
             break;
         case T6030:
             return dt_set_gpu_g15(dt, &g15_soc_t6030);
-        case T8122:
+        case T8122: {
+            int dcp = fdt_path_offset(dt, "dcp"), len;
+            const fdt32_t *profile = dcp < 0 ? NULL :
+                fdt_getprop(dt, dcp, "apple,j613-25g83-profile", &len);
+            if (profile && len == 4 && fdt32_ld(profile) == 1) {
+                t8122_leak_fuse_export(dt);
+                return dt_set_gpu_t8122_26(dt);
+            }
             return dt_set_gpu_t8122_select(dt);
+        }
         default:
             printf("ADT: GPU: unsupported chip!\n");
             return 0;

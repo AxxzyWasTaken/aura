@@ -202,6 +202,7 @@ struct dcp_soc {
     bool oslog_always;  /* reserve the __OS_LOG buffers on every boot, even when not armed */
     bool describe;      /* log the ADT values the handoff and the device tree need */
     bool adt_psreg;     /* the display power state is what /arm-io/dcp's ADT clock-gates name */
+    bool fw25;          /* exact J613 25G83 profile */
     bool ext;           /* T6030 dcpextN memory and dispextN DART handoffs */
     const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only */
     u32 os_fw;          /* enum fw_version the kernel's DCP interface is written for */
@@ -277,6 +278,37 @@ static const struct dcp_soc dcp_soc_t8122 = {
     .os_fw_name = "14.7",
     .pmgr_disp_cpu = 0x2d0710000UL,
 };
+
+static const char *const dcp_boards_j613[] = {"apple,j613", NULL};
+
+static const struct dcp_soc dcp_soc_j613_25g83 = {
+    .name = "J613-25G83",
+    .chip = T8122,
+    .compat = "apple,t8122",
+    .boards = dcp_boards_j613,
+    .boards_desc = "J613",
+    .dcp_compat = "apple,t8122-dcp",
+    .disp_compat = "apple,t8122-display-subsystem",
+    .marker = "apple,j613-25g83-mapping-handoff",
+    .optin = "asahi,t8122-dcp",
+    .oslog_always = true,
+    .describe = true,
+    .adt_psreg = true,
+    .fw25 = true,
+    .uuid = "C042E95C-B9D8-3F0E-94B3-582A08AA6FDD",
+    .os_fw = V26_6_2,
+    .os_fw_name = "26.6.2",
+    .pmgr_disp_cpu = 0x2d0710000UL,
+};
+
+/* Explicit kernel profile; neither system firmware nor a topology test selects it. */
+static bool dcp25_selected(void *dt)
+{
+    int node = fdt_path_offset(dt, "dcp"), len;
+    const fdt32_t *profile = node < 0 ? NULL :
+        fdt_getprop(dt, node, "apple,j613-25g83-profile", &len);
+    return profile && len == 4 && fdt32_ld(profile) == 1;
+}
 
 static const struct dcp_soc *const dcp_socs[] = {&dcp_soc_t6030, &dcp_soc_t8122};
 
@@ -1894,6 +1926,14 @@ static int dcp6_check_dt(void *dt, struct dcp6_dt *n)
 
     if (dcp6_status_disabled(dt, dcp, "dcp") || dcp6_status_disabled(dt, disp, "display"))
         return -1;
+    if (soc->fw25) {
+        int len;
+        const fdt32_t *compat = fdt_getprop(dt, dcp, "apple,firmware-compat", &len);
+        if (!dcp25_selected(dt) || !compat || len != 12 || fdt32_ld(compat) != 26 ||
+            fdt32_ld(compat + 1) != 6 || fdt32_ld(compat + 2) != 2 ||
+            dcp6_status_disabled(dt, pio, "25G83 piodma"))
+            bail("25G83 DT profile/compatibility or PIODMA status is invalid\n");
+    }
     int dart_dcp = dcp6_check_iommu(dt, dcp, "dcp", DCP6_SID_DCP, dcp6.dart_dcp,
                                     dcp6.vm_base[VM_DCP], dcp6.vm_size[VM_DCP]);
     int dart_disp = dcp6_check_iommu(dt, disp, "display", DCP6_SID_DISP, dcp6.dart_disp,
@@ -2013,9 +2053,34 @@ static int dcp6_set_list(void *dt, const char *path, const fdt32_t *ph, int coun
     return 0;
 }
 
+/* Same-boot ADT clock cells. Refusal is local to the scratch handoff. */
+static int dcp25_publish_clock(void *dt)
+{
+    int disp = adt_path_offset(adt, "/arm-io/disp0");
+    int arm = adt_path_offset(adt, "/arm-io");
+    u32 len = 0;
+    const u32 *ids = disp < 0 ? NULL : adt_getprop(adt, disp, "clock-ids", &len);
+    u32 clock_ids[2];
+    if (!ids || len != sizeof(clock_ids))
+        bail("25G83 display clock IDs are missing\n");
+    memcpy(clock_ids, ids, sizeof(clock_ids));
+    if (clock_ids[0] != 345 || clock_ids[1] != 416)
+        bail("25G83 display clock IDs are invalid\n");
+    const u32 *freq = arm < 0 ? NULL : adt_getprop(adt, arm, "clock-frequencies", &len);
+    if (!freq || len % 4 || len / 4 <= 416 - 256 || !freq[345 - 256] || freq[416 - 256])
+        bail("25G83 display clock values are unavailable\n");
+    fdt32_t cells[] = {cpu_to_fdt32(1), cpu_to_fdt32(345), cpu_to_fdt32(416),
+                       cpu_to_fdt32(freq[345 - 256]), cpu_to_fdt32(freq[416 - 256])};
+    int chosen = fdt_path_offset(dt, "/chosen");
+    return chosen < 0 ? -1 : fdt_setprop(dt, chosen, "apple,j613-25g83-display-clock-adt",
+                                      cells, sizeof(cells));
+}
+
 /* Write the whole handoff into `dt` (a scratch copy). Any failure leaves it half-written. */
 static int dcp6_publish(void *dt, const struct dcp6_dt *n)
 {
+    if (dcp6.soc->fw25 && dcp25_publish_clock(dt))
+        return -1;
     u32 ph_dcp = dcp6_phandle(dt, n->dcp);
     u32 ph_disp = dcp6_phandle(dt, n->display);
     u32 ph_pio = dcp6_phandle(dt, n->piodma);
@@ -2599,6 +2664,9 @@ int dt_set_display_handoff(void *dt)
             dcp6.soc = dcp_socs[i];
     if (!dcp6.soc)
         return 0;
+
+    if (dcp6.soc->chip == T8122 && dcp25_selected(dt))
+        dcp6.soc = &dcp_soc_j613_25g83;
 
     bool armed = dcp6_armed(dt);
     if (!dcp6.soc->always && !armed) {
