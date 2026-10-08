@@ -866,8 +866,12 @@ static int g15_dt_reg_by_name(void *dt, int gpu, const char *name, u64 *addr)
 /* Set once dt_set_gpu_g15_inner() has started to power on the GPU */
 static bool g15_powered;
 
+static int t8122_identity_read(void *context, u32 *id, u32 masks[3], u32 *counts,
+                                u32 *counts2);
+
 static int g15_read_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *core_count,
-                       u32 *clusters_out, u32 *enabled_cores, float *leak)
+                       u32 *clusters_out, u32 *enabled_cores, float *leak,
+                       struct t8122_powered_identity *identity)
 {
     int sgx_path[8], asc_path[8];
     u64 sgx_base, sgx_size, asc_base, dt_sgx, dt_asc;
@@ -907,16 +911,26 @@ static int g15_read_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *core_c
         bail("FDT: GPU: failed to power on sgx\n");
 
     bool hw_topology = !soc->cores_per_cluster;
-    u32 counts = 0;
-    int before = g15_guard_begin();
-    u32 id_version = read32(sgx_base + G15_SGX_ID_VERSION);
-    if (hw_topology)
-        counts = read32(sgx_base + G15_SGX_ID_COUNTS_1);
-    u32 mask0 = read32(sgx_base + G15_SGX_CORE_MASK);
-    u32 mask1 = read32(sgx_base + G15_SGX_CORE_MASK + 4);
-    u32 mask2 = read32(sgx_base + G15_SGX_CORE_MASK + 8);
-    if (g15_guard_end(before))
-        bail("FDT: GPU: fault reading the GPU ID registers\n");
+    u32 counts = 0, id_version, mask0, mask1, mask2;
+    if (identity) {
+        if (t8122_full_identity_read(t8122_identity_read, &sgx_base, identity))
+            bail("FDT: GPU: full-start T8122 powered identity rejected\n");
+        id_version = identity->id_version;
+        counts = identity->id_counts_1;
+        mask0 = identity->core_mask[0];
+        mask1 = identity->core_mask[1];
+        mask2 = identity->core_mask[2];
+    } else {
+        int before = g15_guard_begin();
+        id_version = read32(sgx_base + G15_SGX_ID_VERSION);
+        if (hw_topology)
+            counts = read32(sgx_base + G15_SGX_ID_COUNTS_1);
+        mask0 = read32(sgx_base + G15_SGX_CORE_MASK);
+        mask1 = read32(sgx_base + G15_SGX_CORE_MASK + 4);
+        mask2 = read32(sgx_base + G15_SGX_CORE_MASK + 8);
+        if (g15_guard_end(before))
+            bail("FDT: GPU: fault reading the GPU ID registers\n");
+    }
 
     printf("FDT: GPU: ID_VERSION 0x%08x (gen %d variant %d rev %d.%d)\n", id_version,
            id_version >> 24, (id_version >> 16) & 0xff, (id_version >> 12) & 0xf,
@@ -1872,7 +1886,7 @@ int dt_gpu_t8122_26_calibrate(void *dt)
     t8122_fuse_use = true;
     g15_powered = false;
     float leak;
-    int ret = g15_read_hw(dt, gpu, &g15_soc_t8122_standin, cores, &clusters, &enabled, &leak);
+    int ret = g15_read_hw(dt, gpu, &g15_soc_t8122_standin, cores, &clusters, &enabled, &leak, NULL);
     t8122_fuse_use = previous;
     if (g15_powered && (pmgr_adt_power_disable_recursive("/arm-io/sgx") ||
                        pmgr_adt_power_is_off("/arm-io/sgx") != 1))
@@ -2017,10 +2031,20 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
         return 1;
     }
 
+    /* Reserve the full14 witness before power-on; GPU26 uses its separate path. */
+    bool publish_identity = soc->chip == T8122;
+    struct t8122_powered_identity identity = {0};
+    if (publish_identity && t8122_full_identity_prepare(dt) < 0)
+        bail("FDT: GPU: full-start T8122 identity node unavailable\n");
+    gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0)
+        return -1;
+
     /* 3. Hardware: power on, GPU ID, core masks, leakage fuse (reads guarded) */
     u32 core_count[G15_MAX_CLUSTERS], clusters, enabled_cores;
     float leak;
-    if (g15_read_hw(dt, gpu, soc, core_count, &clusters, &enabled_cores, &leak))
+    if (g15_read_hw(dt, gpu, soc, core_count, &clusters, &enabled_cores, &leak,
+                    publish_identity ? &identity : NULL))
         return -1;
     if (perf_state_table_count > clusters)
         bail("FDT: GPU: %u perf-state tables but %u cluster(s)\n", perf_state_table_count,
@@ -2093,6 +2117,8 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
         if (g15_set_mbox_status(dt, mbox_ph, "okay"))
             return -1;
     }
+    if (publish_identity && t8122_full_identity_publish(dt, &identity))
+        bail("FDT: GPU: full-start T8122 identity publication failed\n");
     if (g15_set_status(dt, "gpu", "okay"))
         return -1;
 
@@ -2141,6 +2167,8 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
     if (ret) {
         if (ret < 0)
             printf("FDT: GPU: %s GPU setup failed, leaving the gpu node disabled\n", soc->name);
+        if (soc->chip == T8122)
+            t8122_full_identity_invalidate(dt);
         g15_disable(dt);
         if (g15_powered) {
             bool off;
@@ -2231,34 +2259,6 @@ static int dt_set_gpu_t8122_select(void *dt)
 }
 
 /* A separate, exact opt-in reads only powered SGX identity registers. */
-
-static int t8122_identity_node(void *dt)
-{
-    int chosen = fdt_path_offset(dt, "/chosen");
-    if (chosen < 0 || fdt_subnode_offset(dt, chosen, "asahi,t8122-gpu-powered-identity") >= 0)
-        return -1;
-    int node = fdt_add_subnode(dt, chosen, "asahi,t8122-gpu-powered-identity");
-    if (node < 0)
-        return -1;
-    if (fdt_setprop_u32(dt, node, "schema-version", 1) ||
-        fdt_setprop_u32(dt, node, "probe-result", T8122_ID_NOT_RUN) ||
-        fdt_setprop_u32(dt, node, "id-version", 0) ||
-        fdt_setprop_u32(dt, node, "core-mask-0", 0) ||
-        fdt_setprop_u32(dt, node, "core-mask-1", 0) ||
-        fdt_setprop_u32(dt, node, "core-mask-2", 0) ||
-        fdt_setprop_u32(dt, node, "id-counts-1", 0) ||
-        fdt_setprop_u32(dt, node, "id-counts-2", 0)) {
-        fdt_del_node(dt, node);
-        return -1;
-    }
-    return node;
-}
-
-static int t8122_identity_set_u32(void *dt, int node, const char *name, u32 value)
-{
-    fdt32_t encoded = cpu_to_fdt32(value);
-    return fdt_setprop_inplace(dt, node, name, &encoded, sizeof(encoded));
-}
 
 static int t8122_identity_power_enable(void *context)
 {

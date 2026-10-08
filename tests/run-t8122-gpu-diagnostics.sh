@@ -21,3 +21,10 @@ ${CC:-cc} -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
     src/libfdt/fdt_wip.c src/libfdt/fdt_sw.c src/libfdt/fdt_empty_tree.c \
     -o "$test_dir/t8122-powered-identity"
 "$test_dir/t8122-powered-identity"
+${CC:-cc} -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -g \
+    tests/t8122_full_identity.c src/kboot_gpu_t8122_power.c \
+    src/libfdt/fdt.c src/libfdt/fdt_ro.c src/libfdt/fdt_rw.c \
+    src/libfdt/fdt_wip.c src/libfdt/fdt_sw.c src/libfdt/fdt_empty_tree.c \
+    -o "$test_dir/t8122-full-identity"
+"$test_dir/t8122-full-identity" ${IDENTITY_FIXTURE_DIR:+"$IDENTITY_FIXTURE_DIR"}
