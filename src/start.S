@@ -99,6 +99,8 @@ _start:
      * where iBoot puts those buffers there. Every other SoC runs where
      * stage 1 put it, as before this move existed.
      */
+
+#ifndef J613_ESP_STAGE1
     adrp x20, _base
     mrs x1, midr_el1
     ubfx x2, x1, #24, #8
@@ -165,6 +167,7 @@ _start:
     sub x1, x1, x20
     add x1, x1, x21
     br x1
+#endif
 3:
     mov w0, 'm'
     bl debug_putc
