@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h"
 #include "smp_asm.h"
 #include "soc.h"
 

@@ -15,13 +15,27 @@ QEMU=${QEMU:-$(command -v qemu-aarch64 || command -v qemu-aarch64-static || true
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-mkdir -p "$tmp/build"
+mkdir -p "$tmp/build" "$tmp/src"
+cp src/start.S "$tmp/src/start.S"
 : > "$tmp/build/build_cfg.h"
 clang --target=aarch64-none-elf -c -O2 -ffreestanding -fpic -nostdinc \
     -isystem "$(clang -print-file-name=include)" -isystem sysinc -Isrc -Isrc/hv -I"$tmp" \
-    -march=armv8.2-a -o "$tmp/start.o" src/start.S
+    -march=armv8.2-a -o "$tmp/start.o" "$tmp/src/start.S"
 llvm-objcopy -O binary -j .init "$tmp/start.o" "$tmp/init.bin"
 llvm-objdump -d --no-show-raw-insn -j .init "$tmp/start.o" > "$tmp/init.dis"
+
+# The separate J613 stage1 must stay at the iBoot placement. Check actual
+# preprocessed assembly, rather than assuming the build flag reaches start.S.
+printf '%s\n' '#define J613_ESP_STAGE1' > "$tmp/build/build_cfg.h"
+clang --target=aarch64-none-elf -c -O2 -ffreestanding -fpic -nostdinc \
+    -isystem "$(clang -print-file-name=include)" -isystem sysinc -Isrc -Isrc/hv -I"$tmp" \
+    -march=armv8.2-a -o "$tmp/stage1.o" "$tmp/src/start.S"
+llvm-objdump -d --no-show-raw-insn -j .init "$tmp/stage1.o" > "$tmp/stage1.dis"
+# The old move writes top_of_kernel_data after loading it at BootArgs+32.
+if grep -Eq 'ldr[[:space:]]+x21, \[x19, #0x20\]' "$tmp/stage1.dis"; then
+    echo 'FAIL: optional J613 stage1 still runs the stage2 self-move'
+    exit 1
+fi
 
 # Gate start (after the mrs), end (the ldr that begins the move) and the skip label it targets
 python3 - "$tmp" <<'PY'
