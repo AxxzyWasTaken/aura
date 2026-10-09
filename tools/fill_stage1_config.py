@@ -35,7 +35,7 @@ def main():
     p.add_argument('output', type=Path)
     p.add_argument('--esp-uuid', required=True)
     p.add_argument('--target', default='m1n1/boot.bin')
-    p.add_argument('--window-ms', type=int, default=15000)
+    p.add_argument('--window-ms', type=int, default=0, help='USB proxy window; 0 (default) boots stage 2 at once')
     a = p.parse_args()
     if a.image.resolve() == a.output.resolve(): p.error('output must differ from source image')
     try: result = fill(a.image.read_bytes(), a.esp_uuid, a.target, a.window_ms)
