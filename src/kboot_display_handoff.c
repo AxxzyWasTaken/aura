@@ -74,6 +74,7 @@
 #include "pmgr.h"
 #include "soc.h"
 #include "string.h"
+#include "t8122_25g83.h"
 #include "utils.h"
 
 #include "libfdt/libfdt.h"
@@ -279,14 +280,20 @@ static const struct dcp_soc dcp_soc_t8122 = {
     .pmgr_disp_cpu = 0x2d0710000UL,
 };
 
-static const char *const dcp_boards_j613[] = {"apple,j613", NULL};
+/*
+ * The J615 runs the same 25G83 DCP image (one Firmware/dcp/t8122dcp.im4p for
+ * both boards in the 26.6.2 restore image) with the same display ADT; it is
+ * experimental and needs chosen.asahi,j615-25g83-experimental=1 as well
+ * (dcp6_check_dt).
+ */
+static const char *const dcp_boards_j613[] = {"apple,j613", "apple,j615", NULL};
 
 static const struct dcp_soc dcp_soc_j613_25g83 = {
     .name = "J613-25G83",
     .chip = T8122,
     .compat = "apple,t8122",
     .boards = dcp_boards_j613,
-    .boards_desc = "J613",
+    .boards_desc = "J613/J615",
     .dcp_compat = "apple,t8122-dcp",
     .disp_compat = "apple,t8122-display-subsystem",
     .marker = "apple,j613-25g83-mapping-handoff",
@@ -1898,6 +1905,9 @@ static int dcp6_check_dt(void *dt, struct dcp6_dt *n)
 
     if (!dcp6_board_ok(dt))
         bail("not a %s device tree\n", soc->boards_desc);
+    if (soc->fw25 && !t8122_25g83_board(dt))
+        bail("J615 25G83 is experimental: no display handoff without chosen."
+             T8122_25G83_J615_OPT_IN "=1\n");
 
     char p1[sizeof(n->piodma)], p2[sizeof(n->piodma)];
     int dcp = dcp6_alias_path(dt, "dcp", n->dcp, sizeof(n->dcp));
