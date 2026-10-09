@@ -2373,8 +2373,7 @@ static int dt_set_pmp_t6030(void)
 }
 
 /*
- * T8122: the same values, for the PMP support of a later kernel; the kernel
- * this m1n1 ships with does not read them. Only on a J613 with the display
+ * T8122: pass this Mac's PMP values on either M3 Air with the display
  * handoff switch, chosen.asahi,t8122-dcp=1.
  */
 static int dt_set_pmp_t8122(void)
@@ -2384,7 +2383,8 @@ static int dt_set_pmp_t8122(void)
     const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t8122-dcp", &len);
 
     if (!opt || len != 2 || opt[0] != '1' || opt[1] != '\0' ||
-        fdt_node_check_compatible(dt, 0, "apple,j613"))
+        (fdt_node_check_compatible(dt, 0, "apple,j613") &&
+         fdt_node_check_compatible(dt, 0, "apple,j615")))
         return 0;
     dt_pass_pmp(&pmp_values_t8122);
     return 0;

@@ -1737,6 +1737,100 @@ static void t8122_j613_standin_fuse_not_j613(void)
     assert(!strstr(trace_buf, "0x2e42c812"));
     assert(log_has("but this boot has no T8122 leakage fuse values"));
 }
+
+/* Each Air hands over its own fuse, clock and power values. */
+static void prepare_air_current14(bool j615, u32 mask, unsigned unit)
+{
+    prepare_j613_setup(mask, 1);
+    static const char air13[] = "apple,j613\0apple,t8122";
+    static const char air15[] = "apple,j615\0apple,t8122";
+    CHK(fdt_setprop(dtbuf, 0, "compatible", j615 ? air15 : air13,
+                   j615 ? sizeof(air15) : sizeof(air13)));
+    mmio_set(T8122_LEAK_FUSE_WORD0, unit ? 0 : 0x80000000, 0);
+    mmio_set(T8122_LEAK_FUSE_WORD1, unit ? 0x70 : 0x46, 0);
+    CHK(fdt_setprop_string(dtbuf, fdt_path_offset(dtbuf, "/chosen"),
+                           "asahi,t8122-gpu-fuse-leakage", "1"));
+    hset_u32("/arm-io/sgx", "gpu-se-tgt", unit ? 1421 : 1411);
+    if (unit) {
+        int sgx = adt_path_offset(adt, "/arm-io/sgx");
+        u32 len;
+        struct perf_state *ps = (struct perf_state *)adt_getprop(adt, sgx, "perf-states", &len);
+        assert(ps && len == 14 * sizeof(*ps));
+        for (unsigned i = 1; i < 14; i++)
+            ps[i].freq += 1000000;
+    }
+}
+
+static void check_air_current14(u32 mask, unsigned unit)
+{
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "okay"));
+    assert(identity_u32("probe-result") == T8122_ID_PASS);
+    assert(identity_u32("core-mask-0") == mask);
+    assert(gpu_u32("apple,core-leak-coef") == float_bits(unit ? 1794.0f : 1130.0f));
+    assert(gpu_u32("apple,se-target") == (unit ? 1421u : 1411u));
+    assert(pmgr_enables == 1 && !pmgr_disables && !unguarded_faults);
+    int opps = fdt_path_offset(dtbuf, "/opp-table-gpu"), opp, len, points = 0;
+    u64 top = 0;
+    fdt_for_each_subnode(opp, dtbuf, opps)
+    {
+        const fdt64_t *hz = fdt_getprop(dtbuf, opp, "opp-hz", &len);
+        assert(hz && len == 8);
+        top = max(top, fdt64_ld(hz));
+        points++;
+    }
+    assert(points == 14 && top == (unit ? 1339000000u : 1338000000u));
+    assert(prop_len(dtbuf, "/soc/gpu@292400000", "apple,j613-25g83-gpu-handoff") < 0);
+}
+
+static void t8122_j615_full14(void)
+{
+    prepare_air_current14(true, 0x3ff, 0);
+    run();
+    check_air_current14(0x3ff, 0);
+}
+
+static void t8122_air_per_mac_power(void)
+{
+    prepare_air_current14(false, 0x3ff, 0);
+    run();
+    check_air_current14(0x3ff, 0);
+    char *first_opps = dump_path(dtbuf, "/opp-table-gpu");
+    prepare_air_current14(true, 0x37e, 1);
+    run();
+    check_air_current14(0x37e, 1);
+    char *second_opps = dump_path(dtbuf, "/opp-table-gpu");
+    assert(strcmp(first_opps, second_opps));
+    free(first_opps);
+    free(second_opps);
+}
+
+static void t8122_j615_full14_unknown_image(void)
+{
+    prepare_air_current14(true, 0x3ff, 0);
+    fw_hdr[5] ^= 1;
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!pmgr_enables);
+}
+
+static void t8122_j615_full14_missing_power(void)
+{
+    prepare_air_current14(true, 0x3ff, 0);
+    hdel("/arm-io/sgx", "gpu-se-tgt");
+    run();
+    expect_gpu_off(dtbuf);
+    assert(!pmgr_enables);
+}
+
+static void t8122_j615_full14_fuse_fault(void)
+{
+    prepare_air_current14(true, 0x3ff, 0);
+    mmio_set(T8122_LEAK_FUSE_WORD0, 0, 1);
+    run();
+    expect_gpu_off(dtbuf);
+    assert(pmgr_enables == 1 && pmgr_disables == 1 && pmgr_off == 1);
+    assert(identity_u32("probe-result") == T8122_ID_NOT_RUN);
+}
 #endif
 
 #ifdef G15_FW26
@@ -1795,6 +1889,15 @@ static void t8122_25_wrong_os(void)
     prepare_25(1, 0); os_firmware = fw_versions[V14_7]; run(); assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
     assert(!pmgr_enables && prop_len(dtbuf, "/soc/gpu@292400000", "apple,j613-25g83-gpu-handoff") < 0);
 }
+static void t8122_25_j615_refused(void)
+{
+    prepare_25(1, 0);
+    static const char air15[] = "apple,j615\0apple,t8122";
+    CHK(fdt_setprop(dtbuf, 0, "compatible", air15, sizeof(air15)));
+    run();
+    assert(!strcmp(status_of(dtbuf, "/soc/gpu@292400000"), "disabled"));
+    assert(!pmgr_enables && prop_len(dtbuf, "/soc/gpu@292400000", "apple,j613-25g83-gpu-handoff") < 0);
+}
 static void t8122_25_wrong_input_compat(void)
 {
     prepare_25(1, 0);
@@ -1844,6 +1947,7 @@ static const struct {
     {"t8122-25-no-intent", t8122_25_no_intent},
     {"t8122-25-no-fuse", t8122_25_no_fuse},
     {"t8122-25-wrong-os", t8122_25_wrong_os},
+    {"t8122-25-j615-refused", t8122_25_j615_refused},
     {"t8122-25-missing-calibration", t8122_25_missing_calibration},
 #endif
     {"t6030-dry", t6030_dry},
@@ -1909,6 +2013,11 @@ static const struct {
     {"t8122-j613-standin-fuse-on", t8122_j613_standin_fuse_on},
     {"t8122-j613-standin-fuse-on-fault", t8122_j613_standin_fuse_on_fault},
     {"t8122-j613-standin-fuse-not-j613", t8122_j613_standin_fuse_not_j613},
+    {"t8122-j615-full14", t8122_j615_full14},
+    {"t8122-air-per-mac-power", t8122_air_per_mac_power},
+    {"t8122-j615-full14-unknown-image", t8122_j615_full14_unknown_image},
+    {"t8122-j615-full14-missing-power", t8122_j615_full14_missing_power},
+    {"t8122-j615-full14-fuse-fault", t8122_j615_full14_fuse_fault},
 #endif
 };
 

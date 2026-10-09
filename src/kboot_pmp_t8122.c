@@ -303,7 +303,9 @@ static bool facts_wanted(void *dt)
     const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t8122-dcp", &len);
 
     return opt && len == 2 && opt[0] == '1' && opt[1] == '\0' &&
-           !fdt_node_check_compatible(dt, 0, "apple,j613");
+           !fdt_node_check_compatible(dt, 0, "apple,t8122") &&
+           (!fdt_node_check_compatible(dt, 0, "apple,j613") ||
+            !fdt_node_check_compatible(dt, 0, "apple,j615"));
 }
 
 /* ---- asahi,t8122-pmp-facts ---- */

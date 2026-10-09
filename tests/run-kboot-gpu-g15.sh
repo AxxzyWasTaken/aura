@@ -45,7 +45,7 @@ build "$root" "$tmp/new" -DG15_NEW
 export ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0}
 
 pass=0
-for s in $("$tmp/new/kboot-gpu-g15" list); do
+for s in ${G15_SCENARIOS:-$("$tmp/new/kboot-gpu-g15" list)}; do
     "$tmp/new/kboot-gpu-g15" "$s" > "$tmp/new/$s.out" 2>&1 || {
         cat "$tmp/new/$s.out"
         echo "FAIL: $s"

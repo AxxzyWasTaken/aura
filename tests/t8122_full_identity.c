@@ -30,6 +30,9 @@ static void tree(void *dt, int size, const char *compatible, const char *intent)
     if (!strcmp(compatible, "apple,j613")) {
         static const char compat[] = "apple,j613\0apple,t8122";
         assert(!fdt_setprop(dt, 0, "compatible", compat, sizeof(compat)));
+    } else if (!strcmp(compatible, "apple,j615")) {
+        static const char compat[] = "apple,j615\0apple,t8122";
+        assert(!fdt_setprop(dt, 0, "compatible", compat, sizeof(compat)));
     }
     int chosen = fdt_add_subnode(dt, 0, "chosen");
     assert(chosen >= 0);
@@ -94,6 +97,29 @@ int main(int argc, char **argv)
     assert(t8122_full_identity_prepare(dt) < 0);
     tree(dt, sizeof(dt), "apple,t6030", "1");
     assert(t8122_full_identity_prepare(dt) < 0);
+
+    /* The 15-inch Air uses its own measured mask, never a J613 mask constant. */
+    const u32 j615_masks[] = {0x3ff, 0x37e, 0xff};
+    for (unsigned i = 0; i < sizeof(j615_masks) / sizeof(j615_masks[0]); i++) {
+        struct fixture f = supported;
+        f.raw.core_mask[0] = j615_masks[i];
+        tree(dt, sizeof(dt), "apple,j615", "1");
+        assert(t8122_full_identity_prepare(dt) >= 0);
+        assert(property(dt, "probe-result") == T8122_ID_NOT_RUN);
+        struct t8122_powered_identity identity;
+        assert(!t8122_full_identity_read(read_identity, &f, &identity));
+        assert(!t8122_full_identity_publish(dt, &identity));
+        check_fields(dt, &f.raw);
+        t8122_full_identity_invalidate(dt);
+        assert(property(dt, "probe-result") == T8122_ID_NOT_RUN);
+    }
+    for (unsigned i = 0; i < sizeof(intents) / sizeof(intents[0]); i++) {
+        tree(dt, sizeof(dt), "apple,j615", intents[i]);
+        assert(t8122_full_identity_prepare(dt) < 0);
+    }
+    tree(dt, sizeof(dt), "apple,j615", "1");
+    assert(!fdt_setprop_string(dt, 0, "compatible", "apple,j615"));
+    assert(t8122_full_identity_prepare(dt) < 0); /* Exact chip is mandatory. */
 
     const u32 masks[] = {0x3ff, 0x37e, 0xff};
     for (unsigned i = 0; i < sizeof(masks) / sizeof(masks[0]); i++) {

@@ -362,6 +362,43 @@ int main(void)
     assert(reads == 5 && !counts2_reads && enabled == 10 && clusters == 1);
     assert(fdt_path_offset(dt, "/chosen/asahi,t8122-gpu-powered-identity") < 0);
 
+    /* J615 follows the same full-start path with its own MMIO identity. */
+    static const char j615[] = "apple,j615\0apple,t8122";
+    const u32 j615_masks[] = {0x3ff, 0xff, 0x37e};
+    for (unsigned i = 0; i < sizeof(j615_masks) / sizeof(j615_masks[0]); i++) {
+        setup(dt, true);
+        assert(!fdt_setprop(dt, 0, "compatible", j615, sizeof(j615)));
+        masks[0] = j615_masks[i];
+        check(dt, true, 1, 6);
+    }
+    setup(dt, false);
+    assert(!fdt_setprop(dt, 0, "compatible", j615, sizeof(j615)));
+    check(dt, false, 0, 0);
+    setup(dt, true);
+    assert(!fdt_setprop(dt, 0, "compatible", j615, sizeof(j615)));
+    fail_power = true;
+    check(dt, false, 1, 0);
+    setup(dt, true);
+    assert(!fdt_setprop(dt, 0, "compatible", j615, sizeof(j615)));
+    fail_read = true;
+    check(dt, false, 1, 6);
+    setup(dt, true);
+    assert(!fdt_setprop(dt, 0, "compatible", j615, sizeof(j615)));
+    counts = 0x0011020a;
+    check(dt, false, 1, 6);
+    setup(dt, true);
+    assert(!fdt_setprop(dt, 0, "compatible", j615, sizeof(j615)));
+    fail_calibration = true;
+    check(dt, false, 1, 6);
+    setup(dt, true);
+    assert(!fdt_setprop(dt, 0, "compatible", j615, sizeof(j615)));
+    fail_gpu_enable = true;
+    check(dt, false, 1, 6);
+    setup(dt, true);
+    assert(!fdt_setprop(dt, 0, "compatible", j615, sizeof(j615)));
+    fail_firmware = true;
+    check(dt, false, 0, 0);
+
     /* T6030 retains its fixed topology and its existing ID revision behavior. */
     setup(dt, true);
     struct g15_soc pro = soc;
@@ -375,6 +412,6 @@ int main(void)
     assert(!g15_read_hw(dt, gpu, &pro, cores, &clusters, &enabled, &fused, NULL));
     assert(reads == 4 && !counts2_reads && enabled == 20 && clusters == 2);
     assert(fdt_path_offset(dt, "/chosen/asahi,t8122-gpu-powered-identity") < 0);
-    puts("actual full14 start callers: 15 start/refusal controls, existing-vote refusal, "
+    puts("actual full14 start callers: 15 inherited and 10 J615 start/refusal controls, existing-vote refusal, "
          "GPU26/T6030 read-path preservation PASS");
 }
