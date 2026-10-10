@@ -2592,6 +2592,37 @@ static bool dt_t8140_quiesce_dcp_asc(const char *path, const char *name)
     return ready;
 }
 
+static bool dt_t8140_table_reservations_fit(void)
+{
+    u64 start = cur_boot_args.phys_base;
+    if (start > UINT64_MAX - cur_boot_args.mem_size)
+        return false;
+    u64 end = start + cur_boot_args.mem_size;
+    int parent = fdt_path_offset(dt, "/reserved-memory"), node;
+    unsigned int regions = 1;
+    fdt_for_each_subnode(node, dt, parent)
+    {
+        const char *status = fdt_getprop(dt, node, "status", NULL);
+        if ((status && !strcmp(status, "disabled")) || fdt_getprop(dt, node, "no-map", NULL))
+            continue;
+        int len;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+        if (!reg)
+            continue;
+        if (len < 2 * (int)sizeof(*reg))
+            return false;
+        u64 base = fdt64_to_cpu(reg[0]), size = fdt64_to_cpu(reg[1]);
+        if (base > UINT64_MAX - size)
+            return false;
+        if (base >= start && base + size <= end)
+            continue;
+        if ((base < start && base + size > start) || (base < end && base + size > end) ||
+            (base | size) & (SZ_16K - 1) || ++regions > MAX_MEM_REGIONS)
+            return false;
+    }
+    return true;
+}
+
 static int dt_t8140_reserve_tables(const char *alias, const struct dt_t8140_dram *dram)
 {
     int node = fdt_path_offset(dt, alias), len;
@@ -2649,6 +2680,10 @@ static int dt_t8140_reserve_tables(const char *alias, const struct dt_t8140_dram
                 ret = -1;
                 goto out;
             }
+        }
+        if (!dt_t8140_table_reservations_fit()) {
+            ret = -1;
+            goto out;
         }
         int target = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(iommus[i]));
         if (target < 0 || fdt_setprop_u32(dt, target, "apple,firmware-root-handoff", 1)) {

@@ -27,6 +27,7 @@ typedef uint32_t u32;
 #define BIT(n) (1U << (n))
 #define GENMASK(msb, lsb) ((BIT((msb) + 1 - (lsb)) - 1) << (lsb))
 #define SZ_16K 16384
+#define MAX_MEM_REGIONS 32
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #define ADT_GETPROP_ARRAY(a, n, p, v) adt_array((n), (p), (v), sizeof(v))
 #define ADT_GETPROP(a, n, p, v) adt_getprop_copy((a), (n), (p), (v), sizeof(*(v)))
@@ -458,6 +459,21 @@ int main(void)
                                 "apple,firmware-root-handoff", NULL));
         }
     }
+
+    setup();
+    for (int i = 0; i < 31; i++) {
+        char name[64];
+        snprintf(name, sizeof(name), "normal-table-%d", i);
+        assert(dt_get_or_add_reserved_mem(name, "apple,firmware-dart-tables", false,
+                                          physical_base + (8 + i) * SZ_16K, SZ_16K) >= 0);
+    }
+    assert(dt_set_display_t8140() == 0);
+    check_fallback(before);
+
+    setup();
+    cur_boot_args.phys_base = physical_base + SZ_16K;
+    assert(dt_set_display_t8140() == 0);
+    check_fallback(before);
 
     setup();
     physical_size = carveouts[0].pa - physical_base + carveouts[0].size - SZ_16K;
