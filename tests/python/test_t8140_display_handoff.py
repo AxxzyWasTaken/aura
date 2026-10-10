@@ -275,12 +275,14 @@ static int dt_get_iommu_node(int node, u32 num)
     assert(num == 0);
     return node;
 }
-typedef struct {u32 phandle;} dart_dev_t;
+typedef struct {u32 phandle, sid;} dart_dev_t;
 static dart_dev_t mock_dart;
 static dart_dev_t *dart_init_fdt_locked(void *blob, u32 phandle, u32 sid)
 {
-    assert(blob == dt && sid == 0 && (phandle == 100 || phandle == 101));
+    assert(blob == dt && (sid == 0 || sid == 16 || sid == 23) &&
+           (phandle == 100 || phandle == 101 || phandle == 104 || phandle == 105));
     mock_dart.phandle = phandle;
+    mock_dart.sid = sid;
     return &mock_dart;
 }
 static void dart_shutdown(dart_dev_t *dart) { assert(dart == &mock_dart); }
@@ -289,8 +291,11 @@ static int dart_collect_locked_tables(dart_dev_t *dart, u64 base, u64 size,
 {
     assert(base == physical_base && size == physical_size && capacity == 2049);
     *count = 0;
-    if (table_fault == (dart->phandle == 100 ? 1 : 2)) return -1;
-    pages[0] = base + (dart->phandle - 100) * 4 * SZ_16K;
+    if (table_fault == ((dart->phandle == 100 || dart->phandle == 104) ? 1 : 2) ||
+        (table_fault == 3 && dart->sid == 16)) return -1;
+    unsigned offset = dart->phandle == 100 ? 0 : dart->phandle == 104 ? 4 :
+                      dart->phandle == 101 ? 8 : 12;
+    pages[0] = base + (offset + (dart->sid == 16 ? 2 : 0)) * SZ_16K;
     pages[1] = pages[0] + SZ_16K;
     *count = 2;
     return 0;
@@ -358,6 +363,24 @@ static void setup(void)
         assert(fdt_setprop(dt, fdt_path_offset(dt, name), "mboxes", mbox,
                            sizeof(mbox)) == 0);
     }
+    for (int i = 0; i < 2; i++) {
+        const char *display = i ? "/soc/dispext0" : "/soc/disp0";
+        const char *dcp = i ? "/soc/dcpext" : "/soc/dcp";
+        const char *dart = i ? "dart-dispext" : "dart-disp";
+        assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc"), dart) >= 0);
+        char path[64];
+        snprintf(path, sizeof(path), "/soc/%s", dart);
+        assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path), "phandle", 104 + i) == 0);
+        assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path), "#iommu-cells", 1) == 0);
+        fdt32_t iommu[] = {cpu_to_fdt32(104 + i), 0};
+        assert(fdt_setprop(dt, fdt_path_offset(dt, display), "iommus", iommu, sizeof(iommu)) == 0);
+        iommu[0] = cpu_to_fdt32(100 + i); iommu[1] = cpu_to_fdt32(23);
+        assert(fdt_setprop(dt, fdt_path_offset(dt, dcp), "iommus", iommu, sizeof(iommu)) == 0);
+        assert(fdt_add_subnode(dt, fdt_path_offset(dt, dcp), "piodma") >= 0);
+        snprintf(path, sizeof(path), "%s/piodma", dcp);
+        iommu[0] = cpu_to_fdt32(104 + i); iommu[1] = cpu_to_fdt32(16);
+        assert(fdt_setprop(dt, fdt_path_offset(dt, path), "iommus", iommu, sizeof(iommu)) == 0);
+    }
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/chosen"), "framebuffer") >= 0);
     cur_boot_args.phys_base = 0x1000342c000;
     cur_boot_args.mem_size = 0x1e39e8000;
@@ -398,7 +421,16 @@ static void check_claim(bool present)
         const fdt64_t *reg = fdt_getprop(dt, table, "reg", &len);
         assert(reg && len == 16 && fdt64_to_cpu(reg[0]) == physical_base &&
                fdt64_to_cpu(reg[1]) == 2 * SZ_16K);
-    } else assert(!cell);
+        target = fdt_node_offset_by_phandle(dt, 104);
+        cell = fdt_getprop(dt, target, "apple,firmware-root-handoff", &len);
+        assert(cell && len == sizeof(u32) && fdt32_to_cpu(*cell) == 1);
+        table = fdt_path_offset(dt, "/reserved-memory/dart-tables@10000018000");
+        assert(table >= 0 && !fdt_getprop(dt, table, "no-map", NULL));
+    } else {
+        assert(!cell);
+        assert(!fdt_getprop(dt, fdt_node_offset_by_phandle(dt, 104),
+                            "apple,firmware-root-handoff", NULL));
+    }
 }
 static void check_status(const char *name, const char *want)
 {
@@ -459,6 +491,28 @@ int main(void)
                                 "apple,firmware-root-handoff", NULL));
         }
     }
+
+    setup();
+    table_fault = 3;
+    assert(dt_set_display_t8140() == 0);
+    check_fallback(before);
+    setup();
+    assert(fdt_del_node(dt, fdt_path_offset(dt, "/soc/dcp/piodma")) == 0);
+    assert(dt_set_display_t8140() == 0);
+    check_fallback(before);
+    setup();
+    fdt32_t malformed_child[] = {cpu_to_fdt32(104)};
+    assert(fdt_setprop(dt, fdt_path_offset(dt, "/soc/dcp/piodma"), "iommus",
+                       malformed_child, sizeof(malformed_child)) == 0);
+    assert(dt_set_display_t8140() == -1);
+    check_claim(false);
+
+    setup();
+    fdt32_t too_large_sid[] = {cpu_to_fdt32(104), cpu_to_fdt32(256)};
+    assert(fdt_setprop(dt, fdt_path_offset(dt, "/soc/dcp/piodma"), "iommus",
+                       too_large_sid, sizeof(too_large_sid)) == 0);
+    assert(dt_set_display_t8140() == 0);
+    check_fallback(before);
 
     setup();
     for (int i = 0; i < 31; i++) {

@@ -2636,6 +2636,8 @@ static int dt_t8140_reserve_tables(const char *alias, const struct dt_t8140_dram
         return -1;
     int ret = -1;
     for (int i = 0; i < len / (int)sizeof(*prop); i += 2) {
+        if (fdt32_to_cpu(iommus[i + 1]) >= 256)
+            goto out;
         dart_dev_t *dart = dart_init_fdt_locked(dt, fdt32_to_cpu(iommus[i]),
                                                fdt32_to_cpu(iommus[i + 1]));
         size_t count;
@@ -2697,9 +2699,36 @@ out:
     return ret;
 }
 
+static int dt_t8140_reserve_piodma_tables(const char *alias, bool required,
+                                         const struct dt_t8140_dram *dram)
+{
+    int parent = fdt_path_offset(dt, alias);
+    int child = parent < 0 ? parent : fdt_subnode_offset(dt, parent, "piodma");
+    if (child == -FDT_ERR_NOTFOUND && !required)
+        return 0;
+    char path[128];
+    if (child < 0 || fdt_get_path(dt, child, path, sizeof(path)))
+        return -1;
+    return dt_t8140_reserve_tables(path, dram);
+}
+
 static int dt_t8140_disable_refs(int node, const char *prop, const char *cells_prop)
 {
     int len;
+    if (!strcmp(cells_prop, "#iommu-cells")) {
+        int child = fdt_subnode_offset(dt, node, "piodma");
+        if (child >= 0) {
+            char path[128];
+            if (fdt_get_path(dt, node, path, sizeof(path)) ||
+                dt_t8140_disable_refs(child, prop, cells_prop))
+                return -1;
+            node = fdt_path_offset(dt, path);
+            if (node < 0)
+                return -1;
+        } else if (child != -FDT_ERR_NOTFOUND) {
+            return -1;
+        }
+    }
     const fdt32_t *refs = fdt_getprop(dt, node, prop, &len);
     if (!refs)
         return len == -FDT_ERR_NOTFOUND ? 0 : -1;
@@ -2956,7 +2985,8 @@ static int dt_set_display_t8140(void)
     }
 
     step = "internal firmware DART table reservation";
-    if (dt_t8140_reserve_tables("dcp", &dram) || dt_t8140_reserve_tables("disp0", &dram))
+    if (dt_t8140_reserve_tables("dcp", &dram) || dt_t8140_reserve_tables("disp0", &dram) ||
+        dt_t8140_reserve_piodma_tables("dcp", true, &dram))
         goto rollback;
 
     /* External firmware has its own DART. It is optional for the internal
@@ -3008,6 +3038,8 @@ static int dt_set_display_t8140(void)
             ret = dt_t8140_reserve_tables(ext, &dram);
             if (!ret && fdt_get_alias(dt, "dispext0"))
                 ret = dt_t8140_reserve_tables("dispext0", &dram);
+            if (!ret)
+                ret = dt_t8140_reserve_piodma_tables(ext, false, &dram);
         }
         ext_ready = !ret;
         if (ret) {
