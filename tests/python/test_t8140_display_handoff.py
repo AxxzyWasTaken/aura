@@ -516,7 +516,7 @@ int main(void)
         setup();
         assert(dt_set_display_t8140() == 0);
         if (fault == 0) ext_power = false;
-        if (fault == 1) asc_state[1].status |= BIT(1);
+        if (fault == 1) asc_state[1].status = (asc_state[1].status | BIT(1)) & ~BIT(5);
         if (fault == 2) asc_state[1].i2a |= BIT(18);
         if (fault == 3) asc_state[1].stop_on_recheck = true;
         if (fault == 4) asc_state[1].a2i &= ~BIT(0);
