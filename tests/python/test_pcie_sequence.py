@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Run the production PCIe initializer against a fail-closed MMIO model.
 
 The model checks that T8140 skips both PHY IP groups after the shared PHY

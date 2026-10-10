@@ -40,7 +40,7 @@ class LinkedProgram:
     def _load_base_symbols(self):
         if self.base_object is None:
             suffix = "-raw" if not self.m1n1_is_macho() else ""
-            self.base_object = f"build/m1n1{suffix}.elf"
+            self.base_object = f"build/aura{suffix}.elf"
 
         addrs = self._load_elf_symbols(self.base_object, self.u.proxy.get_base())
 

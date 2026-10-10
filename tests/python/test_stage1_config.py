@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 import importlib.util
 from pathlib import Path
 import struct

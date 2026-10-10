@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Fill a J700 Stage 1 target without adding bytes after STACKBOT."""
 
 import argparse

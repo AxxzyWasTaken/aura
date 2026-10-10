@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Check ownership of FAT buffers after copying into the chainload image."""
 
 from pathlib import Path

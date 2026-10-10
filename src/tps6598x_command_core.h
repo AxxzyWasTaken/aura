@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef TPS6598X_COMMAND_CORE_H
 #define TPS6598X_COMMAND_CORE_H
 

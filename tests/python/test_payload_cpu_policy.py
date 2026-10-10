@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise payload CPU setup with failures on older chips and T8140."""
 
 from test_smp_timeouts import REPO, compile_and_run

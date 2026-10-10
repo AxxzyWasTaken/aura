@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Inject dispatch/completion failures into production SMP and its callers."""
 
 from pathlib import Path

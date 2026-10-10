@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-2.0-only
 
 from proxyclient.m1n1.proxy import CPUFeatures
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-2.0-only
 """Bounded host discovery for m1n1's opt-in J700 CDC proxy carrier."""
 
 from dataclasses import dataclass

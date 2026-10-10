@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT AND GPL-2.0-only
 import platform, os, sys, struct, serial, time
 from construct import *
 from enum import IntEnum, IntFlag
@@ -132,7 +132,7 @@ class UartInterface(Reloadable):
     REPLY_LEN = 36
     EVENT_HDR_LEN = 8
 
-    DEFAULT_UART_DEV="/dev/m1n1"
+    DEFAULT_UART_DEV="/dev/aura"
     DEFAULT_BAUD_RATE=115200
     if platform.system() == 'Darwin':
         DEFAULT_UART_DEV="/dev/cu.usbmodemP_01"

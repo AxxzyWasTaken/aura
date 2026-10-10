@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Keep HPM selection inside the fixed USB interrupt-state array."""
 
 from pathlib import Path

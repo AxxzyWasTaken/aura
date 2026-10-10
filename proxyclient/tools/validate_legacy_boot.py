@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Compare real AArch64 m1n1 code against its pre-M5/M6 integration baseline.
 
 This is instruction/MMIO replay, not a hardware qualification. External PMGR

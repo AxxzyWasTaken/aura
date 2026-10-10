@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise the production T8140 PCIe FDT skip and its IOMMU references."""
 
 from pathlib import Path

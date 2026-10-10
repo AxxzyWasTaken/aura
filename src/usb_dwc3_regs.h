@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT AND GPL-2.0-only */
 /**
  * core.h - DesignWare USB3 DRD Core Header
  * linux commit 7bc5a6ba369217e0137833f5955cf0b0f08b0712 before

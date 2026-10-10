@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-2.0-only
 """Assemble a draft J700 release from two pinned build output folders."""
 
 import argparse
@@ -17,7 +17,7 @@ REQUIRED = ("#define RELEASE", "#define CHAINLOADING", "#define T8140_KIS_PROXY"
 def build_identity(folder: Path, commit: str) -> tuple[str, str]:
     info = (folder / "BUILD-INFO.txt").read_text()
     fields = dict(line.split(": ", 1) for line in info.splitlines() if ": " in line)
-    if fields.get("kind") != "m1n1" or fields.get("commit") != commit:
+    if fields.get("kind") not in {"aura", "m1n1"} or fields.get("commit") != commit:
         raise ValueError(f"{folder}: source commit mismatch")
     if fields.get("dirty-files") != "0":
         raise ValueError(f"{folder}: dirty build")
@@ -28,10 +28,10 @@ def build_identity(folder: Path, commit: str) -> tuple[str, str]:
             "BUILTIN_LOGO=aurora" not in fields.get("make-vars", "").split() or \
             any(var.startswith("LOGO=") for var in fields.get("make-vars", "").split()):
         raise ValueError(f"{folder}: expected linked Aurora logo without appended payload")
-    image = (folder / "m1n1.bin").read_bytes()
+    image = (folder / "aura.bin").read_bytes()
     if not image.endswith(b"STACKBOT") or image.count(b"AURORA-S1-CFG01\0") != 1:
         raise ValueError(f"{folder}: not a bare, configurable Stage 1/2 image")
-    if not (folder / "m1n1-raw.elf").is_file():
+    if not (folder / "aura-raw.elf").is_file():
         raise ValueError(f"{folder}: raw ELF missing")
     return fields["build_tag"], fields["make-vars"]
 
@@ -53,19 +53,20 @@ def main() -> None:
     args.output.mkdir(parents=True)
 
     for stage, folder in (("stage1", args.stage1_out), ("stage2", args.stage2_out)):
-        shutil.copy2(folder / "m1n1.bin", args.output / f"m1n1-{stage}.bin")
-        shutil.copy2(folder / "m1n1-raw.elf", args.output / f"m1n1-{stage}-raw.elf")
+        shutil.copy2(folder / "aura.bin", args.output / f"m1n1-{stage}.bin")
+        shutil.copy2(folder / "aura-raw.elf", args.output / f"m1n1-{stage}-raw.elf")
         shutil.copy2(folder / "BUILD-INFO.txt", args.output / f"BUILD-INFO-{stage}.txt")
         shutil.copy2(folder / "build_cfg.h", args.output / f"build_cfg-{stage}.h")
 
     shutil.copy2(REPO / "docs/j700-install.md", args.output / "ESP-AND-INSTALL.md")
     shutil.copy2(REPO / "LICENSE", args.output / "LICENSE")
+    shutil.copytree(REPO / "LICENSES", args.output / "LICENSES")
     shutil.copytree(REPO / "3rdparty_licenses", args.output / "3rdparty_licenses")
 
     (args.output / "SOURCE-AND-BUILDS.txt").write_text(
         f"source commit: {commit}\nbuild tag: {tag1}\n"
-        f"stage1: bb-build.sh m1n1 {REPO} {args.stage1_out.name} {vars1}\n"
-        f"stage2: bb-build.sh m1n1 {REPO} {args.stage2_out.name} {vars2}\n"
+        f"stage1 make variables: {vars1}\n"
+        f"stage2 make variables: {vars2}\n"
     )
     lines = []
     for path in sorted(args.output.rglob("*")):

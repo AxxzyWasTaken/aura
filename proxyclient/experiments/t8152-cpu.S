@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 identity:
     mrs x1, mpidr_el1
     str x1, [x0]

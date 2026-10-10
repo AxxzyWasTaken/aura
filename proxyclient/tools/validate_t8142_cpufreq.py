@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-2.0-only
 """Check M5 firmware states and exercise m1n1 cluster initialization."""
 import argparse
 import json

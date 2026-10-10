@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT AND GPL-2.0-only
 use crate::println;
 use alloc::boxed::Box;
 use core::cmp::min;

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise the production ISP init path with synthetic ADT segments."""
 
 from pathlib import Path

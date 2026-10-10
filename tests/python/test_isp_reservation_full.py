@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """An FDT reservation with no space fails both ISP handoff paths."""
 
 from pathlib import Path

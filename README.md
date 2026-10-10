@@ -1,90 +1,50 @@
-# m1n1: A bootloader and experimentation playground for Apple Silicon
+# Aura
 
-## Building
+Aura is Aurora Silicon's bootloader and experimentation environment for
+Apple Silicon. It is an independent hard fork of m1n1, with the complete
+history of Aurora's `aurora-wip` branch retained. Future development lives
+here; the project does not track upstream m1n1 changes. Existing tags retain
+their historical meaning; new Aura release tags use the `aura-v` prefix.
 
-You need an `aarch64-linux-gnu-gcc` cross-compiler toolchain (or a native one, if running on ARM64).
-You will also need to install the `aarch64-unknown-none-softfloat` toolchain for rust.
+## Build
 
-```shell
-$ rustup target add aarch64-unknown-none-softfloat
+Install an AArch64 GCC cross compiler, or LLVM with Clang and LLD, and Rust
+with the `aarch64-unknown-none-softfloat` target.
+
+```sh
+git clone https://github.com/aurora-silicon/aura.git
+cd aura
+rustup target add aarch64-unknown-none-softfloat
+make ARCH=aarch64-linux-gnu-
 ```
 
-```shell
-$ git clone --recursive https://github.com/AsahiLinux/m1n1.git
-$ cd m1n1
-$ make
+For Clang on an AArch64 Linux host:
+
+```sh
+make USE_CLANG=1 ARCH=aarch64-linux-gnu BUILDSTD=1
 ```
 
-To build on a native ARM64 machine:
-* On Linux, use `make ARCH=`.
-* On macOS using Homebrew:
-```shell
-$ brew install llvm lld
-$ make
-```
-* On macOS using MacPorts:
-```shell
-$ sudo port install llvm clang
-$ sudo port select llvm llvm-mp-<version>
-$ make
-```
+The outputs are `build/aura.bin` and `build/aura.macho`. Use `make V=1` for
+verbose output. On macOS, install LLVM and LLD through Homebrew and run
+`make`. A container build is also available through `podman-compose run
+aura make` or `docker-compose run aura make`.
 
-The output will be in `build/m1n1.macho`.
+## Boot and host tools
 
-To build verbosely, use `make V=1`.
+See [the J700 installation guide](docs/j700-install.md) for Stage 1 and ESP
+Stage 2 setup. Host tools are in `proxyclient`. The inherited Python package
+name `m1n1`, USB identifiers, payload markers and device-tree properties
+remain compatible with existing tools and kernels. New device rules provide
+`/dev/aura` and `/dev/aura-sec`, with the original aliases retained.
 
-### Building using the container setup
-
-If you have a container runtime installed, like Podman or Docker, you can make use of the compose setup, which contains all build dependencies.
-
-```shell
-$ git clone --recursive https://github.com/AsahiLinux/m1n1.git
-$ cd m1n1
-$ podman-compose run m1n1 make
-$ # or
-$ docker-compose run m1n1 make
-```
-
-## Usage
-
-Our [wiki](https://asahilinux.org/docs/sw/m1n1-user-guide/) has more information on how to
-use m1n1.
-
-To install on an OS container based on macOS <12.1, use `m1n1.macho`:
-
-```shell
-kmutil configure-boot -c m1n1.macho -v <path to your OS volume>
-```
-
-To install on an OS container based on macOS >=12.1, use `m1n1.bin`:
-
-```shell
-kmutil configure-boot -c m1n1.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v <path to your OS volume>
-```
-
-## Payloads
-
-m1n1 supports running payloads by simple concatenation:
-
-```shell
-$ cat build/m1n1.macho Image.gz build/dtb/apple-j274.dtb initramfs.cpio.gz > m1n1-payload.macho
-$ cat build/m1n1.bin Image.gz build/dtb/apple-j274.dtb initramfs.cpio.gz > m1n1-payload.bin
-```
-
-Supported payload file formats:
-
-* Kernel images (or compatible). Must be compressed or last payload.
-* Devicetree blobs (FDT). May be uncompressed or compressed.
-* Initramfs cpio images. Must be compressed.
-
-Supported compression formats:
-
-* gzip
-* xz
+The raw format supports concatenated kernel, device-tree and initramfs
+payloads, including gzip and xz compression. Mach-O boot-object support
+from Aurora's x1n1 development will be reviewed separately.
 
 ## License
 
-m1n1 is licensed under the MIT license, as included in the [LICENSE](LICENSE) file.
+Aura combines inherited MIT code with Aurora Silicon contributions under
+GPL-2.0-only. See [LICENSE](LICENSE) and [the provenance policy](docs/licensing.md).
 
 The Aurora Silicon logo files have separate terms in
 [LICENSE.AURORA-LOGO](3rdparty_licenses/LICENSE.AURORA-LOGO).
@@ -93,13 +53,13 @@ The Aurora Silicon logo files have separate terms in
 
 Please see the Git history for authorship information.
 
-Portions of m1n1 are based on mini:
+Inherited portions of Aura are based on mini:
 
 * Copyright (C) 2008-2010 Hector Martin "marcan" <marcan@marcan.st>
 * Copyright (C) 2008-2010 Sven Peter <sven@svenpeter.dev>
 * Copyright (C) 2008-2010 Andre Heider <a.heider@gmail.com>
 
-m1n1 embeds libfdt, which is dual [BSD](3rdparty_licenses/LICENSE.BSD-2.libfdt) and
+Aura embeds libfdt, which is dual [BSD](3rdparty_licenses/LICENSE.BSD-2.libfdt) and
 [GPL-2](3rdparty_licenses/LICENSE.GPL-2) licensed and copyright:
 
 * Copyright (C) 2014 David Gibson <david@gibson.dropbear.id.au>
@@ -112,47 +72,47 @@ m1n1 embeds libfdt, which is dual [BSD](3rdparty_licenses/LICENSE.BSD-2.libfdt) 
 
 The ADT code in mini is also based on libfdt and subject to the same license.
 
-m1n1 embeds [minlzma](https://github.com/ionescu007/minlzma), which is
+Aura embeds [minlzma](https://github.com/ionescu007/minlzma), which is
 [MIT](3rdparty_licenses/LICENSE.minlzma) licensed and copyright:
 
 * Copyright (c) 2020 Alex Ionescu
 
-m1n1 embeds a slightly modified version of [tinf](https://github.com/jibsen/tinf), which is
+Aura embeds a slightly modified version of [tinf](https://github.com/jibsen/tinf), which is
 [ZLIB](3rdparty_licenses/LICENSE.tinf) licensed and copyright:
 
 * Copyright (c) 2003-2019 Joergen Ibsen
 
-m1n1 embeds portions taken from
+Aura embeds portions taken from
 [arm-trusted-firmware](https://github.com/ARM-software/arm-trusted-firmware), which is
 [BSD](3rdparty_licenses/LICENSE.BSD-3.arm) licensed and copyright:
 
 * Copyright (c) 2013-2020, ARM Limited and Contributors. All rights reserved.
 
-m1n1 embeds [Doug Lea's malloc](ftp://gee.cs.oswego.edu/pub/misc/malloc.c) (dlmalloc), which is in
+Aura embeds [Doug Lea's malloc](ftp://gee.cs.oswego.edu/pub/misc/malloc.c) (dlmalloc), which is in
 the public domain ([CC0](3rdparty_licenses/LICENSE.CC0)).
 
-m1n1 embeds portions of [PDCLib](https://github.com/DevSolar/pdclib), which is in the public
+Aura embeds portions of [PDCLib](https://github.com/DevSolar/pdclib), which is in the public
 domain ([CC0](3rdparty_licenses/LICENSE.CC0)).
 
-m1n1 embeds the [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) font, which is
+Aura embeds the [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) font, which is
 licensed under the [OFL-1.1](3rdparty_licenses/LICENSE.OFL-1.1) license and copyright:
 
 * Copyright 2010-2019 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'. All Rights Reserved. Source is a trademark of Adobe in the United States and/or other countries.
 * This Font Software is licensed under the SIL Open Font License, Version 1.1.
 
-m1n1 embeds portions of the [dwc3 usb linux driver](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/usb/dwc3/core.h?id=7bc5a6ba369217e0137833f5955cf0b0f08b0712), which was [BSD-or-GPLv2 dual-licensed](3rdparty_licenses/LICENSE.BSD-3.dwc3) and copyright
+Aura embeds portions of the [dwc3 usb linux driver](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/usb/dwc3/core.h?id=7bc5a6ba369217e0137833f5955cf0b0f08b0712), which was [BSD-or-GPLv2 dual-licensed](3rdparty_licenses/LICENSE.BSD-3.dwc3) and copyright
 * Copyright (C) 2010-2011 Texas Instruments Incorporated - http://www.ti.com
 
-m1n1 embeds portions of [musl-libc](https://musl.libc.org/)'s floating point library, which are MIT licensed and copyright
+Aura embeds portions of [musl-libc](https://musl.libc.org/)'s floating point library, which are MIT licensed and copyright
 * Copyright (c) 2017-2018, Arm Limited.
 
-m1n1 embeds [rust-fatfs](https://github.com/aurora-silicon/fatfs), which is
+Aura embeds [rust-fatfs](https://github.com/aurora-silicon/fatfs), which is
 [MIT licensed](3rdparty_licenses/LICENSE.MIT.fatfs). The pinned fork revision is
 retained by the protected [`aurora-m1n1-v1` tag](https://github.com/aurora-silicon/fatfs/tree/aurora-m1n1-v1).
 The fork's [AURORA.md](https://github.com/aurora-silicon/fatfs/blob/aurora-m1n1-v1/AURORA.md)
 describes the changes from upstream.
 
-m1n1 embeds other Rust crates. Licenses can be found in their vendor directories.
+Aura embeds other Rust crates. Licenses can be found in their vendor directories.
 
 J700 Stage 1 configuration, ESP Stage 2 setup and installation are documented in
 [docs/j700-install.md](docs/j700-install.md). Release packages include this guide

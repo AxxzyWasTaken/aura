@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /* T8152 ATC common/AUX initialization, derived from the matching 26A428
  * driver and qualified incrementally on J873g. DP lanes and crossbar clocks
  * are separate stages; common initialization alone does not establish a link. */

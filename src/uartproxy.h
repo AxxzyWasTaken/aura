@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: MIT AND GPL-2.0-only */
 
 #ifndef __UARTPROXY_H__
 #define __UARTPROXY_H__

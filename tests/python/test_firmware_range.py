@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise the production iBoot range comparator with boundary values."""
 
 from pathlib import Path

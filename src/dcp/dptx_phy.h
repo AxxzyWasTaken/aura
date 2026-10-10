@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: MIT AND GPL-2.0-only */
 
 #ifndef DCP_DPTX_PHY_H
 #define DCP_DPTX_PHY_H

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """The shared display reservation keeps its older-SoC alias fallback."""
 
 from pathlib import Path

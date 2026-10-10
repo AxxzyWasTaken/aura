@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-2.0-only
 // Host harness for the production Rust ADT parser.
 #![allow(non_camel_case_types)]
 

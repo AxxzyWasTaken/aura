@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise the T8140 hand-off against measured synthetic DART translations."""
 
 from pathlib import Path

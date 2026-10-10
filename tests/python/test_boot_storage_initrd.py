@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise the production ESP loader with and without an OS initramfs."""
 
 from pathlib import Path

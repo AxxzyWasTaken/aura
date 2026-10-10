@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef STAGE1_PROXY_H
 #define STAGE1_PROXY_H
 

@@ -19,8 +19,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - name: Install aarch64-linux-gnu- toolchain
         run: |
@@ -36,7 +34,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: m1n1
+          name: aura
           path: |
-            build/m1n1.macho
-            build/m1n1.bin
+            build/aura.macho
+            build/aura.bin

@@ -1,5 +1,5 @@
 services:
-  m1n1:
+  aura:
     build: .
     volumes:
-      - .:/m1n1
+      - .:/aura

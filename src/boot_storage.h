@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-2.0-only */
 
 #ifndef BOOT_STORAGE_H
 #define BOOT_STORAGE_H

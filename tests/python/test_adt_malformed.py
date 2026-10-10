@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Run the production Rust ADT accessors against malformed host fixtures."""
 
 from pathlib import Path

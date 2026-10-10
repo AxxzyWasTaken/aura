@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise queue lifetime on failures in the production ANS adoption path."""
 
 from pathlib import Path

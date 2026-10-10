@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """A matching SPMI node must not report an action that never ran."""
 
 from pathlib import Path

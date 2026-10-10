@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef ACE3_H
 #define ACE3_H
 #include "spmi.h"

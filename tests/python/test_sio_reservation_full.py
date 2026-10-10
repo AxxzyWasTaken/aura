@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """A failed SIO firmware reservation must leave its FDT node disabled."""
 
 from pathlib import Path

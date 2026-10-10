@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Public M6 candidate E2E; native allocations, pinned image, explicit device selection."""
 import argparse, hashlib, json, statistics, struct, subprocess, sys, time
 from pathlib import Path

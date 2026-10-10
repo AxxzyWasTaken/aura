@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Release package contents must include the FAT and logo licences."""
 
 import hashlib
@@ -16,13 +17,13 @@ def test_package_includes_fatfs_license(tmp_path, monkeypatch):
         folder = tmp_path / name
         folder.mkdir()
         (folder / "BUILD-INFO.txt").write_text(
-            f"kind: m1n1\ncommit: {commit}\ndirty-files: 0\n"
+            f"kind: aura\ncommit: {commit}\ndirty-files: 0\n"
             "build_tag: package-test\n"
             "make-vars: RELEASE=1 CHAINLOADING=1 T8140_KIS_PROXY=1 BUILTIN_LOGO=aurora\n"
         )
         (folder / "build_cfg.h").write_text(cfg)
-        (folder / "m1n1.bin").write_bytes(b"AURORA-S1-CFG01\0STACKBOT")
-        (folder / "m1n1-raw.elf").write_bytes(b"test raw ELF")
+        (folder / "aura.bin").write_bytes(b"AURORA-S1-CFG01\0STACKBOT")
+        (folder / "aura-raw.elf").write_bytes(b"test raw ELF")
 
     output = tmp_path / "package"
     monkeypatch.setattr(sys, "argv", [
@@ -46,3 +47,7 @@ def test_package_includes_fatfs_license(tmp_path, monkeypatch):
     digest = hashlib.sha256(guide.read_bytes()).hexdigest()
     assert f"{digest}  ESP-AND-INSTALL.md" in \
         (output / "SHA256SUMS").read_text().splitlines()
+
+    for name in ("MIT.txt", "GPL-2.0-only.txt"):
+        assert (output / "LICENSES" / name).read_bytes() == \
+            (package_j700.REPO / "LICENSES" / name).read_bytes()

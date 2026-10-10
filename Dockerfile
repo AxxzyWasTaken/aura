@@ -10,7 +10,7 @@ RUN curl -s https://sh.rustup.rs | bash -s -- -y --target aarch64-unknown-none-s
 ENV LANG en_US.utf8
 ENV PATH "/root/.cargo/bin:${PATH}"
 
-WORKDIR /m1n1
+WORKDIR /aura
 COPY . .
 
 CMD ["/bin/bash"]

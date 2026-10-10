@@ -1,5 +1,6 @@
+# SPDX-License-Identifier: MIT AND GPL-2.0-only
 RUSTARCH ?= aarch64-unknown-none-softfloat
-BUILTIN_LOGO ?= bootlogo
+BUILTIN_LOGO ?= aurora
 
 ifneq ($(BUILTIN_LOGO),bootlogo)
 ifneq ($(words $(wildcard data/$(BUILTIN_LOGO)_128.bin data/$(BUILTIN_LOGO)_256.bin)),2)
@@ -274,9 +275,9 @@ BUILD_OBJS := $(patsubst %,build/%,$(OBJECTS))
 BUILD_FP_OBJS := $(patsubst %,build/%,$(FP_OBJECTS))
 BUILD_RUST_LIB := $(patsubst %,build/%,$(RUST_LIB))
 BUILD_ALL_OBJS := $(BUILD_OBJS) $(BUILD_FP_OBJS) $(BUILD_RUST_LIB)
-NAME := m1n1
-TARGET := m1n1.macho
-TARGET_RAW := m1n1.bin
+NAME := aura
+TARGET := aura.macho
+TARGET_RAW := aura.bin
 
 DEPDIR := build/.deps
 
@@ -322,13 +323,13 @@ build/%.o: src/%.c build-tag build-cfg
 invoke_cc:
 	$(QUIET)$(CC) -c $(CFLAGS) -Isrc -Isrc/hv -o $(OBJFILE) $(CFILE)
 
-build/$(NAME).elf: $(BUILD_ALL_OBJS) m1n1.ld
+build/$(NAME).elf: $(BUILD_ALL_OBJS) aura.ld
 	$(QUIET)echo "  LD    $@"
-	$(QUIET)$(LD) -T m1n1.ld $(LDFLAGS) -o $@ $(BUILD_ALL_OBJS)
+	$(QUIET)$(LD) -T aura.ld $(LDFLAGS) -o $@ $(BUILD_ALL_OBJS)
 
-build/$(NAME)-raw.elf: $(BUILD_ALL_OBJS) m1n1-raw.ld
+build/$(NAME)-raw.elf: $(BUILD_ALL_OBJS) aura-raw.ld
 	$(QUIET)echo "  LDRAW $@"
-	$(QUIET)$(LD) -T m1n1-raw.ld $(LDFLAGS) -o $@ $(BUILD_ALL_OBJS)
+	$(QUIET)$(LD) -T aura-raw.ld $(LDFLAGS) -o $@ $(BUILD_ALL_OBJS)
 
 build/$(NAME).macho: build/$(NAME).elf
 	$(QUIET)echo "  MACHO $@"
@@ -340,11 +341,11 @@ build/$(NAME).bin: build/$(NAME)-raw.elf
 	$(QUIET)$(OBJCOPY) -O binary --strip-debug $< $@
 
 else
-build/$(NAME)-asahi.bin: build/$(NAME)-raw.elf
+build/$(NAME)-payload-base.bin: build/$(NAME)-raw.elf
 	$(QUIET)echo "  RAW   $@"
 	$(QUIET)$(OBJCOPY) -O binary --strip-debug $< $@
 
-build/$(NAME).bin: build/$(NAME)-asahi.bin build/$(LOGO).logo
+build/$(NAME).bin: build/$(NAME)-payload-base.bin build/$(LOGO).logo
 	$(QUIET)echo "  RAW   $@"
 	$(QUIET)cat $^ > $@
 endif

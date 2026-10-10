@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise the production SEP handoff across an FDT relocation."""
 
 from pathlib import Path

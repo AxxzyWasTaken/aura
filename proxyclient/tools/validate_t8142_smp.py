@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-2.0-only
 """Exercise the RAM-loaded public M5 SMP candidate and record per-core replies."""
 import argparse
 import hashlib

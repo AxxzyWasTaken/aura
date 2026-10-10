@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: MIT AND GPL-2.0-only */
 
 #include "../build/build_cfg.h"
 #include "../build/build_tag.h"
@@ -224,7 +224,7 @@ static void j873g_run_proxy(void)
 
 void m1n1_main(void)
 {
-    printf("\n\nm1n1 %s\n", m1n1_version);
+    printf("\n\naura %s\n", m1n1_version);
     printf("Copyright The Asahi Linux Contributors\n");
     printf("Licensed under the MIT license\n\n");
 #ifdef T8140_KIS_PROXY

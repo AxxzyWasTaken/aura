@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef DCP_ATC_PHY_H
 #define DCP_ATC_PHY_H
 

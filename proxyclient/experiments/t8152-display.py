@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Capture the native M6 boot console without clearing it or replacing its text.
 
 Boot the matching image first. USB-C initialization now runs in m1n1 itself.

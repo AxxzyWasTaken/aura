@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 import ctypes
 import subprocess
 from pathlib import Path
