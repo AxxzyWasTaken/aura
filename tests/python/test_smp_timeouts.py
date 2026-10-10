@@ -1,10 +1,11 @@
 """Inject dispatch/completion failures into production SMP and its callers."""
 
 from pathlib import Path
+import os
 import subprocess
 
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(os.environ.get("M1N1_SMP_SOURCE", Path(__file__).resolve().parents[2]))
 
 
 def compile_and_run(tmp_path, name, source):
@@ -404,3 +405,29 @@ def test_guest_runner_retains_shell_and_attempts_sleep_after_errors():
         "run_shell": lambda *_args: events.append("shell"),
     })
     assert events == ["shell", "stop", "sleep"]
+
+
+def test_mmu_rejected_dispatch_does_not_wait(tmp_path):
+    source = (REPO / "src/memory.c").read_text()
+    start = source.index(" mmu_init_secondary(int cpu)")
+    start = source.rfind("\n", 0, start) + 1
+    mmu = source[start:source.index("void mmu_shutdown(", start)]
+    harness = r'''
+#include <assert.h>
+#include <stdint.h>
+#include <stddef.h>
+typedef uint64_t u64;
+static int calls, waits;
+static void mmu_init_secondary_local(void) {}
+static int smp_call4(int cpu, void *fn, u64 a, u64 b, u64 c, u64 d)
+{ calls++; return -1; }
+static int smp_wait(int cpu, ...) { waits++; return -2; }
+''' + mmu + r'''
+int main(void)
+{
+    mmu_init_secondary(1);
+    assert(calls == 1 && waits == 0);
+    return 0;
+}
+'''
+    compile_and_run(tmp_path, "mmu-rejected-dispatch", harness)

@@ -387,6 +387,7 @@ int payload_run(void)
             printf("Mitigations: continuing payload handoff with incomplete CPU initialization\n");
         }
         if (enable_tso) {
+            kboot_delete_chosen("apple,tso");
             bool tso_failed = false;
             do_enable_tso();
             for (int i = 0; i < MAX_CPUS; i++) {

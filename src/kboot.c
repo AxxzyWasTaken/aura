@@ -3991,6 +3991,23 @@ int kboot_set_chosen(const char *name, const char *value)
     return i;
 }
 
+void kboot_delete_chosen(const char *name)
+{
+    if (!name)
+        return;
+
+    for (int i = 0; i < MAX_CHOSEN_PARAMS && chosen_params[i][0]; i++) {
+        if (strcmp(name, chosen_params[i][0]))
+            continue;
+        free(chosen_params[i][0]);
+        free(chosen_params[i][1]);
+        memmove(&chosen_params[i], &chosen_params[i + 1],
+                (MAX_CHOSEN_PARAMS - i - 1) * sizeof(chosen_params[0]));
+        memset(&chosen_params[MAX_CHOSEN_PARAMS - 1], 0, sizeof(chosen_params[0]));
+        return;
+    }
+}
+
 int kboot_set_uboot(const char *name, const char *value)
 {
     int i = 0;
