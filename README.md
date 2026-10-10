@@ -146,4 +146,11 @@ m1n1 embeds portions of the [dwc3 usb linux driver](https://git.kernel.org/pub/s
 m1n1 embeds portions of [musl-libc](https://musl.libc.org/)'s floating point library, which are MIT licensed and copyright
 * Copyright (c) 2017-2018, Arm Limited.
 
-m1n1 embeds some rust crates. Licenses can be found in the vendor directory for every crate.
+m1n1 embeds [rust-fatfs](https://github.com/aurora-silicon/fatfs), which is
+[MIT licensed](3rdparty_licenses/LICENSE.MIT.fatfs). The dependency is pinned to revision `7d505fbfa37a945af5549517f47c1d2e87a8333e`.
+
+m1n1 embeds other Rust crates. Licenses can be found in their vendor directories.
+
+J700 Stage 1 configuration, ESP Stage 2 setup and installation are documented in
+[docs/j700-install.md](docs/j700-install.md). Release packages include this guide
+as `ESP-AND-INSTALL.md`.
