@@ -71,7 +71,7 @@ static asc_dev_t *asc_init(const char *path)
     return NULL;
 }
 static void asc_free(asc_dev_t *asc) { (void)asc; }
-static int quiesce_fault, table_fault;
+static int quiesce_fault, table_fault, init_fault;
 static bool rtkit_quiesce_inherited(asc_dev_t *asc)
 {
     return quiesce_fault != (asc == &asc_devs[1] ? 2 : 1);
@@ -281,6 +281,8 @@ static dart_dev_t *dart_init_fdt_locked(void *blob, u32 phandle, u32 sid)
 {
     assert(blob == dt && (sid == 0 || sid == 16 || sid == 23) &&
            (phandle == 100 || phandle == 101 || phandle == 104 || phandle == 105));
+    if (init_fault && sid == 16)
+        return NULL;
     mock_dart.phandle = phandle;
     mock_dart.sid = sid;
     return &mock_dart;
@@ -395,7 +397,7 @@ static void setup(void)
     cur_boot_args.video.height = 2416;
     assert(cur_boot_args.video.stride * cur_boot_args.video.height == 0xde1380);
     reservation_calls = 0;
-    quiesce_fault = table_fault = 0;
+    quiesce_fault = table_fault = init_fault = 0;
     ext_power = true;
     hole_dcp_vram = hole_dcp_firmware = hole_ext = false;
     bad_carveout = bad_segment = false;
@@ -513,6 +515,17 @@ int main(void)
                        too_large_sid, sizeof(too_large_sid)) == 0);
     assert(dt_set_display_t8140() == 0);
     check_fallback(before);
+
+    for (int fault = 0; fault < 2; fault++) {
+        setup();
+        fdt32_t pairs[] = {cpu_to_fdt32(100), cpu_to_fdt32(23),
+                           cpu_to_fdt32(104), cpu_to_fdt32(fault ? 16 : 256)};
+        assert(fdt_setprop(dt, fdt_path_offset(dt, "/soc/dcp"), "iommus",
+                           pairs, sizeof(pairs)) == 0);
+        init_fault = fault;
+        assert(dt_set_display_t8140() == 0);
+        check_fallback(before);
+    }
 
     setup();
     for (int i = 0; i < 31; i++) {

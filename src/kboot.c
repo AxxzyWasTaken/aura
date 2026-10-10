@@ -2636,6 +2636,7 @@ static int dt_t8140_reserve_tables(const char *alias, const struct dt_t8140_dram
         return -1;
     int ret = -1;
     for (int i = 0; i < len / (int)sizeof(*prop); i += 2) {
+        ret = -1;
         if (fdt32_to_cpu(iommus[i + 1]) >= 256)
             goto out;
         dart_dev_t *dart = dart_init_fdt_locked(dt, fdt32_to_cpu(iommus[i]),
