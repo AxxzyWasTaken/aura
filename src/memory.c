@@ -645,10 +645,12 @@ static void mmu_secondary_setup(void)
     write_sctlr(sctlr);
 }
 
-void mmu_init_secondary(int cpu)
+int mmu_init_secondary(int cpu)
 {
-    smp_call4(cpu, mmu_secondary_setup, 0, 0, 0, 0);
-    smp_wait(cpu);
+    int ret = smp_call4(cpu, mmu_secondary_setup, 0, 0, 0, 0);
+    if (ret)
+        return ret;
+    return smp_wait(cpu, NULL);
 }
 
 void mmu_shutdown(void)

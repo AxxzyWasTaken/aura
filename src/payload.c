@@ -343,20 +343,35 @@ int payload_run(void)
 
     if (kernel && fdt) {
         cpufreq_init();
-        smp_start_secondaries();
-        mitigations_perform();
+        if (smp_start_secondaries() && chip_id == T8140) {
+            printf("SMP: refusing payload handoff with missing T8140 CPUs\n");
+            return -1;
+        }
+        if (mitigations_perform()) {
+            if (chip_id == T8140)
+                return -1;
+            printf("Mitigations: continuing payload handoff with incomplete CPU initialization\n");
+        }
         if (enable_tso) {
-
+            kboot_delete_chosen("apple,tso");
+            bool tso_failed = false;
             do_enable_tso();
             for (int i = 0; i < MAX_CPUS; i++) {
                 if (i == boot_cpu_idx)
                     continue;
                 if (smp_is_alive(i)) {
-                    smp_call0(i, do_enable_tso);
-                    smp_wait(i);
+                    if (smp_call0(i, do_enable_tso) || smp_wait(i, NULL)) {
+                        printf("TSO: CPU %d initialization failed\n", i);
+                        if (chip_id == T8140)
+                            return -1;
+                        tso_failed = true;
+                    }
                 }
             }
-            kboot_set_chosen("apple,tso", "");
+            if (!tso_failed)
+                kboot_set_chosen("apple,tso", "");
+            else
+                printf("TSO: continuing payload handoff without advertising complete TSO setup\n");
         }
 
         for (size_t i = 0; i < chosen_cnt; i++) {
