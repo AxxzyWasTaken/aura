@@ -47,6 +47,10 @@ int main(void)
     /* Handoffs: a J613, or a J615 only with chosen.asahi,j615-25g83-experimental=1. */
     assert(!fdt_setprop_string(profile, 0, "compatible", "apple,j613"));
     assert(t8122_25g83_board(profile));
+    static const char ambiguous[] = "apple,j613\0apple,j615\0";
+    assert(!fdt_setprop(profile, 0, "compatible", ambiguous, sizeof(ambiguous)));
+    assert(!t8122_25g83_board(profile));
+    assert(payload_profile_rank(profile, true) == 0);
     assert(!fdt_setprop_string(profile, 0, "compatible", "apple,j615"));
     assert(!t8122_25g83_board(profile));
     int chosen = fdt_add_subnode(profile, 0, "chosen");
@@ -56,8 +60,17 @@ int main(void)
     assert(!t8122_25g83_board(profile));
     assert(!fdt_setprop_string(profile, chosen, T8122_25G83_J615_OPT_IN, "11"));
     assert(!t8122_25g83_board(profile));
+    static const char invalid[][4] = {{'1'}, {'1',0,0}, {0,0,0,1}, {'1','1',0}, {'0',0}};
+    static const int invalid_lengths[] = {1,3,4,3,2};
+    for (unsigned i = 0; i < sizeof(invalid_lengths)/sizeof(*invalid_lengths); i++) {
+        assert(!fdt_setprop(profile, chosen, T8122_25G83_J615_OPT_IN, invalid[i], invalid_lengths[i]));
+        assert(!t8122_25g83_board(profile));
+    }
     assert(!fdt_setprop_string(profile, chosen, T8122_25G83_J615_OPT_IN, "1"));
     assert(t8122_25g83_board(profile));
+    assert(!fdt_setprop(profile, 0, "compatible", ambiguous, sizeof(ambiguous)));
+    assert(!t8122_25g83_board(profile));
+    assert(payload_profile_rank(profile, true) == 0);
     assert(!fdt_setprop_string(profile, 0, "compatible", "apple,j504"));
     assert(!t8122_25g83_board(profile));
     return 0;

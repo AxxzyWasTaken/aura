@@ -18,9 +18,9 @@ static inline int payload_profile_rank(const void *dt, bool os_26_6_2)
         fdt_getprop(dt, dcp, "apple,j613-25g83-profile", &len);
     if (!profile)
         return 1;
-    if (len != 4 || fdt32_ld(profile) != 1 || !os_26_6_2 ||
-        (fdt_node_check_compatible(dt, 0, "apple,j613") &&
-         fdt_node_check_compatible(dt, 0, "apple,j615")))
+    bool j613 = !fdt_node_check_compatible(dt, 0, "apple,j613");
+    bool j615 = !fdt_node_check_compatible(dt, 0, "apple,j615");
+    if (len != 4 || fdt32_ld(profile) != 1 || !os_26_6_2 || j613 == j615)
         return 0;
     const fdt32_t *compat = fdt_getprop(dt, dcp, "apple,firmware-compat", &len);
     return compat && len == 12 && fdt32_ld(compat) == 26 &&

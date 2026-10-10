@@ -280,12 +280,7 @@ static const struct dcp_soc dcp_soc_t8122 = {
     .pmgr_disp_cpu = 0x2d0710000UL,
 };
 
-/*
- * The J615 runs the same 25G83 DCP image (one Firmware/dcp/t8122dcp.im4p for
- * both boards in the 26.6.2 restore image) with the same display ADT; it is
- * experimental and needs chosen.asahi,j615-25g83-experimental=1 as well
- * (dcp6_check_dt).
- */
+/* Both Air models use the exact 25G83 DCP profile; J615 also requires its opt-in. */
 static const char *const dcp_boards_j613[] = {"apple,j613", "apple,j615", NULL};
 
 static const struct dcp_soc dcp_soc_j613_25g83 = {

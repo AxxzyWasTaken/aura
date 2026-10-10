@@ -76,13 +76,7 @@ void run_actions(void)
 
 #ifdef J613_ESP_STAGE1
     const char *target = adt_getprop(adt, 0, "target-type", NULL);
-    /*
-     * J615 (M3 Air 15"): EXPERIMENTAL, not booted on a J615. Its 26.6.2 iBoot
-     * and ADT are its own, but the restore image gives it the J613's DCP image
-     * and display ADT, so the panel DCP's __OS_LOG is expected in the same place
-     * after this image. Stage 2 decides what it hands over (it needs
-     * chosen.asahi,j615-25g83-experimental=1 on a J615); this only chainloads.
-     */
+    /* Stage 1 only chainloads; stage 2 applies each board's hardware gates. */
     bool board = target && (!strcmp(target, "J613") || !strcmp(target, "J615"));
     bool j613 = chip_id == T8122 && board && os_firmware.version == V26_6_2;
     if (!j613) {
