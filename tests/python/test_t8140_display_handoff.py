@@ -2,11 +2,12 @@
 
 from pathlib import Path
 import subprocess
+import os
 
 
 def test_t8140_display_handoff(tmp_path):
     repo = Path(__file__).resolve().parents[2]
-    source = (repo / "src/kboot.c").read_text()
+    source = Path(os.environ.get("T8140_HANDOFF_SOURCE", repo / "src/kboot.c")).read_text()
     start = source.index("struct dt_t8140_dram {")
     end = source.index("/* T8142 display carveouts:", start)
     helper = source[start:end]
@@ -69,6 +70,12 @@ static asc_dev_t *asc_init(const char *path)
     return NULL;
 }
 static void asc_free(asc_dev_t *asc) { (void)asc; }
+static int quiesce_fault, table_fault;
+static bool rtkit_quiesce_inherited(asc_dev_t *asc)
+{
+    return quiesce_fault != (asc == &asc_devs[1] ? 2 : 1);
+}
+
 ''' + asc_check + r'''
 static const struct run dcp[] = {
     {0x11c4000,0xc00000,0x101f0cd4000}, {0x1ddc000,0x4000,0x101f0cd0000},
@@ -267,6 +274,40 @@ static int dt_get_iommu_node(int node, u32 num)
     assert(num == 0);
     return node;
 }
+typedef struct {u32 phandle;} dart_dev_t;
+static dart_dev_t mock_dart;
+static dart_dev_t *dart_init_fdt_locked(void *blob, u32 phandle, u32 sid)
+{
+    assert(blob == dt && sid == 0 && (phandle == 100 || phandle == 101));
+    mock_dart.phandle = phandle;
+    return &mock_dart;
+}
+static void dart_shutdown(dart_dev_t *dart) { assert(dart == &mock_dart); }
+static int dart_collect_locked_tables(dart_dev_t *dart, u64 base, u64 size,
+                                     u64 *pages, size_t capacity, size_t *count)
+{
+    assert(base == physical_base && size == physical_size && capacity == 2049);
+    *count = 0;
+    if (table_fault == (dart->phandle == 100 ? 1 : 2)) return -1;
+    pages[0] = base + (dart->phandle - 100) * 4 * SZ_16K;
+    pages[1] = pages[0] + SZ_16K;
+    *count = 2;
+    return 0;
+}
+static int dt_get_or_add_reserved_mem(const char *name, const char *compat, bool nomap,
+                                      u64 base, u64 size)
+{
+    assert(!nomap && !strcmp(compat, "apple,firmware-dart-tables"));
+    int parent = fdt_path_offset(dt, "/reserved-memory");
+    int n = fdt_subnode_offset(dt, parent, name);
+    if (n < 0) n = fdt_add_subnode(dt, parent, name);
+    if (n < 0) return n;
+    u64 reg[] = {cpu_to_fdt64(base), cpu_to_fdt64(size)};
+    if (fdt_setprop(dt, n, "reg", reg, sizeof(reg))) return -1;
+    n = fdt_subnode_offset(dt, fdt_path_offset(dt, "/reserved-memory"), name);
+    if (fdt_setprop_string(dt, n, "compatible", compat)) return -1;
+    return fdt_subnode_offset(dt, fdt_path_offset(dt, "/reserved-memory"), name);
+}
 ''' + helper + r'''
 static void setup(void)
 {
@@ -311,6 +352,8 @@ static void setup(void)
         fdt32_t mbox[] = {cpu_to_fdt32(102 + i), 0};
         assert(fdt_setprop(dt, fdt_path_offset(dt, name), "iommus", iommu,
                            sizeof(iommu)) == 0);
+        assert(fdt_setprop(dt, fdt_path_offset(dt, i ? "/soc/dispext0" : "/soc/disp0"),
+                           "iommus", iommu, sizeof(iommu)) == 0);
         assert(fdt_setprop(dt, fdt_path_offset(dt, name), "mboxes", mbox,
                            sizeof(mbox)) == 0);
     }
@@ -328,6 +371,7 @@ static void setup(void)
     cur_boot_args.video.height = 2416;
     assert(cur_boot_args.video.stride * cur_boot_args.video.height == 0xde1380);
     reservation_calls = 0;
+    quiesce_fault = table_fault = 0;
     ext_power = true;
     hole_dcp_vram = hole_dcp_firmware = hole_ext = false;
     bad_carveout = bad_segment = false;
@@ -344,6 +388,16 @@ static void check_claim(bool present)
                                   "apple,dcp-rtkit-quiesced", &len);
     if (present) assert(cell && len == sizeof(u32) && fdt32_to_cpu(*cell) == 1);
     else assert(cell == NULL);
+    int target = fdt_node_offset_by_phandle(dt, 100);
+    cell = fdt_getprop(dt, target, "apple,firmware-root-handoff", &len);
+    if (present) {
+        assert(cell && len == sizeof(u32) && fdt32_to_cpu(*cell) == 1);
+        int table = fdt_path_offset(dt, "/reserved-memory/dart-tables@10000000000");
+        assert(table >= 0 && !fdt_getprop(dt, table, "no-map", NULL));
+        const fdt64_t *reg = fdt_getprop(dt, table, "reg", &len);
+        assert(reg && len == 16 && fdt64_to_cpu(reg[0]) == physical_base &&
+               fdt64_to_cpu(reg[1]) == 2 * SZ_16K);
+    } else assert(!cell);
 }
 static void check_status(const char *name, const char *want)
 {
@@ -372,6 +426,7 @@ static void check_fallback(const unsigned char *before)
 }
 int main(void)
 {
+    (void)dt_t8140_validate_dcp_asc;
     unsigned char before[sizeof(tree)];
     setup();
     assert(dt_set_display_t8140() == 0);
@@ -385,6 +440,24 @@ int main(void)
     assert(fdt_path_offset(dt, "/reserved-memory/dcpext0_data_tail@101ea79c000") >= 0);
     assert(fdt_path_offset(dt, "/chosen/framebuffer") >= 0);
     check_claim(true);
+
+    for (int fault = 1; fault <= 4; fault++) {
+        setup();
+        if (fault == 1)
+            for (u32 phandle = 100; phandle <= 101; phandle++)
+                assert(fdt_setprop_u32(dt, fdt_node_offset_by_phandle(dt, phandle),
+                                      "apple,firmware-root-handoff", 1) == 0);
+        if (fault <= 2) quiesce_fault = fault;
+        else table_fault = fault - 2;
+        assert(dt_set_display_t8140() == 0);
+        if (fault == 1 || fault == 3) check_fallback(before);
+        else {
+            check_claim(true);
+            check_status("dcpext", "disabled");
+            assert(!fdt_getprop(dt, fdt_node_offset_by_phandle(dt, 101),
+                                "apple,firmware-root-handoff", NULL));
+        }
+    }
 
     setup();
     physical_size = carveouts[0].pa - physical_base + carveouts[0].size - SZ_16K;
@@ -514,7 +587,7 @@ int main(void)
         "fdt_ro.c", "fdt_rw.c", "fdt_strerror.c", "fdt_sw.c", "fdt_wip.c",
     )]
     subprocess.run(
-        ["cc", "-D_GNU_SOURCE", "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(libfdt),
+        ["cc", "-D_GNU_SOURCE", "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-I", str(libfdt),
          "-x", "c", "-", *map(str, sources), "-o", str(binary)],
         input=harness, text=True, check=True,
     )

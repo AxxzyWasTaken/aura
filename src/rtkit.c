@@ -839,6 +839,37 @@ static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state ta
     return true;
 }
 
+static bool rtkit_inherited_quiesce_state(asc_dev_t *asc, u32 command, u32 ack)
+{
+    struct asc_message msg = {
+        .msg0 = FIELD_PREP(MGMT_TYPE, command) |
+                FIELD_PREP(MGMT_PWR_STATE, RTKIT_POWER_QUIESCED),
+        .msg1 = RTKIT_EP_MGMT,
+    };
+
+    if (!asc_send(asc, &msg) || !asc_recv_timeout(asc, &msg, 1000000))
+        return false;
+    if (msg.msg1 != RTKIT_EP_MGMT ||
+        msg.msg0 != (FIELD_PREP(MGMT_TYPE, ack) |
+                     FIELD_PREP(MGMT_PWR_STATE, RTKIT_POWER_QUIESCED)))
+        return false;
+    return asc_cpu_running(asc);
+}
+
+bool rtkit_quiesce_inherited(asc_dev_t *asc)
+{
+    /* Preserve inherited mappings and keep the CPU running for INIT/HELLO. */
+    if (!asc || !asc_cpu_running(asc) || asc_can_recv(asc))
+        return false;
+    if (!rtkit_inherited_quiesce_state(asc, MGMT_MSG_AP_PWR_STATE,
+                                     MGMT_MSG_AP_PWR_STATE_ACK))
+        return false;
+    if (!rtkit_inherited_quiesce_state(asc, MGMT_MSG_IOP_PWR_STATE,
+                                     MGMT_MSG_IOP_PWR_STATE_ACK))
+        return false;
+    return asc_cpu_running(asc) && !asc_can_recv(asc);
+}
+
 bool rtkit_quiesce(rtkit_dev_t *rtk)
 {
     return rtkit_switch_power_state(rtk, RTKIT_POWER_QUIESCED);

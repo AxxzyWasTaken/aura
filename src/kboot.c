@@ -23,6 +23,7 @@
 #include "memory.h"
 #include "pcie.h"
 #include "pmgr.h"
+#include "rtkit.h"
 #include "sep.h"
 #include "sio.h"
 #include "smp.h"
@@ -1629,8 +1630,27 @@ static int dt_disable_pcie_mappers(int parent)
     return 0;
 }
 
+static int dt_disable_t8140_piodma(void)
+{
+    static const char *const compatibles[] = {
+        "apple,t8140-piodma-diagnostic", "apple,t8140-pcie-piodma",
+    };
+    for (size_t i = 0; i < ARRAY_SIZE(compatibles); i++) {
+        int node = -1;
+        while ((node = fdt_node_offset_by_compatible(dt, node, compatibles[i])) >= 0) {
+            if (fdt_setprop_string(dt, node, "status", "disabled"))
+                return -1;
+        }
+        if (node != -FDT_ERR_NOTFOUND)
+            return -1;
+    }
+    return 0;
+}
+
 static int dt_disable_t8140_pcie(void)
 {
+    if (dt_disable_t8140_piodma())
+        return -1;
     int nodes[64];
     int count = 0;
     int node = -1;
@@ -2562,6 +2582,86 @@ static bool dt_t8140_validate_dcp_asc(const char *path, const char *name)
     return ready;
 }
 
+static bool dt_t8140_quiesce_dcp_asc(const char *path, const char *name)
+{
+    asc_dev_t *asc = asc_init(path);
+    if (!asc)
+        return false;
+    bool ready = asc_validate_inherited_dcp(asc, name) && rtkit_quiesce_inherited(asc);
+    asc_free(asc);
+    return ready;
+}
+
+static int dt_t8140_reserve_tables(const char *alias, const struct dt_t8140_dram *dram)
+{
+    int node = fdt_path_offset(dt, alias), len;
+    const fdt32_t *prop = node < 0 ? NULL : fdt_getprop(dt, node, "iommus", &len);
+    if (!prop || len <= 0 || len % (2 * sizeof(*prop)) || len > (int)(16 * sizeof(*prop)))
+        return -1;
+    fdt32_t iommus[16];
+    memcpy(iommus, prop, len);
+    u64 *pages = malloc(2049 * sizeof(*pages));
+    if (!pages)
+        return -1;
+    int ret = -1;
+    for (int i = 0; i < len / (int)sizeof(*prop); i += 2) {
+        dart_dev_t *dart = dart_init_fdt_locked(dt, fdt32_to_cpu(iommus[i]),
+                                               fdt32_to_cpu(iommus[i + 1]));
+        size_t count;
+        if (!dart)
+            goto out;
+        ret = dart_collect_locked_tables(dart, dram->base, dram->size, pages, 2049, &count);
+        dart_shutdown(dart);
+        if (ret)
+            goto out;
+        for (size_t j = 1; j < count; j++) {
+            u64 page = pages[j];
+            size_t k = j;
+            while (k && pages[k - 1] > page) {
+                pages[k] = pages[k - 1];
+                k--;
+            }
+            pages[k] = page;
+        }
+        for (size_t j = 0; j < count;) {
+            u64 base = pages[j], size = SZ_16K;
+            while (++j < count && pages[j] == base + size)
+                size += SZ_16K;
+            char name[64];
+            snprintf(name, sizeof(name), "dart-tables@%lx", base);
+            int parent = fdt_path_offset(dt, "/reserved-memory");
+            int existing = parent < 0 ? parent : fdt_subnode_offset(dt, parent, name);
+            int reg_len;
+            const fdt64_t *reg = existing < 0 ? NULL : fdt_getprop(dt, existing, "reg", &reg_len);
+            if (reg) {
+                if (reg_len != 2 * sizeof(*reg) || fdt64_to_cpu(reg[0]) != base ||
+                    fdt64_to_cpu(reg[1]) > dram->size ||
+                    !dt_t8140_in_physical_dram(dram, base, fdt64_to_cpu(reg[1]))) {
+                    ret = -1;
+                    goto out;
+                }
+                if (fdt64_to_cpu(reg[1]) > size)
+                    size = fdt64_to_cpu(reg[1]);
+            }
+            int region = dt_get_or_add_reserved_mem(name, "apple,firmware-dart-tables", false,
+                                                    base, size);
+            if (region < 0 || fdt_getprop(dt, region, "no-map", NULL)) {
+                ret = -1;
+                goto out;
+            }
+        }
+        int target = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(iommus[i]));
+        if (target < 0 || fdt_setprop_u32(dt, target, "apple,firmware-root-handoff", 1)) {
+            ret = -1;
+            goto out;
+        }
+    }
+    ret = 0;
+out:
+    free(pages);
+    return ret;
+}
+
 static int dt_t8140_disable_refs(int node, const char *prop, const char *cells_prop)
 {
     int len;
@@ -2588,6 +2688,14 @@ static int dt_t8140_disable_refs(int node, const char *prop, const char *cells_p
     }
     for (size_t i = 0; i < count; i++) {
         int target = fdt_node_offset_by_phandle(dt, phandles[i]);
+        if (target < 0)
+            return -1;
+        if (!strcmp(cells_prop, "#iommu-cells")) {
+            int ret = fdt_delprop(dt, target, "apple,firmware-root-handoff");
+            if (ret && ret != -FDT_ERR_NOTFOUND)
+                return -1;
+            target = fdt_node_offset_by_phandle(dt, phandles[i]);
+        }
         if (target < 0 || fdt_setprop_string(dt, target, "status", "disabled"))
             return -1;
     }
@@ -2612,7 +2720,10 @@ static int dt_t8140_refuse_display(void)
     int chosen = fdt_path_offset(dt, "/chosen");
     if (chosen < 0)
         return -1;
-    int ret = fdt_delprop(dt, chosen, "apple,dcp-rtkit-quiesced");
+    int ret = fdt_delprop(dt, chosen, "apple,firmware-root-handoff");
+    if (ret && ret != -FDT_ERR_NOTFOUND)
+        return -1;
+    ret = fdt_delprop(dt, chosen, "apple,dcp-rtkit-quiesced");
     if (ret && ret != -FDT_ERR_NOTFOUND)
         return -1;
 
@@ -2804,10 +2915,14 @@ static int dt_set_display_t8140(void)
     }
 
     step = "internal DCP ASC and mailboxes";
-    if (!dt_t8140_validate_dcp_asc("/arm-io/dcp", "dcp")) {
-        reason = "inherited DCP ASC is not live with healthy empty mailboxes";
+    if (!dt_t8140_quiesce_dcp_asc("/arm-io/dcp", "dcp")) {
+        reason = "inherited DCP RTKit power acknowledgements not validated";
         goto rollback;
     }
+
+    step = "internal firmware DART table reservation";
+    if (dt_t8140_reserve_tables("dcp", &dram) || dt_t8140_reserve_tables("disp0", &dram))
+        goto rollback;
 
     /* External firmware has its own DART. It is optional for the internal
      * panel, so a failed external validation only rolls back that controller. */
@@ -2851,7 +2966,13 @@ static int dt_set_display_t8140(void)
         }
         if (!ret) {
             step = "DCPEXT ASC and mailboxes";
-            ret = dt_t8140_validate_dcp_asc("/arm-io/dcpext", "dcpext") ? 0 : -1;
+            ret = dt_t8140_quiesce_dcp_asc("/arm-io/dcpext", "dcpext") ? 0 : -1;
+        }
+        if (!ret) {
+            step = "external firmware DART table reservation";
+            ret = dt_t8140_reserve_tables(ext, &dram);
+            if (!ret && fdt_get_alias(dt, "dispext0"))
+                ret = dt_t8140_reserve_tables("dispext0", &dram);
         }
         ext_ready = !ret;
         if (ret) {
@@ -2910,14 +3031,14 @@ static int dt_set_display_t8140(void)
                 goto rollback;
         }
     }
-    step = "publish apple,dcp-rtkit-quiesced claim";
+    step = "publish acknowledged RTKit and firmware-root handoff";
     node = fdt_path_offset(dt, "/chosen");
     if (node < 0)
         goto rollback;
     if (fdt_setprop_u32(dt, node, "apple,dcp-rtkit-quiesced", 1) < 0)
         goto rollback;
     free(saved);
-    printf("FDT: T8140 DCP enabled with validated framebuffer, firmware and live ASC%s;"
+    printf("FDT: T8140 DCP enabled with validated framebuffer, firmware and acknowledged RTKit power states%s;"
            " /chosen/apple,dcp-rtkit-quiesced=1\n",
            ext_ready ? " (dcpext enabled)" : "");
     return 0;

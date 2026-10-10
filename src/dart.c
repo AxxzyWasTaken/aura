@@ -541,6 +541,62 @@ dart_dev_t *dart_init_fdt_locked(void *dt, u32 phandle, int device)
     return dart_init_fdt(dt, phandle, device, true);
 }
 
+static bool dart_table_in_dram(u64 page, u64 base, u64 size)
+{
+    return page && !(page & (SZ_16K - 1)) && size >= SZ_16K &&
+           base <= UINT64_MAX - size && page >= base && page - base <= size - SZ_16K;
+}
+
+int dart_collect_locked_tables(dart_dev_t *dart, u64 dram_base, u64 dram_size,
+                               u64 *pages, size_t capacity, size_t *count)
+{
+    const u64 address_mask = GENMASK(37, 10);
+    u64 entries[SZ_16K / sizeof(u64)];
+    size_t used = 0;
+    if (!count)
+        return -1;
+    *count = 0;
+    if (!dart || dart->type != DART_T8110 || !dart->locked || !dart->keep ||
+        !pages || !capacity || dart->params->ttbr_count != 1 ||
+        !dart_table_in_dram((u64)dart->l1[0], dram_base, dram_size))
+        return -1;
+    u32 tcr = read32(DART_TCR(dart));
+    u32 ttbr = read32(DART_TTBR(dart, 0));
+    if (tcr != DART_T8110_TCR_TRANSLATE_ENABLE ||
+        !(ttbr & DART_T8110_TTBR_VALID) ||
+        (FIELD_GET(DART_T8110_TTBR_ADDR, ttbr) << DART_T8110_TTBR_SHIFT) !=
+            (u64)dart->l1[0])
+        return -1;
+
+    /* Read table descriptors only after the complete root page is in DRAM. */
+    memcpy(entries, dart->l1[0], sizeof(entries));
+    pages[used++] = (u64)dart->l1[0];
+    for (size_t i = 0; i < ARRAY_SIZE(entries); i++) {
+        u64 entry = entries[i];
+        if (!entry)
+            continue;
+        if (!(entry & DART_PTE_VALID) || (entry & ~(address_mask | DART_PTE_VALID)))
+            return -1;
+        u64 page = FIELD_GET(address_mask, entry) << DART_PTE_OFFSET_SHIFT;
+        if (!dart_table_in_dram(page, dram_base, dram_size) || page == (u64)dart->l1[0])
+            return -1;
+        size_t j;
+        for (j = 0; j < used && pages[j] != page; j++)
+            ;
+        if (j != used)
+            continue;
+        if (used == capacity)
+            return -1;
+        pages[used++] = page;
+    }
+    /* A changed root needs a new lifetime reservation before publication. */
+    if (memcmp(entries, dart->l1[0], sizeof(entries)) || read32(DART_TCR(dart)) != tcr ||
+        read32(DART_TTBR(dart, 0)) != ttbr)
+        return -1;
+    *count = used;
+    return 0;
+}
+
 int dart_setup_pt_region(dart_dev_t *dart, const char *path, int device, u64 vm_base)
 {
     if (dart->locked)
