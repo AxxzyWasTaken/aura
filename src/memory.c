@@ -762,8 +762,9 @@ void mmu_init_secondary_local(void)
 
 int mmu_init_secondary(int cpu)
 {
-    if (smp_call4(cpu, mmu_init_secondary_local, 0, 0, 0, 0))
-        return -1;
+    int ret = smp_call4(cpu, mmu_init_secondary_local, 0, 0, 0, 0);
+    if (ret)
+        return ret;
     return smp_wait(cpu, NULL);
 }
 

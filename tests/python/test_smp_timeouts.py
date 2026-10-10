@@ -117,7 +117,7 @@ typedef uint64_t u64;
 #define smp_call0(cpu, fn) smp_call4(cpu, fn, 0, 0, 0, 0)
 static int calls, waits, fail_call, fail_wait, dispatch_error = -1;
 static int boot_cpu_idx;
-static bool hv_started_cpus[MAX_CPUS];
+static bool hv_started_cpus[MAX_CPUS], hv_setup_pending[MAX_CPUS], hv_shutdown_failed;
 static u64 hv_cpus_in_guest;
 static int hv_secondary_info;
 static u64 hv_secondary_regs[MAX_CPUS][4];
@@ -149,6 +149,8 @@ static void reset(void)
     calls = waits = fail_call = fail_wait = 0;
     dispatch_error = -1;
     memset(hv_started_cpus, 0, sizeof(hv_started_cpus));
+    memset(hv_setup_pending, 0, sizeof(hv_setup_pending));
+    hv_shutdown_failed = false;
     hv_cpus_in_guest = 0;
     hv_wdt_active = hv_wdt_enabled = hv_wdt_join_pending = false;
 }
@@ -175,7 +177,8 @@ int main(void)
         assert(!hv_started_cpus[1] && !hv_cpus_in_guest);
         assert(calls == phase && waits == phase - 1);
         reset(); fail_wait = phase;
-        assert(hv_start_secondary(1, (void *)1, regs) == -1);
+        assert(hv_start_secondary(1, (void *)1, regs) == SMP_TIMEOUT);
+        assert(hv_setup_pending[1] && hv_shutdown_failed);
         assert(!hv_started_cpus[1] && !hv_cpus_in_guest && calls == phase);
     }
     reset();
@@ -183,7 +186,7 @@ int main(void)
     assert(hv_started_cpus[1] && hv_cpus_in_guest == BIT(1));
     reset(); fail_call = 3; dispatch_error = SMP_TIMEOUT;
     assert(hv_start_secondary(1, (void *)1, regs) == SMP_TIMEOUT);
-    assert(hv_started_cpus[1] && hv_cpus_in_guest == BIT(1));
+    assert(hv_started_cpus[1] && hv_cpus_in_guest == BIT(1) && hv_shutdown_failed);
     assert(queued_regs != regs && !memcmp(queued_regs, regs, sizeof(regs)));
     memset(regs, 0, sizeof(regs)); /* The next proxy request reuses its buffer. */
     assert(queued_regs[0] == 11 && queued_regs[3] == 44);
@@ -231,7 +234,7 @@ def test_hv_join_failure_retains_state_and_joins_other_cpus(tmp_path):
 typedef uint64_t u64;
 #define MAX_CPUS 4
 #define BIT(n) (1ULL << (n))
-static bool hv_started_cpus[MAX_CPUS], hv_should_exit[MAX_CPUS];
+static bool hv_started_cpus[MAX_CPUS], hv_should_exit[MAX_CPUS], hv_setup_pending[MAX_CPUS];
 static bool hv_shutdown_failed;
 static u64 hv_cpus_in_guest;
 static int boot_cpu_idx, bhl, locked, waits, failed_cpu = -1, watchdog_error;
@@ -269,6 +272,12 @@ int main(void)
     watchdog_error = 0;
     assert(check_start(NULL, NULL) == -1 && !hv_shutdown_failed);
     assert(check_start(NULL, NULL) == 0);
+    hv_setup_pending[3] = true;
+    failed_cpu = 3;
+    assert(hv_join_cpus() == -1 && hv_setup_pending[3] && hv_shutdown_failed);
+    failed_cpu = -1;
+    assert(hv_join_cpus() == 0 && !hv_setup_pending[3] && !hv_shutdown_failed);
+    assert(waits & BIT(3));
     return 0;
 }
 '''

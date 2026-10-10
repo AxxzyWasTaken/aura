@@ -54,6 +54,7 @@ struct hv_secondary_info_t {
 static struct hv_secondary_info_t hv_secondary_info;
 static u64 hv_secondary_regs[MAX_CPUS][4];
 static bool hv_shutdown_failed;
+static bool hv_setup_pending[MAX_CPUS];
 
 static int hv_join_cpus(void)
 {
@@ -72,7 +73,7 @@ static int hv_join_cpus(void)
         if (i == boot_cpu_idx)
             continue;
         spin_lock(&bhl);
-        bool started = hv_started_cpus[i];
+        bool started = hv_started_cpus[i] || hv_setup_pending[i];
         spin_unlock(&bhl);
         if (!started)
             continue;
@@ -83,6 +84,7 @@ static int hv_join_cpus(void)
         } else {
             spin_lock(&bhl);
             hv_started_cpus[i] = false;
+            hv_setup_pending[i] = false;
             spin_unlock(&bhl);
         }
     }
@@ -288,14 +290,23 @@ static void hv_enter_secondary(void *entry, u64 regs[4])
 
 int hv_start_secondary(int cpu, void *entry, u64 regs[4])
 {
+    if (cpu < 0 || cpu >= MAX_CPUS || cpu == boot_cpu_idx || !regs || hv_shutdown_failed)
+        return -1;
+
     printf("HV: Initializing secondary %d\n", cpu);
     iodev_console_flush();
 
-    if (mmu_init_secondary(cpu))
-        return -1;
+    hv_setup_pending[cpu] = true;
+    int ret = mmu_init_secondary(cpu);
+    if (ret)
+        goto setup_failed;
     iodev_console_flush();
-    if (smp_call4(cpu, hv_init_secondary, (u64)&hv_secondary_info, 0, 0, 0) || smp_wait(cpu, NULL))
-        return -1;
+    ret = smp_call4(cpu, hv_init_secondary, (u64)&hv_secondary_info, 0, 0, 0);
+    if (!ret)
+        ret = smp_wait(cpu, NULL);
+    if (ret)
+        goto setup_failed;
+    hv_setup_pending[cpu] = false;
     iodev_console_flush();
 
     printf("HV: Entering guest secondary %d at %p\n", cpu, entry);
@@ -306,11 +317,20 @@ int hv_start_secondary(int cpu, void *entry, u64 regs[4])
     iodev_console_flush();
     /* An acknowledgement timeout can still have a late guest entry. Retain
      * the guest CPU state so exit waits for it instead of declaring it gone. */
-    int ret = smp_call4(cpu, hv_enter_secondary, (u64)entry, (u64)hv_secondary_regs[cpu], 0, 0);
-    if (ret && ret != SMP_TIMEOUT) {
+    ret = smp_call4(cpu, hv_enter_secondary, (u64)entry, (u64)hv_secondary_regs[cpu], 0, 0);
+    if (ret == SMP_TIMEOUT)
+        hv_shutdown_failed = true;
+    else if (ret) {
         hv_started_cpus[cpu] = false;
         __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(cpu), __ATOMIC_ACQUIRE);
     }
+    return ret;
+
+setup_failed:
+    if (ret == SMP_TIMEOUT)
+        hv_shutdown_failed = true;
+    else
+        hv_setup_pending[cpu] = false;
     return ret;
 }
 
