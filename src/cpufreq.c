@@ -120,11 +120,8 @@ static int set_pstate(const struct cluster_t *cluster, uint32_t pstate)
             case T6031:
             case T6034:
             case T8122:
-<<<<<<< HEAD
             case T8142:
-=======
             case T8140:
->>>>>>> aed99972 (cpufreq: run the T8140 P cluster at P8 while payloads load)
                 val &= ~CLUSTER_PSTATE_DESIRED1;
                 val |= CLUSTER_PSTATE_SET | FIELD_PREP(CLUSTER_PSTATE_DESIRED1, pstate);
                 break;
@@ -547,7 +544,6 @@ const struct feat_t *cpufreq_get_features(void)
     }
 }
 
-<<<<<<< HEAD
 /* T8152ACC::setPerfState in matching 26A428 firmware uses logical offset
  * 0xe20020. E/P ACC maps resolve that to RegMap 0x20/0x40 + 0x20. The ADT
  * supplies the physical apertures and the hardware-index bias (2 on J873g).
@@ -644,7 +640,6 @@ failed:
 }
 
 
-=======
 /*
  * iBoot hands T8140 over with the P cluster at P1 (744 MHz), where inflating a
  * 45 MB kernel Image takes ~2.3 s. cpufreq_init() leaves T8140 alone, so raise
@@ -674,7 +669,6 @@ void cpufreq_payload_boost(bool enable)
     t8140_boosted = enable;
 }
 
->>>>>>> aed99972 (cpufreq: run the T8140 P cluster at P8 while payloads load)
 int cpufreq_init(void)
 {
     if (chip_id == T8140) {
