@@ -486,6 +486,10 @@ int main(void)
 
 def test_proxy_reports_dispatch_and_completion_failures(tmp_path):
     source = (REPO / "src/proxy.c").read_text()
+    status_definitions = "\n".join(
+        line for line in (REPO / "src/proxy.h").read_text().splitlines()
+        if line.startswith("#define S_")
+    )
     cases = source[source.index("        case P_SMP_START_SECONDARIES:"):
                    source.index("        case P_HEAPBLOCK_ALLOC:")]
     harness = r'''
@@ -496,7 +500,7 @@ typedef uint64_t u64;
 enum { P_SMP_START_SECONDARIES, P_SMP_STOP_SECONDARIES, P_SMP_CALL,
        P_SMP_CALL_SYNC, P_SMP_WAIT, P_SMP_SET_WFE_MODE, P_SMP_IS_ALIVE,
        P_SMP_CALL_EL1, P_SMP_CALL_EL1_SYNC, P_SMP_CALL_EL0, P_SMP_CALL_EL0_SYNC };
-#define S_ERROR -1
+''' + status_definitions + r'''
 struct request { u64 args[6]; };
 struct reply { int status; u64 retval; };
 static int dispatch_error, wait_error, calls, waits;
