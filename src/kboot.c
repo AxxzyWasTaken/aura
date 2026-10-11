@@ -6,6 +6,7 @@
 #include "kboot_display_facts.h"
 #include "kboot_gpu_t8122.h"
 #include "kboot_pmp_t8122.h"
+#include "kboot_t6031.h"
 #include "adt.h"
 #include "assert.h"
 #include "clk.h"
@@ -2147,11 +2148,13 @@ static int dt_set_display(void)
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6022")) {
         /* noop */
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030") ||
-               !fdt_node_check_compatible(dt, 0, "apple,t8122")) {
+               !fdt_node_check_compatible(dt, 0, "apple,t8122") ||
+               !fdt_node_check_compatible(dt, 0, "apple,t6031")) {
         /*
          * Fail-soft handoff (kboot_display_handoff.c): it always returns 0, never uses the
          * helpers above (they bail out of kboot or enable nodes) and never enables a node.
-         * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1.
+         * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1. On T6031 it does nothing
+         * unless the board is a J514C or J516C.
          */
         return dt_set_display_handoff(dt);
     } else {
@@ -2369,6 +2372,18 @@ static void dt_pass_pmp(const struct pmp_values_soc *soc)
 static int dt_set_pmp_t6030(void)
 {
     dt_pass_pmp(&pmp_values_t6030);
+    return 0;
+}
+
+/* T6031: on every boot of a J514C or J516C; the PMP and its DART are where the kernel puts them */
+static const struct pmp_values_soc pmp_values_t6031 = {
+    "apple,t6031", "asahi,t6031-pmp", "T6031", {1181, 1180, 1183, 1182}, 0x290300000, 0x4000,
+};
+
+static int dt_set_pmp_t6031(void)
+{
+    if (t6031_board(dt))
+        dt_pass_pmp(&pmp_values_t6031);
     return 0;
 }
 
@@ -3121,6 +3136,9 @@ int kboot_prepare_dt(void *fdt)
     // A T6030 also takes its display ADT facts (at most 46K, headers and strings included)
     if (chip_id == T6030)
         dt_bufsize += 4 * SZ_16K;
+    // A T6031 takes its PMP values (32K) and its display, GPU and firmware handoff (about 16K)
+    if (chip_id == T6031)
+        dt_bufsize += 4 * SZ_16K;
     dt = memalign(DT_ALIGN, dt_bufsize);
 
     if (fdt_open_into(fdt, dt, dt_bufsize) < 0)
@@ -3245,6 +3263,13 @@ int kboot_prepare_dt(void *fdt)
     /* Read-only ADT export, last, in its own buffer room. */
     if (chip_id == T6030)
         dt_display_facts_t6030(dt);
+
+    /* T6031 (J514C/J516C): this Mac's PMP values and firmware image UUIDs, in their own room. */
+    if (chip_id == T6031) {
+        dt_set_pmp_t6031();
+        dt_t6031_fw_uuids(dt);
+        dt_t6031_facts(dt);
+    }
 
     if (fdt_pack(dt))
         bail("FDT: fdt_pack() failed\n");
