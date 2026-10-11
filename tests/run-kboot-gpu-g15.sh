@@ -30,6 +30,13 @@ build() { # build <tree> <out> [extra cflags]; the test file is this tree's, or 
         set -- "$@" -DG15_FW26
     fi
     [ -f "$tree/src/kboot_gpu_t8122_power.c" ] && extra="$tree/src/kboot_gpu_t8122_power.c"
+    # The T6031 sources link in with kboot_gpu.c; next to the stand-ins, as kboot_gpu.c is
+    for f in kboot_gpu_t6031.c kboot_t6031.c; do
+        if [ -f "$tree/src/$f" ]; then
+            cp "$tree/src/$f" "$out/src/"
+            extra="$extra $out/src/$f"
+        fi
+    done
     ${CC:-cc} -std=gnu11 -D_GNU_SOURCE -O1 -g -Wall -Wno-unused-function \
         -Wno-format-truncation -fsanitize=address,undefined -fno-omit-frame-pointer \
         -fno-sanitize-recover=undefined "$@" \

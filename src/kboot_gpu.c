@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "kboot.h"
+#include "kboot_gpu_t6031.h"
 #include "kboot_gpu_t8122_power.h"
+#include "kboot_t6031.h"
 #include "adt.h"
 #include "assert.h"
 #include "exception.h"
@@ -541,7 +543,8 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
 #define G15_SGX_CORE_MASK      0xe01500 // 3 words, third masked to 16 bits
 #define G15_SGX_ID_COUNTS_1    0xd04010 // [7:0] cores/cluster, [15:8] clusters/die, [19:16] dies
 #define G15_SGX_ID_COUNTS_2    0xd04014 // further topology counts, as drm/asahi reads them
-#define G15_MAX_CLUSTERS       2        // array bound: the most clusters of a supported SoC
+#define G15_MAX_CLUSTERS       2        // the most clusters an ID_COUNTS_1 topology may report
+#define G15_ARRAY_CLUSTERS     4        // array bound: the most clusters of a supported SoC (G15C)
 #define T6030_LEAK_FUSE        0x3642c81a8 // efuse page 0x3642c8000 + 0x1a8
 #define G15S_PWR_CLAMP         70000.0f    // I_static + I_dynamic clamp
 
@@ -577,6 +580,17 @@ struct g15_soc {
     bool fw_experimental;
     /* Add the ADT's power-management values to the gpu node, see g15_power_props[] */
     bool power_props;
+    /*
+     * T6031: armed unless chosen.<optin>=0; the firmware is admitted by its family
+     * (dt_t6031_gpu_image()); the identity and core masks come from the bounded probe that ran
+     * before, so the setup itself accesses no GPU hardware; the node takes the CS and AFR states;
+     * the ADT's firmware nub is fw_nub (NULL: /arm-io/gfx-asc/iop-gfx-nub).
+     */
+    bool armed_default;
+    bool family_fw;
+    bool probed;
+    bool csafr;
+    const char *fw_nub;
     /* NULL while not known: the setup then stops before it touches the GPU */
     int (*read_leak)(const struct g15_soc *soc, float *leak);
     void (*calc_power)(u32 count, const struct perf_state *core, float leak, u32 enabled_cores,
@@ -1137,7 +1151,7 @@ static int g15_set_opps(void *dt, u32 opps_ph, u32 count, u32 table_count, u32 c
     /* fdt_add_subnode() inserts at the head, so add in reverse to keep opp00 first */
     for (int i = count - 1; i >= 0; i--) {
         char name[16];
-        fdt32_t volts[G15_MAX_CLUSTERS];
+        fdt32_t volts[G15_ARRAY_CLUSTERS];
 
         for (u32 j = 0; j < clusters; j++) {
             /*
@@ -1167,6 +1181,144 @@ static int g15_set_opps(void *dt, u32 opps_ph, u32 count, u32 table_count, u32 c
             bail("FDT: GPU: OPP table lost\n");
     }
 
+    return 0;
+}
+
+/*
+ * G15C CS and AFR clock domains (T6031). ADT cs-perf-states and afr-perf-states are each
+ * {u64 dies, u64 count}, then dies x count {u64 microvolts, u64 Hz}, and on T6031 one more u64 in
+ * microvolts, equal to the GPU's SRAM floor, taken as the CS/AFR SRAM floor. Only one die is
+ * supported. Each becomes an OPP table (opp-hz, one opp-microvolt cell per die, no power) behind
+ * the gpu node's apple,cs-opp or apple,afr-opp phandle, rebuilt like g15_set_opps() does the main
+ * one.
+ */
+#define G15_AUX_MAX    16
+#define G15_AUX_MIN_HZ 10000000u /* CS and AFR idle at 24 MHz */
+
+struct g15_aux {
+    const char *adt; /* ADT property of the sgx node */
+    const char *dt;  /* gpu node property naming the OPP table */
+    u32 count;
+    u32 phandle;
+    u64 uv[G15_AUX_MAX];
+    u64 hz[G15_AUX_MAX];
+    u64 sram_uv; /* the trailing value, 0 if the ADT has none */
+};
+
+static int g15_get_aux(void *dt, int gpu, int sgx, u32 dies, struct g15_aux *a)
+{
+    u64 hdr[2];
+    u32 len = 0;
+    const u8 *p = adt_getprop(adt, sgx, a->adt, &len);
+
+    if (!p || len < sizeof(hdr))
+        bail("ADT: GPU: missing or short %s\n", a->adt);
+    memcpy(hdr, p, sizeof(hdr));
+    if (dies != 1 || hdr[0] != dies || !hdr[1] || hdr[1] > G15_AUX_MAX)
+        bail("ADT: GPU: %s has %lu die(s) and %lu states, not 1 die and 1 to %d\n", a->adt, hdr[0],
+             hdr[1], G15_AUX_MAX);
+    u32 body = sizeof(hdr) + hdr[1] * 2 * sizeof(u64);
+    if (len != body && len != body + sizeof(u64))
+        bail("ADT: GPU: %s is %u bytes, not %u or %u\n", a->adt, len, body,
+             body + (u32)sizeof(u64));
+
+    a->count = hdr[1];
+    a->sram_uv = 0;
+    for (u32 i = 0; i < a->count; i++) {
+        memcpy(&a->uv[i], p + sizeof(hdr) + 16 * i, sizeof(u64));
+        memcpy(&a->hz[i], p + sizeof(hdr) + 16 * i + 8, sizeof(u64));
+        if (a->uv[i] < G15_PS_MIN_MV * 1000 || a->uv[i] > G15_PS_MAX_MV * 1000 ||
+            a->hz[i] < G15_AUX_MIN_HZ || a->hz[i] > G15_PS_MAX_HZ)
+            bail("ADT: GPU: %s state %u has bad values (%lu Hz, %lu uV)\n", a->adt, i, a->hz[i],
+                 a->uv[i]);
+    }
+    if (len == body + sizeof(u64)) {
+        memcpy(&a->sram_uv, p + body, sizeof(u64));
+        if (a->sram_uv < G15_PS_MIN_MV * 1000 || a->sram_uv > G15_PS_MAX_MV * 1000)
+            bail("ADT: GPU: %s SRAM floor %lu uV is out of range\n", a->adt, a->sram_uv);
+    }
+
+    int plen;
+    const fdt32_t *ph = fdt_getprop(dt, gpu, a->dt, &plen);
+    if (!ph || plen != sizeof(*ph) || fdt_node_offset_by_phandle(dt, fdt32_ld(ph)) < 0)
+        bail("FDT: GPU: %s missing or not an OPP table\n", a->dt);
+    a->phandle = fdt32_ld(ph);
+    return 0;
+}
+
+/* The CS and AFR SRAM floor: the one both ADT tables end with, else the GPU's SRAM floor */
+static int g15_csafr_sram(const struct g15_aux aux[2], u32 gpu_floor_uv, u32 *out)
+{
+    if (aux[0].sram_uv && aux[1].sram_uv) {
+        if (aux[0].sram_uv != aux[1].sram_uv)
+            bail("ADT: GPU: the CS and AFR SRAM floors disagree (%lu, %lu uV)\n", aux[0].sram_uv,
+                 aux[1].sram_uv);
+        *out = aux[0].sram_uv;
+    } else if (!aux[0].sram_uv && !aux[1].sram_uv) {
+        *out = gpu_floor_uv;
+    } else {
+        bail("ADT: GPU: only one of the CS and AFR tables has an SRAM floor\n");
+    }
+    printf("ADT: GPU: CS %u and AFR %u states, CS/AFR SRAM floor %u uV (%s)\n", aux[0].count,
+           aux[1].count, *out, aux[0].sram_uv ? "the tables' own" : "the GPU's");
+    return 0;
+}
+
+static int g15_set_aux_opps(void *dt, const struct g15_aux *a)
+{
+    int opps = fdt_node_offset_by_phandle(dt, a->phandle), child;
+    if (opps < 0)
+        bail("FDT: GPU: %s table lost\n", a->dt);
+    while ((child = fdt_first_subnode(dt, opps)) >= 0) {
+        if (fdt_del_node(dt, child))
+            bail("FDT: GPU: failed to delete a placeholder of %s\n", a->dt);
+        opps = fdt_node_offset_by_phandle(dt, a->phandle);
+        if (opps < 0)
+            bail("FDT: GPU: %s table lost\n", a->dt);
+    }
+    /* fdt_add_subnode() inserts at the head, so add in reverse to keep opp00 first */
+    for (int i = a->count - 1; i >= 0; i--) {
+        char name[16];
+        snprintf(name, sizeof(name), "opp%02d", i);
+        int opp = fdt_add_subnode(dt, opps, name);
+        if (opp < 0 || fdt_setprop_u64(dt, opp, "opp-hz", a->hz[i]) ||
+            fdt_setprop_u32(dt, opp, "opp-microvolt", a->uv[i]))
+            bail("FDT: GPU: failed to add %s %s\n", a->dt, name);
+        opps = fdt_node_offset_by_phandle(dt, a->phandle);
+        if (opps < 0)
+            bail("FDT: GPU: %s table lost\n", a->dt);
+    }
+    return 0;
+}
+
+static int g15_set_float_array(void *dt, const char *name, float val, int count);
+
+/*
+ * The CS and AFR leakage have no G15C source: 0 stands in, as for the SRAM leakage, and is listed
+ * in asahi,t6031-gpu-standin with the other stand-ins.
+ */
+#define G15C_STANDIN_AUX_LEAK 0.0f
+
+static int g15_set_csafr(void *dt, const struct g15_aux aux[2], u32 sram_uv, u32 dies)
+{
+    if (g15_set_aux_opps(dt, &aux[0]) || g15_set_aux_opps(dt, &aux[1]) ||
+        g15_set_float_array(dt, "apple,cs-leak-coef", G15C_STANDIN_AUX_LEAK, dies) ||
+        g15_set_float_array(dt, "apple,afr-leak-coef", G15C_STANDIN_AUX_LEAK, dies))
+        return -1;
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0 || fdt_setprop_u32(dt, gpu, "apple,csafr-min-sram-microvolt", sram_uv))
+        bail("FDT: GPU: failed to set apple,csafr-min-sram-microvolt\n");
+    return 0;
+}
+
+/* The gpu node properties that hold stand-ins, not this Mac's values (T6031) */
+static int g15_set_standins(void *dt)
+{
+    static const char list[] = "apple,core-leak-coef\0apple,sram-leak-coef\0apple,cs-leak-coef\0"
+                               "apple,afr-leak-coef\0opp-microwatt";
+    int gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0 || fdt_setprop(dt, gpu, "asahi,t6031-gpu-standin", list, sizeof(list)))
+        bail("FDT: GPU: failed to set asahi,t6031-gpu-standin\n");
     return 0;
 }
 
@@ -1423,8 +1575,18 @@ static bool g15_overlaps(u64 a, u64 a_size, u64 b, u64 b_size)
  * Read and check the firmware segments from the ADT and the gpu node inputs from the DT. Changes
  * nothing. `regions` are the checked UAT regions. Returns 0 if the description can be added.
  */
+static int g15_get_fw_segs_nub(void *dt, int gpu, const struct g15_region *regions,
+                               struct g15_fw_seg *segs, const char *nub_path);
+
 static int g15_get_fw_segs(void *dt, int gpu, const struct g15_region *regions,
                            struct g15_fw_seg *segs)
+{
+    return g15_get_fw_segs_nub(dt, gpu, regions, segs, "/arm-io/gfx-asc/iop-gfx-nub");
+}
+
+/* As g15_get_fw_segs(), with the firmware nub at `nub_path` (T6031: iop-gfx-nub0) */
+static int g15_get_fw_segs_nub(void *dt, int gpu, const struct g15_region *regions,
+                               struct g15_fw_seg *segs, const char *nub_path)
 {
     struct adt_segment_ranges ranges[G15_FW_SEGS];
     u32 len;
@@ -1450,7 +1612,7 @@ static int g15_get_fw_segs(void *dt, int gpu, const struct g15_region *regions,
     memcpy(ranges, seg_ranges, sizeof(ranges));
 
     /* The firmware nub below gfx-asc carries a copy of the segments; if present it must agree */
-    int nub = adt_path_offset(adt, "/arm-io/gfx-asc/iop-gfx-nub");
+    int nub = adt_path_offset(adt, nub_path);
     if (nub >= 0) {
         u32 preloaded;
 
@@ -1863,6 +2025,101 @@ static const struct g15_soc g15_soc_t8122_standin = {
     .calc_power = calc_power_t8122_standin,
 };
 
+/*
+ * T6031 (M3 Max, G15C), J514C/J516C only, armed unless chosen.asahi,t6031-gpu=0: the J613 14.x
+ * setup with T6031 values, with these differences.
+ * - The identity, topology and core masks come from the bounded powered identity read that runs
+ *   first (t6031_gpu_probe()), which puts the GPU power closure back exactly as iBoot left it. The
+ *   setup itself touches no GPU hardware and leaves the GPU unpowered: the kernel's power domain
+ *   powers it when the GPU driver binds.
+ * - The firmware is admitted by its family (dt_t6031_gpu_image()), not by a pinned image: the
+ *   kernel identifies the image itself and starts it only when told to.
+ * - Four clusters of ten core slots, one voltage per cluster in each OPP, and the CS and AFR
+ *   domains (g15_set_csafr()).
+ * - No G15C leakage source and no G15C power model: the T8122 stand-in leakage for every cluster,
+ *   0 for the SRAM, CS and AFR leakage, and the G15S model for the OPP powers, all listed in
+ *   asahi,t6031-gpu-standin. They do not limit clocks; the kernel's performance-state cap does.
+ */
+#define G15C_STANDIN_LEAK G15G_STANDIN_LEAK
+
+static int g15c_standin_read_leak(const struct g15_soc *soc, float *leak)
+{
+    UNUSED(soc);
+    printf("FDT: GPU: T6031 leakage: stand-in %u per cluster (no G15C leakage source); SRAM, CS "
+           "and AFR 0\n",
+           (u32)G15C_STANDIN_LEAK);
+    *leak = G15C_STANDIN_LEAK;
+    return 0;
+}
+
+static void calc_power_t6031_standin(u32 count, const struct perf_state *core, float leak,
+                                     u32 enabled_cores, u32 *max_pwr)
+{
+    printf("FDT: GPU: T6031 power model: stand-in, the G15S model for %u cores (not measured; "
+           "does not limit clocks)\n",
+           enabled_cores);
+    calc_power_t6030(count, core, leak, enabled_cores, max_pwr);
+}
+
+static const struct g15_soc g15_soc_t6031 = {
+    .chip = T6031,
+    .name = "T6031",
+    .gpu_name = "G15C",
+    .compatible = "apple,agx-t6031",
+    .optin = "asahi,t6031-gpu",
+    .id_gen = 7,
+    .id_variant = 4, // drm/asahi hw/agx3.rs T6031: family 7, variant 4 = C
+    .cores_per_cluster = T6031_CORES_PER_CLUSTER,
+    .clusters = T6031_GPU_CLUSTERS,
+    .dies = 1,
+    .mask2_bits = 32,
+    .power_props = true,
+    .armed_default = true,
+    .family_fw = true,
+    .probed = true,
+    .csafr = true,
+    .fw_nub = "/arm-io/gfx-asc/iop-gfx-nub0",
+    .read_leak = g15c_standin_read_leak,
+    .calc_power = calc_power_t6031_standin,
+};
+
+/* This boot's T6031 firmware family (NULL: not admitted) and powered identity, set before the setup */
+static const struct fw_version_info *g15_t6031_fw;
+static struct t8122_powered_identity g15_t6031_id;
+
+/*
+ * T6031: the identity of the bounded probe that ran before this setup, instead of g15_read_hw()'s
+ * power-on and reads. The device tree's GPU windows must still be the ADT's.
+ */
+static int g15_probed_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *core_count,
+                         u32 *clusters_out, u32 *enabled_cores, float *leak)
+{
+    int sgx_path[8], asc_path[8];
+    u64 sgx_base, asc_base, dt_sgx, dt_asc;
+
+    if (adt_path_offset_trace(adt, "/arm-io/sgx", sgx_path) < 0 ||
+        adt_get_reg(adt, sgx_path, "reg", 0, &sgx_base, NULL) < 0 ||
+        adt_path_offset_trace(adt, "/arm-io/gfx-asc", asc_path) < 0 ||
+        adt_get_reg(adt, asc_path, "reg", 0, &asc_base, NULL) < 0)
+        bail("ADT: GPU: no sgx or gfx-asc reg 0\n");
+    if (g15_dt_reg_by_name(dt, gpu, "sgx", &dt_sgx) || g15_dt_reg_by_name(dt, gpu, "asc", &dt_asc))
+        return -1;
+    if (dt_sgx != sgx_base || dt_asc != asc_base)
+        bail("FDT: GPU: DT sgx/asc 0x%lx/0x%lx do not match ADT 0x%lx/0x%lx\n", dt_sgx, dt_asc,
+             sgx_base, asc_base);
+    if (g15_t6031_id.result != T8122_ID_PASS)
+        bail("FDT: GPU: %s powered identity result %u, not 1 (pass): GPU node not filled\n",
+             soc->name, g15_t6031_id.result);
+
+    *clusters_out = soc->clusters;
+    *enabled_cores = t6031_core_counts(&g15_t6031_id, core_count);
+    printf("FDT: GPU: Core counts: ");
+    for (u32 i = 0; i < soc->clusters; i++)
+        printf("%d ", core_count[i]);
+    printf("\n");
+    return soc->read_leak(soc, leak);
+}
+
 /* 25G83 calibration on the scratch DT: this Mac's ADT and fuse, no unit tables.
  * The G15S-derived power model remains experimental. Release every power vote
  * after the bounded identity read; Linux owns firmware admission and startup.
@@ -1960,7 +2217,8 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
      * 14.8.3 and 14.7 share one iBoot string. Nothing else (in particular no GPU
      * register) is touched unless it is positively the 14.8.3 G15 ABI drm/asahi supports.
      */
-    const struct fw_version_info *gfx_fw = firmware_gfx_version_ex(soc->chip, soc->fw_experimental);
+    const struct fw_version_info *gfx_fw =
+        soc->family_fw ? g15_t6031_fw : firmware_gfx_version_ex(soc->chip, soc->fw_experimental);
     bool have_model = soc->read_leak && soc->calc_power;
     if (!have_model)
         printf("FDT: GPU: the %s leakage fuse and power model are not known yet\n", soc->gpu_name);
@@ -1981,6 +2239,14 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     struct g15_power_values power_values;
     if (soc->power_props && g15_get_power_props(sgx, perf_state_count, perf_state_table_count,
                                                 perf_states, &power_values))
+        return -1;
+
+    struct g15_aux aux[2] = {{.adt = "cs-perf-states", .dt = "apple,cs-opp"},
+                             {.adt = "afr-perf-states", .dt = "apple,afr-opp"}};
+    u32 csafr_sram_uv = 0;
+    if (soc->csafr && (!soc->power_props || g15_get_aux(dt, gpu, sgx, soc->dies, &aux[0]) ||
+                       g15_get_aux(dt, gpu, sgx, soc->dies, &aux[1]) ||
+                       g15_csafr_sram(aux, power_values.min_sram_uv, &csafr_sram_uv)))
         return -1;
 
     struct g15_region regions[G15_NUM_REGIONS];
@@ -2011,7 +2277,9 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
 
     /* Optional: the firmware segment description. Without it the GPU is still set up. */
     struct g15_fw_seg fw_segs[G15_FW_SEGS];
-    bool have_fw_segs = !g15_get_fw_segs(dt, gpu, regions, fw_segs);
+    bool have_fw_segs = !g15_get_fw_segs_nub(dt, gpu, regions, fw_segs,
+                                             soc->fw_nub ? soc->fw_nub
+                                                         : "/arm-io/gfx-asc/iop-gfx-nub");
     if (have_fw_segs)
         printf("ADT: GPU: firmware text 0x%lx+0x%lx VA 0x%lx, data 0x%lx+0x%lx VA 0x%lx\n",
                fw_segs[0].phys, fw_segs[0].size, fw_segs[0].va, fw_segs[1].phys, fw_segs[1].size,
@@ -2040,12 +2308,16 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     if (gpu < 0)
         return -1;
 
-    /* 3. Hardware: power on, GPU ID, core masks, leakage fuse (reads guarded) */
-    u32 core_count[G15_MAX_CLUSTERS], clusters, enabled_cores;
+    /* 3. Hardware: power on, GPU ID, core masks, leakage fuse (reads guarded); T6031: the probe's */
+    u32 core_count[G15_ARRAY_CLUSTERS], clusters, enabled_cores;
     float leak;
-    if (g15_read_hw(dt, gpu, soc, core_count, &clusters, &enabled_cores, &leak,
-                    publish_identity ? &identity : NULL))
+    if (soc->probed) {
+        if (g15_probed_hw(dt, gpu, soc, core_count, &clusters, &enabled_cores, &leak))
+            return -1;
+    } else if (g15_read_hw(dt, gpu, soc, core_count, &clusters, &enabled_cores, &leak,
+                           publish_identity ? &identity : NULL)) {
         return -1;
+    }
     if (perf_state_table_count > clusters)
         bail("FDT: GPU: %u perf-state tables but %u cluster(s)\n", perf_state_table_count,
              clusters);
@@ -2082,6 +2354,10 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     if (g15_set_float_array(dt, "apple,sram-leak-coef", 0.0f, clusters))
         return -1;
     if (soc->power_props && g15_set_power_props(dt, &power_values))
+        return -1;
+    if (soc->csafr && g15_set_csafr(dt, aux, csafr_sram_uv, soc->dies))
+        return -1;
+    if (soc->probed && g15_set_standins(dt))
         return -1;
 
     for (int i = 0; i < G15_NUM_REGIONS; i++) {
@@ -2158,9 +2434,10 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
      * included. The opt-in is a config line appended to boot.bin (update-m1n1 copies chosen.* lines
      * from /etc/m1n1.conf):  chosen.asahi,t6030-gpu=1 (chosen.asahi,t8122-gpu=1 on T8122)
      * Without it this is a dry run: the firmware identification (DRAM reads only) and all ADT/DT
-     * checks run and are logged, then the gpu node is left disabled.
+     * checks run and are logged, then the gpu node is left disabled. T6031 is armed unless
+     * chosen.asahi,t6031-gpu=0, and its setup itself touches no GPU hardware.
      */
-    bool armed = g15_optin(dt, soc->optin);
+    bool armed = soc->armed_default ? !t6031_switched_off(dt, soc->optin) : g15_optin(dt, soc->optin);
 
     g15_powered = false;
     int ret = dt_set_gpu_g15_inner(dt, soc, armed);
@@ -2287,6 +2564,119 @@ static int t8122_identity_power_disable(void *context)
     if (pmgr_adt_power_disable_recursive("/arm-io/sgx"))
         return -1;
     return pmgr_adt_power_is_off("/arm-io/sgx") == 1 ? 0 : -1;
+}
+
+/*
+ * T6031: the bounded powered identity read, on every boot of a J514C or J516C unless
+ * chosen.asahi,t6031-gpu=0. Unlike the T8122 probe it cannot require the GPU power closure to be
+ * off (GFX's parent AFR is always on), so it records every power state register of the closure,
+ * powers the GPU on through PMGR (each step a bounded poll), checks that every device of the
+ * closure is on before any GPU register is read, reads the ID, topology and core mask registers
+ * under the exception guard, and then puts each register back as it was, children first, and
+ * checks that it is. Every result, a failure included, is published with the values read (none
+ * after a faulted read) in /chosen/asahi,t6031-gpu-powered-identity.
+ */
+#define T6031_SGX_BASE 0x408000000UL
+
+struct t6031_probe {
+    u64 sgx_base;
+    struct t6031_closure closure;
+};
+
+static int t6031_probe_enable(void *ctx)
+{
+    UNUSED(ctx);
+    return pmgr_adt_power_enable("/arm-io/sgx");
+}
+
+static int t6031_probe_active(void *ctx)
+{
+    return t6031_closure_active(&((struct t6031_probe *)ctx)->closure);
+}
+
+static int t6031_probe_read(void *ctx, u32 *id, u32 masks[3], u32 *counts, u32 *counts2)
+{
+    return t8122_identity_read(&((struct t6031_probe *)ctx)->sgx_base, id, masks, counts, counts2);
+}
+
+static int t6031_probe_restore(void *ctx)
+{
+    return t6031_closure_restore(&((struct t6031_probe *)ctx)->closure);
+}
+
+static void t6031_log_closure(const char *when, const struct t6031_closure *c, bool after)
+{
+    printf("FDT: GPU: T6031 power %s:", when);
+    for (int i = 0; i < c->n; i++)
+        printf(" %.16s 0x%lx=0x%x", c->ps[i].name ? c->ps[i].name : "?", c->ps[i].addr,
+               after ? c->ps[i].after : c->ps[i].before);
+    printf("\n");
+}
+
+static void t6031_gpu_probe(void *dt)
+{
+    static const struct t6031_probe_ops ops = {
+        .enable = t6031_probe_enable,
+        .active = t6031_probe_active,
+        .read = t6031_probe_read,
+        .restore = t6031_probe_restore,
+    };
+    struct t6031_probe p;
+    int sgx_path[8];
+    u64 sgx_size;
+
+    g15_t6031_id = (struct t8122_powered_identity){.result = T8122_ID_NOT_RUN};
+    if (adt_path_offset_trace(adt, "/arm-io/sgx", sgx_path) < 0 ||
+        adt_get_reg(adt, sgx_path, "reg", 0, &p.sgx_base, &sgx_size) < 0 ||
+        p.sgx_base != T6031_SGX_BASE || sgx_size < G15_SGX_CORE_MASK + 12) {
+        printf("FDT: GPU: T6031 identity not read: the ADT sgx window is not 0x%lx\n",
+               T6031_SGX_BASE);
+        return;
+    }
+    if (t6031_closure_get("/arm-io/sgx", &p.closure)) {
+        printf("FDT: GPU: T6031 identity not read: the sgx power closure does not resolve\n");
+        return;
+    }
+    /* Every result property is reserved before anything is powered */
+    if (t6031_identity_node(dt, p.closure.n) < 0) {
+        printf("FDT: GPU: T6031 identity not read: no room for /chosen/" T6031_GPU_IDENTITY "\n");
+        return;
+    }
+    t6031_log_closure("before", &p.closure, false);
+    g15_t6031_id = t6031_probe_run(&ops, &p);
+    t6031_log_closure("after", &p.closure, true);
+    if (g15_t6031_id.result == T8122_ID_POWER_OFF_FAILED)
+        printf("FDT: GPU: T6031 WARNING: the power closure is not as iBoot left it\n");
+    if (t6031_identity_publish(dt, &g15_t6031_id, &p.closure))
+        printf("FDT: GPU: T6031 could not publish the powered identity\n");
+    printf("FDT: GPU: T6031 powered identity result %u: ID_VERSION 0x%08x ID_COUNTS_1 0x%08x "
+           "ID_COUNTS_2 0x%08x core masks 0x%x 0x%x 0x%x\n",
+           g15_t6031_id.result, g15_t6031_id.id_version, g15_t6031_id.id_counts_1,
+           g15_t6031_id.id_counts_2, g15_t6031_id.core_mask[0], g15_t6031_id.core_mask[1],
+           g15_t6031_id.core_mask[2]);
+}
+
+/*
+ * T6031 (J514C/J516C): the firmware image facts, the bounded powered identity read, then the GPU
+ * setup (which itself touches no GPU hardware). Each part is fail-soft; chosen.asahi,t6031-gpu=0
+ * switches all three off.
+ */
+static int dt_set_gpu_t6031(void *dt)
+{
+    g15_t6031_fw = NULL;
+    g15_t6031_id = (struct t8122_powered_identity){.result = T8122_ID_NOT_RUN};
+    if (!t6031_board(dt)) {
+        printf("FDT: GPU: T6031: not a J514C/J516C device tree, nothing done\n");
+        return 0;
+    }
+    if (t6031_switched_off(dt, g15_soc_t6031.optin)) {
+        printf("FDT: GPU: T6031: switched off (chosen.%s=0): no identity read, no GPU handoff\n",
+               g15_soc_t6031.optin);
+        return 0;
+    }
+    g15_t6031_fw = dt_t6031_gpu_image(dt);
+    t6031_gpu_probe(dt);
+    return dt_set_gpu_g15(dt, &g15_soc_t6031);
 }
 
 /*
@@ -2594,6 +2984,8 @@ int dt_set_gpu(void *dt)
             break;
         case T6030:
             return dt_set_gpu_g15(dt, &g15_soc_t6030);
+        case T6031:
+            return dt_set_gpu_t6031(dt);
         case T8122: {
             int dcp = fdt_path_offset(dt, "dcp"), len;
             const fdt32_t *profile = dcp < 0 ? NULL :

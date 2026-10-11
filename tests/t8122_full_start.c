@@ -16,6 +16,8 @@
 #define G15_SGX_CORE_MASK    0xe01500
 #define G15_SGX_ID_COUNTS_1  0xd04010
 #define G15_SGX_ID_COUNTS_2  0xd04014
+#define G15_ARRAY_CLUSTERS   4
+#define G15_AUX_MAX          16
 #define T8122                0x8122
 #define bail(...)                                                                                  \
     do {                                                                                           \
@@ -27,6 +29,7 @@
 
 struct g15_power_values {
     u32 unused;
+    u32 min_sram_uv;
 };
 struct fw_version_info {
     int version;
@@ -201,6 +204,45 @@ static int g15_set_status(void *dt, const char *path, const char *status)
 static int g15_set_mbox_status(void *dt, u32 phandle, const char *status)
 {
     return fdt_setprop_string(dt, fdt_node_offset_by_phandle(dt, phandle), "status", status);
+}
+static int g15_get_fw_segs_nub(void *dt, int gpu, const struct g15_region *regions,
+                               struct g15_fw_seg *segments, const char *nub)
+{
+    return g15_get_fw_segs(dt, gpu, regions, segments);
+}
+
+/* The T6031 hooks of the setup: a T8122 setup never takes them */
+static const struct fw_version_info *g15_t6031_fw;
+static bool t6031_switched_off(const void *dt, const char *name)
+{
+    assert(0);
+    return false;
+}
+static int g15_get_aux(void *dt, int gpu, int sgx, u32 dies, struct g15_aux *aux)
+{
+    assert(0);
+    return -1;
+}
+static int g15_csafr_sram(const struct g15_aux aux[2], u32 floor, u32 *out)
+{
+    assert(0);
+    return -1;
+}
+static int g15_probed_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *counts,
+                         u32 *clusters, u32 *cores, float *leak)
+{
+    assert(0);
+    return -1;
+}
+static int g15_set_csafr(void *dt, const struct g15_aux aux[2], u32 floor, u32 dies)
+{
+    assert(0);
+    return -1;
+}
+static int g15_set_standins(void *dt)
+{
+    assert(0);
+    return -1;
 }
 
 /* SOURCE FUNCTIONS */

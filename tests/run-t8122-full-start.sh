@@ -22,7 +22,7 @@ def definition(pattern):
     if source[end:end+1] == ';':
         end += 1
     return source[start:end] + '\n'
-structs = ['perf_state', 'g15_soc', 'g15_region', 'g15_fw_seg']
+structs = ['perf_state', 'g15_soc', 'g15_region', 'g15_fw_seg', 'g15_aux']
 prelude = ''.join(definition(r'^struct ' + name + r' \{') for name in structs)
 prelude += definition(r'^static const struct g15_region g15_region_names\[')
 functions = ['g15_dt_reg_by_name', 't8122_identity_read', 'g15_read_hw',
