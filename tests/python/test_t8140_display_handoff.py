@@ -316,7 +316,7 @@ static int dt_get_or_add_reserved_mem(const char *name, const char *compat, bool
     if (fdt_setprop_string(dt, n, "compatible", compat)) return -1;
     return fdt_subnode_offset(dt, fdt_path_offset(dt, "/reserved-memory"), name);
 }
-''' + helper + r'''
+''' + ('#define HAVE_DISPLAY_RECHECK 1\n' if 'static int dt_t8140_recheck_display(' in source else '') + helper + r'''
 static void setup(void)
 {
     memset(tree, 0, sizeof(tree));
@@ -383,6 +383,17 @@ static void setup(void)
         iommu[0] = cpu_to_fdt32(104 + i); iommu[1] = cpu_to_fdt32(16);
         assert(fdt_setprop(dt, fdt_path_offset(dt, path), "iommus", iommu, sizeof(iommu)) == 0);
     }
+    for (int i = 0; i < 2; i++) {
+        const char *path = i ? "/soc/dcpext" : "/soc/dcp";
+        assert(fdt_add_subnode(dt, fdt_path_offset(dt, path), "typec-routes") >= 0);
+        char routes[64];
+        snprintf(routes, sizeof(routes), "%s/typec-routes", path);
+        assert(fdt_add_subnode(dt, fdt_path_offset(dt, routes), "port0") >= 0);
+        snprintf(routes, sizeof(routes), "%s/typec-routes/port0", path);
+        assert(fdt_setprop_string(dt, fdt_path_offset(dt, routes), "status", "okay") == 0);
+    }
+    assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc"), "usb-pd") >= 0);
+    assert(fdt_setprop_string(dt, fdt_path_offset(dt, "/soc/usb-pd"), "status", "okay") == 0);
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/chosen"), "framebuffer") >= 0);
     cur_boot_args.phys_base = 0x1000342c000;
     cur_boot_args.mem_size = 0x1e39e8000;
@@ -437,7 +448,7 @@ static void check_claim(bool present)
 static void check_status(const char *name, const char *want)
 {
     char path[64];
-    snprintf(path, sizeof(path), "/soc/%s", name);
+    snprintf(path, sizeof(path), name[0] == '/' ? "%s" : "/soc/%s", name);
     const char *status = fdt_getprop(dt, fdt_path_offset(dt, path), "status", NULL);
     if (!status || strcmp(status, want))
         fprintf(stderr, "%s: expected %s, got %s\n", name, want, status ? status : "absent");
@@ -475,6 +486,91 @@ int main(void)
     assert(fdt_path_offset(dt, "/reserved-memory/dcpext0_data_tail@101ea79c000") >= 0);
     assert(fdt_path_offset(dt, "/chosen/framebuffer") >= 0);
     check_claim(true);
+    check_status("/soc/dcp/typec-routes/port0", "okay");
+    check_status("/soc/dcpext/typec-routes/port0", "okay");
+    check_status("/soc/usb-pd", "okay");
+
+    /* A refused external controller must withdraw only its mode routes. */
+    setup();
+    quiesce_fault = 2;
+    assert(dt_set_display_t8140() == 0);
+    check_status("dcp", "okay");
+    check_status("/soc/dcp/typec-routes/port0", "okay");
+    check_status("/soc/dcpext/typec-routes/port0", "disabled");
+    check_status("/soc/usb-pd", "okay");
+    check_claim(true);
+    check_status("/soc/dart-dispext", "disabled");
+
+#ifdef HAVE_DISPLAY_RECHECK
+    for (int fault = 0; fault < 5; fault++) {
+        setup();
+        assert(dt_set_display_t8140() == 0);
+        if (fault == 0) ext_power = false;
+        if (fault == 1) asc_state[1].status |= BIT(1);
+        if (fault == 2) asc_state[1].i2a |= BIT(18);
+        if (fault == 3) asc_state[1].stop_on_recheck = true;
+        if (fault == 4) asc_state[1].a2i &= ~BIT(0);
+        assert(dt_t8140_recheck_display() == 0);
+        check_status("dcp", "okay");
+        check_status("disp0", "okay");
+        check_status("/soc/dcp/typec-routes/port0", "okay");
+        check_status("dcpext", "disabled");
+        check_status("dart-dcpext", "disabled");
+        check_status("mailbox-dcpext", "disabled");
+        check_status("/soc/dart-dispext", "disabled");
+        check_status("/soc/dcpext/typec-routes/port0", "disabled");
+        check_status("/soc/usb-pd", "okay");
+        check_claim(true);
+        assert(!fdt_getprop(dt, fdt_node_offset_by_phandle(dt, 101),
+                            "apple,firmware-root-handoff", NULL));
+        assert(!fdt_getprop(dt, fdt_node_offset_by_phandle(dt, 105),
+                            "apple,firmware-root-handoff", NULL));
+    }
+    setup();
+    assert(dt_set_display_t8140() == 0);
+    assert(dt_t8140_recheck_display() == 0);
+    check_status("dcpext", "okay");
+    check_status("/soc/dcpext/typec-routes/port0", "okay");
+    check_claim(true);
+
+    setup();
+    assert(dt_set_display_t8140() == 0);
+    asc_state[0].status |= BIT(1);
+    assert(dt_t8140_recheck_display() == 0);
+    check_status("dcp", "disabled");
+    check_status("dcpext", "disabled");
+    check_status("/soc/dcp/typec-routes/port0", "disabled");
+    check_status("/soc/dcpext/typec-routes/port0", "disabled");
+    check_status("/soc/usb-pd", "okay");
+    check_claim(false);
+
+    setup();
+    assert(fdt_delprop(dt, fdt_path_offset(dt, "/chosen"),
+                       "apple,dcp-rtkit-quiesced") == 0);
+    unsigned char unchanged[sizeof(tree)];
+    memcpy(unchanged, dt, sizeof(tree));
+    assert(dt_t8140_recheck_display() == 0);
+    assert(!memcmp(unchanged, dt, sizeof(tree)));
+#endif
+
+    setup();
+    assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc/dcpext/typec-routes"),
+                          "0123456789012345678901234567890") >= 0);
+    assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc/dcpext/typec-routes"),
+                          "0123456789012345678901234567890-too-long") >= 0);
+    quiesce_fault = 2;
+    assert(dt_set_display_t8140() == -1);
+    check_claim(false);
+
+    setup();
+    for (int i = 1; i <= 4; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "port%d", i);
+        assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc/dcpext/typec-routes"), name) >= 0);
+    }
+    quiesce_fault = 2;
+    assert(dt_set_display_t8140() == -1);
+    check_claim(false);
 
     for (int fault = 1; fault <= 4; fault++) {
         setup();
@@ -663,6 +759,7 @@ int main(void)
     return 0;
 }
 '''
+    (tmp_path / "t8140-display-handoff.c").write_text(harness)
     binary = tmp_path / "t8140-display-handoff"
     libfdt = repo / "src/libfdt"
     sources = [libfdt / name for name in (
