@@ -936,10 +936,20 @@ static void expect_power_restored(void)
           reg_val(PS_GFX), reg_val(PS_AFR));
 }
 
+/* Structure and strings in use: what kboot_prepare_dt()'s buffer room has to hold */
+static int dt_used(const void *dt)
+{
+    return fdt_off_dt_struct(dt) + fdt_size_dt_struct(dt) + fdt_size_dt_strings(dt);
+}
+
 static void sc_publish(void *dt, bool dump)
 {
     world(&(struct opts){0});
+    int used = dt_used(dt);
     run(dt);
+    int grew = dt_used(dt) - used;
+    check(grew < 64 * 1024, "the device tree grew by %d bytes, within the 64K kboot adds for T6031",
+          grew);
     check_oslogs(dt, true);
     check_display_published(dt);
     check(prop(dt, CHOSEN "/asahi,t6031-pmp", "apple,tunable-uuid", NULL) &&
