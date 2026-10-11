@@ -1,27 +1,16 @@
-# Aura licensing and provenance
+# Aura licensing
 
-Aura is an independent Aurora Silicon bootloader. Its initial main branch
-continues aurora-silicon/m1n1 aurora-wip at `65e063ceee96492e5668fb1131c3d52343c10098`. The original Git
-history and authorship are preserved without rewriting commits.
+Aurora Silicon contributions are GPL-2.0-only. Inherited m1n1 code remains
+MIT licensed, and third-party components retain their original licences
+and notices. The full Git history preserves authorship and change boundaries.
 
-Aurora contributors' authorized work is published here under
-GPL-2.0-only. New project contributions must use GPL-2.0-only and include a
-Signed-off-by trailer. Existing upstream code and third-party imports keep
-their original licences and notices.
+Mixed source files use `MIT AND GPL-2.0-only`: MIT applies to inherited
+portions and GPL-2.0-only to Aurora portions. New Aurora source files use
+`GPL-2.0-only`. Preserve existing copyright and third-party notices.
 
-[aurora-contributions.json](../LICENSES/aurora-contributions.json) records the
-Aurora contribution commits in the initial migration. The inherited base
-revision is `b4654b32941d51afdb77579d63e7cb1aa6c03ecc`. Later inherited upstream commits remain MIT; they are
-not included in that Aurora contribution list. The list records commit
-provenance, not ownership of every line in a modified file. Inherited code
-within such files remains subject to its original notice.
+New contributions must use GPL-2.0-only and include a Signed-off-by trailer.
+See [LICENSE](../LICENSE), [MIT](../LICENSES/MIT.txt) and
+[GPLv2](../LICENSES/GPL-2.0-only.txt) for the applicable terms.
 
-For mixed MIT/Aurora source files, `MIT AND GPL-2.0-only` records both
-applicable terms. Newly authored Aurora files use `GPL-2.0-only`. Third-party
-license headers and copyright notices must be preserved. See
-[MIT](../LICENSES/MIT.txt) and [GPLv2](../LICENSES/GPL-2.0-only.txt).
-
-The project does not track or merge future m1n1 development. Legacy protocol
-identifiers and the `proxyclient/m1n1` Python package are retained for
-compatibility with existing hosts and kernels; they do not imply an upstream
-maintenance relationship.
+Aura does not track future m1n1 development. Legacy protocol identifiers
+and the `proxyclient/m1n1` Python package remain for compatibility.
