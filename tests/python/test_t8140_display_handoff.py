@@ -72,8 +72,10 @@ static asc_dev_t *asc_init(const char *path)
 }
 static void asc_free(asc_dev_t *asc) { (void)asc; }
 static int quiesce_fault, table_fault, init_fault;
+static unsigned int quiesce_calls;
 static bool rtkit_quiesce_inherited(asc_dev_t *asc)
 {
+    quiesce_calls++;
     return quiesce_fault != (asc == &asc_devs[1] ? 2 : 1);
 }
 
@@ -324,6 +326,8 @@ static void setup(void)
     assert(fdt_add_subnode(dt, 0, "aliases") >= 0);
     assert(fdt_add_subnode(dt, 0, "chosen") >= 0);
     assert(fdt_setprop_u32(dt, fdt_path_offset(dt, "/chosen"),
+                           "apple,dcp-rtkit-live", 1) == 0);
+    assert(fdt_setprop_u32(dt, fdt_path_offset(dt, "/chosen"),
                            "apple,dcp-rtkit-quiesced", 1) == 0);
     assert(fdt_add_subnode(dt, 0, "reserved-memory") >= 0);
     assert(fdt_add_subnode(dt, 0, "soc") >= 0);
@@ -409,6 +413,7 @@ static void setup(void)
     assert(cur_boot_args.video.stride * cur_boot_args.video.height == 0xde1380);
     reservation_calls = 0;
     quiesce_fault = table_fault = init_fault = 0;
+    quiesce_calls = 0;
     ext_power = true;
     hole_dcp_vram = hole_dcp_firmware = hole_ext = false;
     bad_carveout = bad_segment = false;
@@ -422,9 +427,10 @@ static void check_claim(bool present)
 {
     int len = 0;
     const u32 *cell = fdt_getprop(dt, fdt_path_offset(dt, "/chosen"),
-                                  "apple,dcp-rtkit-quiesced", &len);
+                                  "apple,dcp-rtkit-live", &len);
     if (present) assert(cell && len == sizeof(u32) && fdt32_to_cpu(*cell) == 1);
     else assert(cell == NULL);
+    assert(!fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), "apple,dcp-rtkit-quiesced", NULL));
     int target = fdt_node_offset_by_phandle(dt, 100);
     cell = fdt_getprop(dt, target, "apple,firmware-root-handoff", &len);
     if (present) {
@@ -475,7 +481,11 @@ int main(void)
     (void)dt_t8140_validate_dcp_asc;
     unsigned char before[sizeof(tree)];
     setup();
+    quiesce_fault = 1;
     assert(dt_set_display_t8140() == 0);
+    assert(quiesce_calls == 0);
+    assert(!fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), "apple,dcp-rtkit-quiesced", NULL));
+    assert(!strcmp(fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), "apple,dcp-handoff-reason", NULL), "live-session"));
     check_status("dcp", "okay");
     check_status("disp0", "okay");
     check_status("dcpext", "okay");
@@ -492,7 +502,7 @@ int main(void)
 
     /* A refused external controller must withdraw only its mode routes. */
     setup();
-    quiesce_fault = 2;
+    asc_state[1].control = 0;
     assert(dt_set_display_t8140() == 0);
     check_status("dcp", "okay");
     check_status("/soc/dcp/typec-routes/port0", "okay");
@@ -543,10 +553,11 @@ int main(void)
     check_status("/soc/dcpext/typec-routes/port0", "disabled");
     check_status("/soc/usb-pd", "okay");
     check_claim(false);
+    assert(!strcmp(fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), "apple,dcp-handoff-reason", NULL), "withdrawn"));
 
     setup();
     assert(fdt_delprop(dt, fdt_path_offset(dt, "/chosen"),
-                       "apple,dcp-rtkit-quiesced") == 0);
+                       "apple,dcp-rtkit-live") == 0);
     unsigned char unchanged[sizeof(tree)];
     memcpy(unchanged, dt, sizeof(tree));
     assert(dt_t8140_recheck_display() == 0);
@@ -558,7 +569,7 @@ int main(void)
                           "0123456789012345678901234567890") >= 0);
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc/dcpext/typec-routes"),
                           "0123456789012345678901234567890-too-long") >= 0);
-    quiesce_fault = 2;
+    asc_state[1].control = 0;
     assert(dt_set_display_t8140() == -1);
     check_claim(false);
 
@@ -568,7 +579,7 @@ int main(void)
         snprintf(name, sizeof(name), "port%d", i);
         assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc/dcpext/typec-routes"), name) >= 0);
     }
-    quiesce_fault = 2;
+    asc_state[1].control = 0;
     assert(dt_set_display_t8140() == -1);
     check_claim(false);
 
@@ -578,7 +589,7 @@ int main(void)
             for (u32 phandle = 100; phandle <= 101; phandle++)
                 assert(fdt_setprop_u32(dt, fdt_node_offset_by_phandle(dt, phandle),
                                       "apple,firmware-root-handoff", 1) == 0);
-        if (fault <= 2) quiesce_fault = fault;
+        if (fault <= 2) asc_state[fault - 1].control = 0;
         else table_fault = fault - 2;
         assert(dt_set_display_t8140() == 0);
         if (fault == 1 || fault == 3) check_fallback(before);
@@ -647,7 +658,7 @@ int main(void)
 
     setup();
     assert(fdt_delprop(dt, fdt_path_offset(dt, "/chosen"),
-                       "apple,dcp-rtkit-quiesced") == 0);
+                       "apple,dcp-rtkit-live") == 0);
     asc_state[0].control = 0;
     memcpy(before, dt, sizeof(tree));
     assert(dt_set_display_t8140() == 0);
@@ -657,7 +668,7 @@ int main(void)
     for (int fault = 0; fault < 9; fault++) {
         setup();
         assert(fdt_delprop(dt, fdt_path_offset(dt, "/chosen"),
-                           "apple,dcp-rtkit-quiesced") == 0);
+                           "apple,dcp-rtkit-live") == 0);
         switch (fault) {
         case 0: asc_state[0].status |= BIT(1); break;
         case 1: asc_state[0].a2i |= BIT(16); break;
@@ -753,7 +764,7 @@ int main(void)
     setup();
     physical_size = SZ_16K;
     assert(fdt_delprop(dt, fdt_path_offset(dt, "/chosen"),
-                       "apple,dcp-rtkit-quiesced") == 0);
+                       "apple,dcp-rtkit-live") == 0);
     assert(fdt_pack(dt) == 0);
     assert(dt_set_display_t8140() == -1);
     return 0;

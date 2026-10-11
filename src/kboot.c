@@ -2582,16 +2582,6 @@ static bool dt_t8140_validate_dcp_asc(const char *path, const char *name)
     return ready;
 }
 
-static bool dt_t8140_quiesce_dcp_asc(const char *path, const char *name)
-{
-    asc_dev_t *asc = asc_init(path);
-    if (!asc)
-        return false;
-    bool ready = asc_validate_inherited_dcp(asc, name) && rtkit_quiesce_inherited(asc);
-    asc_free(asc);
-    return ready;
-}
-
 static bool dt_t8140_table_reservations_fit(void)
 {
     u64 start = cur_boot_args.phys_base;
@@ -2852,8 +2842,14 @@ static int dt_t8140_refuse_display(void)
     int ret = fdt_delprop(dt, chosen, "apple,firmware-root-handoff");
     if (ret && ret != -FDT_ERR_NOTFOUND)
         return -1;
+    ret = fdt_delprop(dt, chosen, "apple,dcp-rtkit-live");
+    if (ret && ret != -FDT_ERR_NOTFOUND)
+        return -1;
     ret = fdt_delprop(dt, chosen, "apple,dcp-rtkit-quiesced");
     if (ret && ret != -FDT_ERR_NOTFOUND)
+        return -1;
+    chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen < 0 || fdt_setprop_string(dt, chosen, "apple,dcp-handoff-reason", "withdrawn"))
         return -1;
 
     for (size_t i = 0; i < ARRAY_SIZE(compatibles); i++) {
@@ -3045,9 +3041,11 @@ static int dt_set_display_t8140(void)
         goto refuse;
     }
 
+    /* H17P keeps its locked translations and live RTKit session. Linux
+     * performs INIT/HELLO; stage 2 must not change AP/IOP power first. */
     step = "internal DCP ASC and mailboxes";
-    if (!dt_t8140_quiesce_dcp_asc("/arm-io/dcp", "dcp")) {
-        reason = "inherited DCP RTKit power acknowledgements not validated";
+    if (!dt_t8140_validate_dcp_asc("/arm-io/dcp", "dcp")) {
+        reason = "inherited DCP ASC is not live with healthy empty mailboxes";
         goto rollback;
     }
 
@@ -3098,7 +3096,7 @@ static int dt_set_display_t8140(void)
         }
         if (!ret) {
             step = "DCPEXT ASC and mailboxes";
-            ret = dt_t8140_quiesce_dcp_asc("/arm-io/dcpext", "dcpext") ? 0 : -1;
+            ret = dt_t8140_validate_dcp_asc("/arm-io/dcpext", "dcpext") ? 0 : -1;
         }
         if (!ret) {
             step = "external firmware DART table reservation";
@@ -3148,15 +3146,22 @@ static int dt_set_display_t8140(void)
                 goto rollback;
         }
     }
-    step = "publish acknowledged RTKit and firmware-root handoff";
+    step = "publish live RTKit and firmware-root handoff";
     node = fdt_path_offset(dt, "/chosen");
     if (node < 0)
         goto rollback;
-    if (fdt_setprop_u32(dt, node, "apple,dcp-rtkit-quiesced", 1) < 0)
+    ret = fdt_delprop(dt, node, "apple,dcp-rtkit-quiesced");
+    if (ret && ret != -FDT_ERR_NOTFOUND)
+        goto rollback;
+    node = fdt_path_offset(dt, "/chosen");
+    if (fdt_setprop_string(dt, node, "apple,dcp-handoff-reason", "live-session") < 0)
+        goto rollback;
+    node = fdt_path_offset(dt, "/chosen");
+    if (fdt_setprop_u32(dt, node, "apple,dcp-rtkit-live", 1) < 0)
         goto rollback;
     free(saved);
-    printf("FDT: T8140 DCP enabled with validated framebuffer, firmware and acknowledged RTKit power states%s;"
-           " /chosen/apple,dcp-rtkit-quiesced=1\n",
+    printf("FDT: T8140 DCP enabled with validated framebuffer, firmware and live inherited RTKit session%s;"
+           " /chosen/apple,dcp-rtkit-live=1\n",
            ext_ready ? " (dcpext enabled)" : "");
     return 0;
 
@@ -3168,7 +3173,12 @@ rollback:
 
 refuse:
     printf("FDT: T8140 display refused at %s: %s; retaining simplefb\n", step, reason);
-    return dt_t8140_refuse_display();
+    if (dt_t8140_refuse_display())
+        return -1;
+    node = fdt_path_offset(dt, "/chosen");
+    if (node < 0 || fdt_setprop_string(dt, node, "apple,dcp-handoff-reason", reason))
+        return -1;
+    return 0;
 }
 
 static int dt_t8140_recheck_display(void)
@@ -3176,7 +3186,7 @@ static int dt_t8140_recheck_display(void)
     int chosen = fdt_path_offset(dt, "/chosen");
     if (chosen < 0)
         return -1;
-    if (!fdt_getprop(dt, chosen, "apple,dcp-rtkit-quiesced", NULL))
+    if (!fdt_getprop(dt, chosen, "apple,dcp-rtkit-live", NULL))
         return 0;
 
     bool healthy = dt_t8140_validate_dcp_asc("/arm-io/dcp", "dcp");
