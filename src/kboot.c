@@ -2792,6 +2792,48 @@ static int dt_t8140_disable_typec_routes(const char *dcp_path)
     return 0;
 }
 
+/* Publish the external controller only when its complete dependency group can
+ * be enabled. Node offsets must be refreshed after each FDT mutation. */
+static int dt_t8140_enable_external(const char *path)
+{
+    int node = fdt_path_offset(dt, path);
+    if (node < 0)
+        return -1;
+    int piodma = fdt_subnode_offset(dt, node, "piodma");
+    int dcp_dart = dt_get_iommu_node(node, 0);
+    int display_dart = piodma < 0 ? piodma : dt_get_iommu_node(piodma, 0);
+    int length = 0;
+    const fdt32_t *mailbox = fdt_getprop(dt, node, "mboxes", &length);
+    if (piodma < 0 || dcp_dart < 0 || display_dart < 0 || !mailbox ||
+        length != sizeof(*mailbox))
+        return -1;
+    int mbox = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(*mailbox));
+    if (mbox < 0)
+        return -1;
+
+    int nodes[] = {dcp_dart, display_dart, mbox, piodma, node};
+    char paths[ARRAY_SIZE(nodes)][128];
+    for (size_t i = 0; i < ARRAY_SIZE(nodes); i++)
+        if (fdt_get_path(dt, nodes[i], paths[i], sizeof(paths[i])))
+            return -1;
+
+    void *saved = malloc(dt_bufsize);
+    if (!saved)
+        return -1;
+    memcpy(saved, dt, dt_bufsize);
+    int ret = 0;
+    for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
+        node = fdt_path_offset(dt, paths[i]);
+        ret = node < 0 ? node : fdt_setprop_string(dt, node, "status", "okay");
+        if (ret)
+            break;
+    }
+    if (ret)
+        memcpy(dt, saved, dt_bufsize);
+    free(saved);
+    return ret;
+}
+
 /* Leave the external DCP to its firmware: disable it, its DART, mailbox and routes. */
 static int dt_t8140_disable_dcpext(void)
 {
@@ -3189,29 +3231,36 @@ static int dt_set_display_t8140(void)
             ext = ext_path;
     }
     bool ext_ready = false;
+    u32 ext_step = ext ? 1 : 0;
     if (ext && pmgr_power_is_on(0, "DISPEXT0_CPU") == 1) {
         step = "DCPEXT firmware properties";
+        ext_step = 2;
         ret = dt_set_dcp_firmware(ext);
         if (!ret) {
             step = "DCPEXT region-id-49 reservation";
+            ext_step = 3;
             ret =
                 dt_t8140_reserve_carveout(ext, NULL, "region-id-49", "asc-firmware", false, &dram);
         }
         if (!ret) {
             step = "DCPEXT region-id-73 reservation";
+            ext_step = 4;
             ret = dt_t8140_reserve_data(ext, "/arm-io/dcpext/iop-dcpext-nub", "region-id-73",
                                         "dcpext0_data", &dram);
         }
         if (!ret) {
             step = "DCPEXT region-id-74 reservation";
+            ext_step = 5;
             ret = dt_t8140_reserve_carveout(ext, NULL, "region-id-74", "region74", false, &dram);
         }
         if (!ret) {
             step = "DCPEXT region-id-234 reservation";
+            ext_step = 6;
             ret = dt_t8140_reserve_carveout(ext, NULL, "region-id-234", "region234", false, &dram);
         }
         if (!ret) {
             step = "DCPEXT ASC and mailboxes";
+            ext_step = 7;
             ret = dt_t8140_validate_dcp_asc("/arm-io/dcpext", "dcpext", true) ? 0 : -1;
         }
         if (!ret) {
@@ -3236,9 +3285,14 @@ static int dt_set_display_t8140(void)
     if (dt_t8140_enable_consumer("dcp") || dt_t8140_enable_consumer("disp0"))
         goto rollback;
     if (ext_ready) {
-        step = "enable DCPEXT consumer/IOMMU";
-        if (dt_t8140_enable_consumer(ext))
-            goto rollback;
+        step = "enable DCPEXT dependency group";
+        ext_step = 8;
+        if (dt_t8140_enable_external(ext)) {
+            printf("FDT: T8140 external dependencies unavailable; internal panel continues\n");
+            ext_ready = false;
+            if (dt_t8140_disable_dcpext())
+                goto rollback;
+        }
     } else {
         step = "disable unvalidated DCPEXT";
         if (dt_t8140_disable_dcpext())
@@ -3275,6 +3329,11 @@ static int dt_set_display_t8140(void)
     node = fdt_path_offset(dt, "/chosen");
     if (fdt_setprop_u32(dt, node, "apple,dcp-rtkit-live", 1) < 0)
         goto rollback;
+    /* A diagnostic result for this preflight, not a hardware-ready claim.
+     * 0: absent, 1: power off, 2..7: validation stage, 8: dependencies. */
+    if (fdt_setprop_u32(dt, node, "asahi,external-display-preflight",
+                        ext_ready ? 0x100 : ext_step))
+        printf("FDT: external preflight observation unavailable\n");
     free(saved);
     printf("FDT: T8140 DCP enabled with validated framebuffer, firmware and live inherited RTKit session%s;"
            " /chosen/apple,dcp-rtkit-live=1\n",
