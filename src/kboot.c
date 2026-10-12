@@ -2690,6 +2690,7 @@ static void dt_t8140_external_metadata(void)
     static const char *const paths[] = {
         "/arm-io/dcpext", "/arm-io/dart-dcpext", "/arm-io/dart-dispext0",
         "/arm-io/dcpext/iop-dcpext-nub",
+        "/arm-io/dart-dcpext0", "/arm-io/dispext0", "/arm-io/disp-ext0",
     };
     static const struct {
         const char *name;
@@ -2702,7 +2703,10 @@ static void dt_t8140_external_metadata(void)
         {"dp-switch-dfp-port", false}, {"dp-switch-dfp-endpoint", false},
         {"atc-dp-link", false}, {"service-gates", false},
         {"segment-ranges", false}, {"segment-names", false},
+        {"iommu-parent", true},
     };
+    fdt32_t translated[2 + ARRAY_SIZE(paths) * 18];
+    size_t translated_used = 0;
     fdt32_t words[1024];
     size_t used = 0;
     int chosen = fdt_path_offset(dt, "/chosen");
@@ -2710,8 +2714,27 @@ static void dt_t8140_external_metadata(void)
         return;
     words[used++] = cpu_to_fdt32(1);
     words[used++] = cpu_to_fdt32(ARRAY_SIZE(paths));
+    translated[translated_used++] = cpu_to_fdt32(1);
+    translated[translated_used++] = cpu_to_fdt32(ARRAY_SIZE(paths));
     for (size_t i = 0; i < ARRAY_SIZE(paths); i++) {
-        int node = adt_path_offset(adt, paths[i]);
+        int trace[8] = {0};
+        int node = adt_path_offset_trace(adt, paths[i], trace);
+        translated[translated_used++] = cpu_to_fdt32(i);
+        size_t count_offset = translated_used++;
+        u32 registers = 0;
+        /* The public ADT translator applies every parent bus range. Never
+         * infer physical addresses from the raw bus-relative reg cells. */
+        for (unsigned reg = 0; node >= 0 && reg < 4; reg++) {
+            u64 address, size;
+            if (adt_get_reg(adt, trace, "reg", reg, &address, &size) < 0)
+                break;
+            translated[translated_used++] = cpu_to_fdt32(address >> 32);
+            translated[translated_used++] = cpu_to_fdt32(address);
+            translated[translated_used++] = cpu_to_fdt32(size >> 32);
+            translated[translated_used++] = cpu_to_fdt32(size);
+            registers++;
+        }
+        translated[count_offset] = cpu_to_fdt32(registers);
         words[used++] = cpu_to_fdt32(i);
         words[used++] = cpu_to_fdt32(node >= 0);
         words[used++] = cpu_to_fdt32(ARRAY_SIZE(props));
@@ -2740,6 +2763,39 @@ static void dt_t8140_external_metadata(void)
     if (fdt_setprop(dt, chosen, "asahi,external-display-metadata", words,
                     used * sizeof(words[0])))
         printf("FDT: external metadata observation unavailable\n");
+    /* Mapper phandle/stream pairs are public ADT cell descriptions. Export
+     * neither names nor arbitrary child properties, and cap both traversal
+     * and output even if the firmware describes an unexpected topology. */
+    fdt32_t mappers[2 + 2 * (2 + 16 * 3)];
+    size_t mapper_used = 0;
+    mappers[mapper_used++] = cpu_to_fdt32(1);
+    mappers[mapper_used++] = cpu_to_fdt32(2);
+    for (unsigned bank = 0; bank < 2; bank++) {
+        int node = adt_path_offset(adt, paths[bank ? 2 : 4]);
+        mappers[mapper_used++] = cpu_to_fdt32(bank ? 2 : 4);
+        size_t count_offset = mapper_used++;
+        unsigned accepted = 0;
+        int child = node >= 0 ? adt_first_child_offset(adt, node) : -1;
+        int children = node >= 0 ? adt_get_child_count(adt, node) : 0;
+        for (int seen = 0; child >= 0 && seen < children && seen < 64 && accepted < 16;
+             seen++, child = adt_next_sibling_offset(adt, child)) {
+            u32 phandle, stream;
+            if (adt_getprop_copy(adt, child, "AAPL,phandle", &phandle, sizeof(phandle)) < 0 ||
+                adt_getprop_copy(adt, child, "reg", &stream, sizeof(stream)) < 0)
+                continue;
+            mappers[mapper_used++] = cpu_to_fdt32(seen);
+            mappers[mapper_used++] = cpu_to_fdt32(phandle);
+            mappers[mapper_used++] = cpu_to_fdt32(stream);
+            accepted++;
+        }
+        mappers[count_offset] = cpu_to_fdt32(accepted);
+    }
+    if (fdt_setprop(dt, chosen, "asahi,external-display-mappers", mappers,
+                    mapper_used * sizeof(mappers[0])))
+        printf("FDT: external mapper observation unavailable\n");
+    if (fdt_setprop(dt, chosen, "asahi,external-display-registers", translated,
+                    translated_used * sizeof(translated[0])))
+        printf("FDT: translated external register observation unavailable\n");
 }
 
 static int dt_set_display_t8140(void)
