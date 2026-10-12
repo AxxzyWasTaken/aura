@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import zlib
 
 import pytest
@@ -113,3 +114,16 @@ fn main() {
     subprocess.run(["rustc", "--edition=2021", "-Dwarnings", "-o", str(binary), "-"],
                    input=harness, text=True, check=True)
     subprocess.run([str(binary)], check=True)
+
+
+@pytest.mark.parametrize("options,expected", [([], 0), (["--window-ms", "15000"], 15000)])
+def test_cli_normal_boot_does_not_wait(tmp_path, options, expected):
+    image = bytearray(module.MAGIC + bytes(module.BLOCK_SIZE - len(module.MAGIC)) + b"STACKBOT")
+    struct.pack_into("<I", image, len(module.MAGIC), 1)
+    source, output = tmp_path / "generic.bin", tmp_path / "configured.bin"
+    source.write_bytes(image)
+    subprocess.run([sys.executable, str(TOOL), "--input", str(source), "--output", str(output),
+                    "--esp-partuuid", "12345678-abcd-1234-abcd-1234567890ab", *options], check=True)
+    configured = output.read_bytes()
+    assert struct.unpack_from("<II", configured, len(module.MAGIC)) == (1, expected)
+    assert source.read_bytes() == image

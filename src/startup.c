@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT AND GPL-2.0-only */
 
+#include "../build/build_cfg.h"
+#include "boot_options.h"
 #include "adt.h"
 #include "chickens.h"
 #include "dockchannel_uart.h"
@@ -167,6 +169,13 @@ void _start_c(void *boot_args, void *base)
     memset64(_bss_start, 0, _bss_end - _bss_start);
     boot_args_addr = (u64)boot_args;
     memcpy(&cur_boot_args, boot_args, sizeof(cur_boot_args));
+    size_t command_capacity = cur_boot_args.revision == 1 ? CMDLINE_LENGTH_RV1 :
+                              cur_boot_args.revision == 2 ? CMDLINE_LENGTH_RV2 :
+                                                            CMDLINE_LENGTH_RV3;
+    boot_options_init(cur_boot_args.rv3.cmdline, command_capacity);
+#ifdef ESP_STAGE2
+    boot_options_set_stage1(false);
+#endif
 
     adt =
         (void *)(((u64)cur_boot_args.devtree) - cur_boot_args.virt_base + cur_boot_args.phys_base);

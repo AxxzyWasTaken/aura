@@ -5,6 +5,7 @@
 
 #include "../config.h"
 
+#include "boot_options.h"
 #include "adt.h"
 #include "aic.h"
 #include "cpufreq.h"
@@ -156,12 +157,15 @@ void run_actions(void)
 #endif
 #endif
 
-    printf("Checking for payloads...\n");
+    if (aura_proxy_enabled())
+        printf("aura-proxy: stage 1 payload chainload disabled\n");
+    else
+        printf("Checking for payloads...\n");
 
 #ifdef J700_CDC_AUTOSTART
     bool payload_valid = false;
 #else
-    bool payload_valid = payload_run() == 0;
+    bool payload_valid = !aura_proxy_enabled() && payload_run() == 0;
 #endif
     enum stage1_payload_action payload_action = stage1_proxy_payload_action(
         window_result, payload_valid, usb_cdc_ready(), !usb_cdc_owns_carrier());
@@ -186,7 +190,7 @@ void run_actions(void)
     printf("Running proxy...\n");
 
 #if defined(J700_CDC_AUTOSTART) && !defined(T8140_KIS_PROXY)
-    if (usb_cdc_schedule(1000, 0, BIT(1) | BIT(2)))
+    if (!aura_debug_enabled() && usb_cdc_schedule(1000, 0, BIT(1) | BIT(2)))
         panic("CDC autostart scheduling failed\n");
 #endif
 
@@ -253,7 +257,7 @@ void m1n1_main(void)
 #endif
     wdt_disable();
 #if defined(J700_CDC_PROXY) && defined(J700_CDC_AUTOSTART)
-    if (usb_cdc_arm_watchdog()) {
+    if (!aura_debug_enabled() && usb_cdc_arm_watchdog()) {
         wdt_reboot();
         panic("CDC watchdog could not be armed\n");
     }
@@ -264,6 +268,9 @@ void m1n1_main(void)
         panic("T8140 PMGR initialization failed\n");
 #ifdef USE_DEBUG_USB
     tps6598x_enable_debugusb();
+#else
+    if (aura_debug_enabled())
+        tps6598x_enable_debugusb();
 #endif
 #ifdef USE_FB
     display_init();

@@ -2,6 +2,7 @@
 
 #include "../build/build_cfg.h"
 
+#include "boot_options.h"
 #include "usb_cdc.h"
 #include "string.h"
 #include "tps6598x.h"
@@ -46,6 +47,8 @@ static void cdc_set_step(unsigned step)
 
 int usb_cdc_schedule(u32 delay_ms, u32 reserved, u32 flags)
 {
+    if (aura_debug_enabled())
+        return -1;
 #ifndef J700_CDC_PROXY
     (void)delay_ms;
     (void)reserved;

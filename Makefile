@@ -230,7 +230,7 @@ OBJECTS := \
 	isp.o \
 	kboot.o kboot_atc.o \
 	kboot_t6020_compat.o \
-	main.o \
+	main.o boot_options.o \
 	mitigations.o \
 	mcc.o \
 	memory.o memory_asm.o \
