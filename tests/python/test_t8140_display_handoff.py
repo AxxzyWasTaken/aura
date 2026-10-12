@@ -11,6 +11,11 @@ def test_t8140_display_handoff(tmp_path):
     start = source.index("struct dt_t8140_dram {")
     end = source.index("/* T8142 display carveouts:", start)
     helper = source[start:end]
+    # The read-only metadata exporter has its own actual-C tests. Keep this
+    # fixture focused on carveouts, dependency state and handoff failures.
+    observe_start = helper.index("static void dt_t8140_external_metadata(void)")
+    observe_end = helper.index("static int dt_set_display_t8140(void)", observe_start)
+    helper = helper[:observe_start] + "static void dt_t8140_external_metadata(void) {}\n" + helper[observe_end:]
     asc_source = (repo / "src/asc.c").read_text()
     asc_defs = asc_source[asc_source.index("#define ASC_CPU_CONTROL"):asc_source.index("struct asc_dev {")]
     asc_check = asc_source[asc_source.index("static bool asc_mailbox_empty("):asc_source.index("bool asc_can_recv(")]
@@ -303,18 +308,19 @@ static void setup(void)
         assert(fdt_setprop_string(dt, fdt_path_offset(dt, "/aliases"), aliases[i], path) == 0);
         assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path), "phandle", 100 + i) == 0);
         assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path),
-                               i < 2 ? "#iommu-cells" : "#mbox-cells", 1) == 0);
+                               i < 2 ? "#iommu-cells" : "#mbox-cells", i < 2 ? 1 : 0) == 0);
         assert(fdt_setprop_string(dt, fdt_path_offset(dt, path), "status", "okay") == 0);
     }
     for (int i = 0; i < 2; i++) {
         const char *name = i ? "/soc/dcpext" : "/soc/dcp";
         fdt32_t iommu[] = {cpu_to_fdt32(100 + i), 0};
-        fdt32_t mbox[] = {cpu_to_fdt32(102 + i), 0};
+        fdt32_t mbox[] = {cpu_to_fdt32(102 + i)};
         assert(fdt_setprop(dt, fdt_path_offset(dt, name), "iommus", iommu,
                            sizeof(iommu)) == 0);
         assert(fdt_setprop(dt, fdt_path_offset(dt, name), "mboxes", mbox,
                            sizeof(mbox)) == 0);
     }
+    assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc/dcpext"), "piodma") >= 0);
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/chosen"), "framebuffer") >= 0);
     cur_boot_args.phys_base = 0x1000342c000;
     cur_boot_args.mem_size = 0x1e39e8000;
@@ -379,6 +385,9 @@ int main(void)
     check_status("dcp", "okay");
     check_status("disp0", "okay");
     check_status("dcpext", "okay");
+    const fdt32_t *preflight = fdt_getprop(dt, fdt_path_offset(dt, "/chosen"),
+                                         "asahi,external-display-preflight", NULL);
+    assert(preflight && fdt32_to_cpu(*preflight) == 0x100);
     check_status("dispext0", "disabled");
     assert(reservation_calls == 11);
     assert(fdt_path_offset(dt, "/reserved-memory/framebuffer@101eb4b8000") >= 0);
