@@ -9,7 +9,7 @@ class ExternalDependencyGroup(unittest.TestCase):
     def test_real_fdt_success_missing_reference_and_rollback(self):
         root = pathlib.Path(__file__).parents[2]
         source = (root / 'src/kboot.c').read_text()
-        code = 'static int dt_t8140_enable_external' + source.split('static int dt_t8140_enable_external', 1)[1].split('/* Leave the external DCP', 1)[0]
+        code = 'static int dt_t8140_power_paths' + source.split('static int dt_t8140_power_paths', 1)[1].split('/* Leave the external DCP', 1)[0]
         prefix = r'''
 #include <assert.h>
 #include <stdlib.h>
@@ -38,6 +38,10 @@ static void fixture(int omit) {
  fdt32_t iommu[]={cpu_to_fdt32(1),cpu_to_fdt32(23)};
  assert(!fdt_setprop(dt,n,"iommus",iommu,sizeof(iommu)));
  assert(!fdt_setprop_u32(dt,n,"mboxes",3));
+ add("power-root",10,1);add("power-mid",11,1);add("power-leaf",12,1);
+ const char *power[]={"/power-root","/power-mid","/power-leaf"};
+ for(unsigned i=0;i<3;i++) { int p=fdt_path_offset(dt,power[i]); assert(!fdt_setprop_u32(dt,p,"#power-domain-cells",0)); if(i) assert(!fdt_setprop_u32(dt,p,"power-domains",9+i)); }
+ n=fdt_path_offset(dt,"/external");assert(!fdt_setprop_u32(dt,n,"power-domains",12));
  int child=fdt_add_subnode(dt,n,"piodma");assert(child>=0);
  iommu[0]=cpu_to_fdt32(2);iommu[1]=cpu_to_fdt32(16);
  assert(!fdt_setprop(dt,child,"iommus",iommu,sizeof(iommu)));
@@ -46,11 +50,13 @@ static void fixture(int omit) {
 '''
         suffix = r'''
 int main(void) {
- const char *paths[]={"/dart0","/dart1","/mbox","/external/piodma","/external"};
+ const char *paths[]={"/dart0","/dart1","/mbox","/external/piodma","/external","/power-leaf","/power-mid","/power-root"};
  fixture(0);assert(!dt_t8140_enable_external("/external"));
  for(unsigned i=0;i<ARRAY_SIZE(paths);i++) { int n=fdt_path_offset(dt,paths[i]); assert(n>=0); assert(!strcmp(fdt_getprop(dt,n,"status",NULL),"okay")); }
  unsigned char before[sizeof(storage)];
  fixture(0);int n=fdt_path_offset(dt,"/external");assert(!fdt_setprop_u32(dt,n,"mboxes",99));memcpy(before,dt,sizeof(storage));
+ assert(dt_t8140_enable_external("/external")<0);assert(!memcmp(before,dt,sizeof(storage)));
+ fixture(0);n=fdt_path_offset(dt,"/power-leaf");assert(!fdt_setprop_u32(dt,n,"power-domains",12));memcpy(before,dt,sizeof(storage));
  assert(dt_t8140_enable_external("/external")<0);assert(!memcmp(before,dt,sizeof(storage)));
  fixture(1);assert(!fdt_pack(dt));memcpy(before,dt,sizeof(storage));
  assert(dt_t8140_enable_external("/external")<0);assert(!memcmp(before,dt,sizeof(storage)));
