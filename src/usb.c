@@ -3,6 +3,7 @@
 #include "../build/build_cfg.h"
 
 #include "usb.h"
+#include "boot_options.h"
 #include "adt.h"
 #include "dart.h"
 #include "i2c.h"
@@ -333,6 +334,9 @@ static int usb_init_one(char *hpm_path, tps6598x_dev_t *tps, void *unused)
 
 void usb_init(void)
 {
+    /* Preserve the debug carrier; normal USB initialization can retire it. */
+    if (m1n1_debug_enabled())
+        return;
     if (usb_is_initialized)
         return;
 
@@ -401,6 +405,9 @@ void usb_hpm_restore_irqs(bool force)
 
 void usb_iodev_init(void)
 {
+    /* Preserve the debug carrier; normal USB initialization can retire it. */
+    if (m1n1_debug_enabled())
+        return;
 #if defined(J700_CDC_PROXY) || defined(T8140_KIS_PROXY) || defined(ESP_STAGE2)
     if (chip_id == T8140)
         return;

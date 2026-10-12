@@ -57,7 +57,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--esp-partuuid", required=True)
     parser.add_argument("--stage2-path", default="aurora/stage2.bin")
-    parser.add_argument("--window-ms", type=int, default=15000)
+    parser.add_argument("--window-ms", type=int, default=0,
+                        help="optional development proxy window; normal boots do not wait")
     args = parser.parse_args()
     if args.input.resolve() == args.output.resolve():
         parser.error("use a separate output path to retain the generic image")
