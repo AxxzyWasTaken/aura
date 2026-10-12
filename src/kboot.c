@@ -2731,9 +2731,122 @@ static int dt_t8140_enable_external(const char *path)
     return ret;
 }
 
+/* A specifier occupies its provider phandle and the provider's complete argument list. */
+static int dt_t8140_iommu_width(const fdt32_t *cells, int remaining)
+{
+    if (remaining <= 0)
+        return -1;
+    int provider = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(cells[0]));
+    int length;
+    const fdt32_t *args = provider < 0 ? NULL :
+        fdt_getprop(dt, provider, "#iommu-cells", &length);
+    if (!args || length != sizeof(*args))
+        return -1;
+    u32 count = fdt32_to_cpu(*args);
+    if (count > 16 || count >= (u32)remaining)
+        return -1;
+    return count + 1;
+}
+
+/* Withdraw only the external scanout DART from component masters. Parse every
+ * specifier before editing and retain paths rather than offsets across writes. */
+static int dt_t8140_withdraw_external_scanout(int external)
+{
+    enum { MAX_CELLS = 64, MAX_MASTERS = 8 };
+    struct {
+        char path[256];
+        fdt32_t cells[MAX_CELLS];
+        int count;
+    } edits[MAX_MASTERS];
+    u32 external_darts[MAX_CELLS];
+    int n_darts = 0, n_edits = 0, length;
+    int piodma = fdt_subnode_offset(dt, external, "piodma");
+    if (piodma == -FDT_ERR_NOTFOUND)
+        return 0;
+    if (piodma < 0)
+        return -1;
+    const fdt32_t *refs = fdt_getprop(dt, piodma, "iommus", &length);
+    if (!refs)
+        return length == -FDT_ERR_NOTFOUND ? 0 : -1;
+    if (length < 0 || length % sizeof(*refs) || length > (int)sizeof(external_darts))
+        return -1;
+    int count = length / sizeof(*refs);
+    for (int i = 0; i < count;) {
+        int width = dt_t8140_iommu_width(&refs[i], count - i);
+        if (width < 0)
+            return -1;
+        external_darts[n_darts++] = fdt32_to_cpu(refs[i]);
+        i += width;
+    }
+    if (!n_darts)
+        return 0;
+
+    int master = -1;
+    while ((master = fdt_node_offset_by_compatible(dt, master, "apple,display-subsystem")) >= 0) {
+        refs = fdt_getprop(dt, master, "iommus", &length);
+        if (!refs) {
+            if (length == -FDT_ERR_NOTFOUND)
+                continue;
+            return -1;
+        }
+        if (length < 0 || length % sizeof(*refs) || length > MAX_CELLS * (int)sizeof(*refs))
+            return -1;
+        fdt32_t retained[MAX_CELLS];
+        int kept = 0;
+        count = length / sizeof(*refs);
+        for (int i = 0; i < count;) {
+            int width = dt_t8140_iommu_width(&refs[i], count - i);
+            if (width < 0)
+                return -1;
+            bool remove = false;
+            for (int j = 0; j < n_darts; j++)
+                if (fdt32_to_cpu(refs[i]) == external_darts[j])
+                    remove = true;
+            if (!remove) {
+                memcpy(&retained[kept], &refs[i], width * sizeof(*refs));
+                kept += width;
+            }
+            i += width;
+        }
+        if (kept == count)
+            continue;
+        if (n_edits == MAX_MASTERS ||
+            fdt_get_path(dt, master, edits[n_edits].path, sizeof(edits[0].path)))
+            return -1;
+        memcpy(edits[n_edits].cells, retained, kept * sizeof(*refs));
+        edits[n_edits++].count = kept;
+    }
+    if (master != -FDT_ERR_NOTFOUND)
+        return -1;
+    if (!n_edits)
+        return 0;
+
+    void *saved = malloc(dt_bufsize);
+    if (!saved)
+        return -1;
+    memcpy(saved, dt, dt_bufsize);
+    int ret = 0;
+    for (int i = 0; i < n_edits; i++) {
+        master = fdt_path_offset(dt, edits[i].path);
+        ret = master < 0 ? master :
+            fdt_setprop(dt, master, "iommus", edits[i].cells,
+                        edits[i].count * sizeof(fdt32_t));
+        if (ret)
+            break;
+    }
+    if (ret)
+        memcpy(dt, saved, dt_bufsize);
+    free(saved);
+    return ret;
+}
+
 /* Leave the external DCP to its firmware: disable it, its DART, mailbox and routes. */
 static int dt_t8140_disable_dcpext(void)
 {
+    int external = fdt_node_offset_by_compatible(dt, -1, "apple,t8140-dcpext");
+    if (external >= 0 && dt_t8140_withdraw_external_scanout(external))
+        return -1;
+
     static const char *const aliases[] = {
         "dcpext", "dispext0", "dcpext_dart", "dispext0_dart", "dcpext_mbox",
     };
