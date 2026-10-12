@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Assemble a draft J700 release from two pinned build output folders."""
+"""Assemble generic Stage 1 and ESP Stage 2 from pinned build output folders."""
 
 import argparse
 import hashlib
@@ -10,27 +10,29 @@ import subprocess
 
 
 REPO = Path(__file__).resolve().parents[1]
-REQUIRED = ("#define RELEASE", "#define CHAINLOADING", "#define T8140_KIS_PROXY",
-            "#define USE_DEBUG_USB")
+REQUIRED = ("#define RELEASE", "#define CHAINLOADING")
 
 
-def build_identity(folder: Path, commit: str) -> tuple[str, str]:
+def build_identity(folder: Path, commit: str, stage: str) -> tuple[str, str]:
     info = (folder / "BUILD-INFO.txt").read_text()
     fields = dict(line.split(": ", 1) for line in info.splitlines() if ": " in line)
-    if fields.get("kind") not in {"aura", "m1n1"} or fields.get("commit") != commit:
+    if fields.get("kind") != "m1n1" or fields.get("commit") != commit:
         raise ValueError(f"{folder}: source commit mismatch")
     if fields.get("dirty-files") != "0":
         raise ValueError(f"{folder}: dirty build")
     cfg = (folder / "build_cfg.h").read_text()
     if any(define not in cfg.splitlines() for define in REQUIRED):
-        raise ValueError(f"{folder}: missing J700 KIS flavour define")
+        raise ValueError(f"{folder}: missing release/chainloading define")
     if "#define BUILTIN_LOGO aurora" not in cfg.splitlines() or \
             "BUILTIN_LOGO=aurora" not in fields.get("make-vars", "").split() or \
             any(var.startswith("LOGO=") for var in fields.get("make-vars", "").split()):
         raise ValueError(f"{folder}: expected linked Aurora logo without appended payload")
     image = (folder / "aura.bin").read_bytes()
-    if not image.endswith(b"STACKBOT") or image.count(b"AURORA-S1-CFG01\0") != 1:
-        raise ValueError(f"{folder}: not a bare, configurable Stage 1/2 image")
+    stage2 = stage == "stage2"
+    if ("#define ESP_STAGE2" in cfg.splitlines()) != stage2:
+        raise ValueError(f"{folder}: wrong Stage 1/ESP Stage 2 build role")
+    if not image.endswith(b"STACKBOT") or image.count(b"AURORA-S1-CFG01\0") != (0 if stage2 else 1):
+        raise ValueError(f"{folder}: not a bare image of the requested stage")
     if not (folder / "aura-raw.elf").is_file():
         raise ValueError(f"{folder}: raw ELF missing")
     return fields["build_tag"], fields["make-vars"]
@@ -44,8 +46,8 @@ def main() -> None:
     args = parser.parse_args()
 
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
-    tag1, vars1 = build_identity(args.stage1_out, commit)
-    tag2, vars2 = build_identity(args.stage2_out, commit)
+    tag1, vars1 = build_identity(args.stage1_out, commit, "stage1")
+    tag2, vars2 = build_identity(args.stage2_out, commit, "stage2")
     if tag1 != tag2:
         raise ValueError("Stage 1 and Stage 2 build tags differ")
     if args.output.exists():
@@ -65,8 +67,8 @@ def main() -> None:
 
     (args.output / "SOURCE-AND-BUILDS.txt").write_text(
         f"source commit: {commit}\nbuild tag: {tag1}\n"
-        f"stage1 make variables: {vars1}\n"
-        f"stage2 make variables: {vars2}\n"
+        f"stage1: bb-build.sh m1n1 {REPO} {args.stage1_out.name} {vars1}\n"
+        f"stage2: bb-build.sh m1n1 {REPO} {args.stage2_out.name} {vars2}\n"
     )
     lines = []
     for path in sorted(args.output.rglob("*")):

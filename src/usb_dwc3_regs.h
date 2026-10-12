@@ -313,7 +313,7 @@
 #define DWC3_DGCMD_SET_ENDPOINT_NRDY    0x0c
 #define DWC3_DGCMD_RUN_SOC_BUS_LOOPBACK 0x10
 
-#ifdef J700_CDC_PROXY
+#if defined(USB_DWC3_SUPERSPEED) && USB_DWC3_SUPERSPEED
 #define DWC3_DGCMD_STATUS(n) (((n) >> 12) & 0xf)
 #else
 #define DWC3_DGCMD_STATUS(n) (((n) >> 15) & 1)
@@ -333,7 +333,7 @@
 #define DWC3_DEPCMD_PARAM_SHIFT    16
 #define DWC3_DEPCMD_PARAM(x)       ((x) << DWC3_DEPCMD_PARAM_SHIFT)
 #define DWC3_DEPCMD_GET_RSC_IDX(x) (((x) >> DWC3_DEPCMD_PARAM_SHIFT) & 0x7f)
-#ifdef J700_CDC_PROXY
+#if defined(USB_DWC3_SUPERSPEED) && USB_DWC3_SUPERSPEED
 #define DWC3_DEPCMD_STATUS(x) (((x) >> 12) & 0xf)
 #else
 #define DWC3_DEPCMD_STATUS(x) (((x) >> 15) & 1)

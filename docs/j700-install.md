@@ -7,7 +7,7 @@ kernel image, device tree and optional initramfs from that partition using
 ## Fill the Stage 1 configuration
 
 Use a bare Stage 1 image built with `RELEASE=1 CHAINLOADING=1
-T8140_KIS_PROXY=1 BUILTIN_LOGO=aurora`. The `LOGO=` build option appends a
+BUILTIN_LOGO=aurora`. The `LOGO=` build option appends a
 payload and must not be used for the installed Stage 1.
 
 Fill its versioned configuration block with the ESP's PARTUUID and the
@@ -18,7 +18,7 @@ python3 tools/fill_stage1_config.py \
   --input aura-stage1.bin \
   --output aura-stage1-filled.bin \
   --esp-partuuid '<ESP PARTUUID>' \
-  --stage2-path aurora/stage2-test.bin --window-ms 15000
+  --stage2-path aurora/stage2-test.bin
 ```
 
 The tool requires a canonical lowercase UUID, a relative FAT path and a
@@ -33,10 +33,12 @@ when filling the Stage 1 for the final installation.
 
 Build the ESP-loaded image with `RELEASE=1 CHAINLOADING=1 ESP_STAGE2=1
 BUILTIN_LOGO=aurora`. `ESP_STAGE2=1` omits the embedded Stage 1 configuration;
-`J700_ESP_STAGE2=1` remains an alias. The option identifies the image's role.
+The option identifies the image's role; it is not a board-specific build.
 Transport and firmware handoff special cases retain their platform gates.
-If a release package contains a KIS Stage 2, build this ESP flavour
-separately; the packaged KIS Stage 2 is for tethered tests.
+Both stages include High-Speed and SuperSpeed USB implementations.
+Use `aura-debug` to preserve DebugUSB and `aura-proxy` to enter the proxy.
+Normal configured boots do not wait; `--window-ms` explicitly enables a
+development interception window.
 
 The `boot=` parser and proxy operation `0x705` are available on all chips in
 `CHAINLOADING=1` builds. This does not establish hardware qualification of
