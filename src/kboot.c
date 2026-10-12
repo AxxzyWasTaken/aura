@@ -4398,11 +4398,7 @@ int kboot_boot(void *kernel)
     clk_init();
 
     if (chip_id == T8140)
-#ifdef T8140_KIS_PROXY
-        printf("kboot: KIS carrier retains inherited DebugUSB; normal USB init skipped\n");
-#else
         printf("kboot: normal USB init skipped on T8140\n");
-#endif
     else
         usb_init();
     ret = pcie_init();

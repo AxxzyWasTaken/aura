@@ -93,11 +93,6 @@ CFG += CHAINLOADING
 CARGO_FLAGS += --features chainload
 endif
 
-# Accept the original build option for existing J700 build scripts.
-ifeq ($(J700_ESP_STAGE2),1)
-ESP_STAGE2 := 1
-endif
-
 # Select an ESP-loaded image and omit the embedded Stage 1 configuration.
 # Transport and handoff special cases remain scoped to their supported chips;
 # the option does not imply hardware qualification on every platform.
@@ -108,48 +103,6 @@ endif
 CFG += ESP_STAGE2
 endif
 
-ifeq ($(J700_CDC_PROXY),1)
-ifneq ($(CHAINLOADING),1)
-$(error J700_CDC_PROXY requires CHAINLOADING=1)
-endif
-CFG += J700_CDC_PROXY USE_DEBUG_USB
-endif
-
-ifeq ($(J700_CDC_NO_WATCHDOG),1)
-ifneq ($(J700_CDC_PROXY),1)
-$(error J700_CDC_NO_WATCHDOG requires J700_CDC_PROXY=1)
-endif
-CFG += J700_CDC_NO_WATCHDOG
-endif
-
-ifeq ($(J700_CDC_AUTOSTART),1)
-ifneq ($(J700_CDC_PROXY),1)
-$(error J700_CDC_AUTOSTART requires J700_CDC_PROXY=1)
-endif
-CFG += J700_CDC_AUTOSTART
-endif
-
-ifeq ($(T8140_KIS_PROXY),1)
-ifneq ($(CHAINLOADING),1)
-$(error T8140_KIS_PROXY requires CHAINLOADING=1)
-endif
-CFG += T8140_KIS_PROXY
-ifeq ($(J700_CDC_PROXY),1)
-CFG += J700_CDC_STAGE1
-else
-CFG += USE_DEBUG_USB
-endif
-endif
-
-ifneq ($(T8140_PROXY_WINDOW_MS),)
-ifneq ($(T8140_KIS_PROXY),1)
-$(error T8140_PROXY_WINDOW_MS requires T8140_KIS_PROXY=1)
-endif
-ifneq ($(shell test '$(T8140_PROXY_WINDOW_MS)' -ge 0 2>/dev/null && \
-	test '$(T8140_PROXY_WINDOW_MS)' -le 99999 2>/dev/null && echo valid),valid)
-$(error T8140_PROXY_WINDOW_MS must be a decimal value from 0 to 99999)
-endif
-endif
 
 LDFLAGS := -EL -maarch64elf --no-undefined -X -Bsymbolic \
 	-z notext --no-apply-dynamic-relocs --orphan-handling=warn \
@@ -254,7 +207,7 @@ OBJECTS := \
 	tps6598x.o tps6598x_command_core.o \
 	uart.o \
 	uartproxy.o \
-	usb.o usb_dwc3.o usb_cdc.o usb_cdc_atc.o usb_cdc_bulk.o usb_cdc_ss_desc.o usb_cdc_state.o \
+	usb.o usb_dwc3.o usb_dwc3_hs.o usb_dwc3_ss.o usb_cdc.o usb_cdc_atc.o usb_cdc_bulk.o usb_cdc_ss_desc.o usb_cdc_state.o \
 	utils.o utils_asm.o \
 	vsprintf.o \
 	wdt.o \
@@ -359,8 +312,6 @@ build-tag src/../build/build_tag.h &:
 build-cfg src/../build/build_cfg.h &:
 	$(QUIET)mkdir -p build
 	$(QUIET)for i in $(CFG); do echo "#define $$i"; done > build/build_cfg.tmp
-	$(QUIET)if [ -n "$(T8140_PROXY_WINDOW_MS)" ]; then \
-		echo "#define T8140_PROXY_WINDOW_MS $(T8140_PROXY_WINDOW_MS)" >> build/build_cfg.tmp; fi
 	$(QUIET)echo "#define BUILTIN_LOGO $(BUILTIN_LOGO)" >> build/build_cfg.tmp
 	$(QUIET)cmp -s build/build_cfg.h build/build_cfg.tmp 2>/dev/null || \
 	( mv -f build/build_cfg.tmp build/build_cfg.h && echo "  CFG   build/build_cfg.h" )

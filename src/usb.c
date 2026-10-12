@@ -13,6 +13,7 @@
 #include "string.h"
 #include "tps6598x.h"
 #include "types.h"
+#include "usb_cdc.h"
 #include "usb_cdc_atc.h"
 #include "usb_dwc3.h"
 #include "usb_dwc3_regs.h"
@@ -96,12 +97,10 @@ static dart_dev_t *usb_dart_init(u32 idx)
 
     snprintf(path, sizeof(path), FMT_DART_MAPPER_PATH, idx, idx);
     mapper_offset = adt_path_offset(adt, path);
-#ifdef J700_CDC_PROXY
     if (mapper_offset < 0 && chip_id == T8140 && idx == 0) {
         snprintf(path, sizeof(path), "/arm-io/dart-usb/mapper-usb");
         mapper_offset = adt_path_offset(adt, path);
     }
-#endif
     if (mapper_offset < 0) {
         // Device not present
         return NULL;
@@ -114,10 +113,8 @@ static dart_dev_t *usb_dart_init(u32 idx)
     }
 
     snprintf(path, sizeof(path), FMT_DART_PATH, idx);
-#ifdef J700_CDC_PROXY
     if (chip_id == T8140 && idx == 0 && adt_path_offset(adt, path) < 0)
         snprintf(path, sizeof(path), "/arm-io/dart-usb");
-#endif
     return dart_init_adt(path, 1, dart_idx, false);
 }
 
@@ -132,12 +129,10 @@ static int usb_drd_get_regs(u32 idx, struct usb_drd_regs *regs)
 
     snprintf(drd_path, sizeof(drd_path), FMT_DRD_PATH, idx);
     adt_drd_offset = adt_path_offset_trace(adt, drd_path, adt_drd_path);
-#ifdef J700_CDC_PROXY
     if (adt_drd_offset < 0 && chip_id == T8140 && idx == 0) {
         snprintf(drd_path, sizeof(drd_path), "/arm-io/usb-drd");
         adt_drd_offset = adt_path_offset_trace(adt, drd_path, adt_drd_path);
     }
-#endif
     if (adt_drd_offset < 0) {
         // Nonexistent device
         return -1;
@@ -182,25 +177,19 @@ int usb_phy_bringup(u32 idx)
         return -1;
 
     snprintf(path, sizeof(path), FMT_DART_PATH, idx);
-#ifdef J700_CDC_PROXY
     if (chip_id == T8140 && idx == 0)
         snprintf(path, sizeof(path), "/arm-io/dart-usb");
-#endif
     if (pmgr_adt_power_enable(path) < 0)
         return -1;
 
     snprintf(path, sizeof(path), FMT_DRD_PATH, idx);
-#ifdef J700_CDC_PROXY
     if (chip_id == T8140 && idx == 0)
         snprintf(path, sizeof(path), "/arm-io/usb-drd");
-#endif
     if (pmgr_adt_power_enable(path) < 0)
         return -1;
 
-#ifdef J700_CDC_PROXY
     if (chip_id == T8140 && idx == 0)
         return usb_cdc_atc_power_on(usb_regs.drd_regs_unk3);
-#endif
 
     write32(usb_regs.atc + USB2PHY_SIG, 0x01c1000f);
     write32(usb_regs.atc + USB2PHY_CTL, USB2PHY_CTL_RESET | USB2PHY_CTL_PORT_RESET);
@@ -226,7 +215,7 @@ dwc3_dev_t *usb_iodev_bringup(u32 idx)
     if (usb_drd_get_regs(idx, &usb_reg) < 0)
         return NULL;
 
-    return usb_dwc3_init(usb_reg.drd_regs, usb_dart);
+    return usb_dwc3_init_mode(usb_reg.drd_regs, usb_dart, chip_id == T8140);
 }
 
 #define USB_IODEV_WRAPPER(name, pipe)                                                              \
@@ -340,11 +329,14 @@ void usb_init(void)
     if (usb_is_initialized)
         return;
 
-    /* J700's inherited DebugUSB carrier must survive normal boot and kboot. */
-#if defined(J700_CDC_PROXY) || defined(T8140_KIS_PROXY) || defined(ESP_STAGE2)
-    if (chip_id == T8140)
+    /* This PHY requires a deferred carrier transition; normal boots never
+     * enter this fallback path before handing over to the OS. */
+    if (chip_id == T8140) {
+        if (!usb_cdc_ready() && !usb_cdc_owns_carrier() &&
+            usb_cdc_schedule(0, 0, BIT(1) | BIT(2)))
+            printf("usb: unable to schedule proxy transport\n");
         return;
-#endif
+    }
 
     /*
      * A7-A11 uses a custom internal otg controller with the peripheral part
@@ -408,10 +400,8 @@ void usb_iodev_init(void)
     /* Preserve the debug carrier; normal USB initialization can retire it. */
     if (m1n1_debug_enabled())
         return;
-#if defined(J700_CDC_PROXY) || defined(T8140_KIS_PROXY) || defined(ESP_STAGE2)
     if (chip_id == T8140)
         return;
-#endif
 
     for (int i = FIRST_USB_IODEV; i < USB_IODEV_COUNT; i++) {
         dwc3_dev_t *opaque;
@@ -458,11 +448,6 @@ void usb_iodev_vuart_setup(iodev_id_t iodev)
 
 int usb_cdc_link_start(void (*set_step)(unsigned step), bool force_swapped)
 {
-#ifndef J700_CDC_PROXY
-    (void)set_step;
-    (void)force_swapped;
-    return -1;
-#else
     if (chip_id != T8140 || iodev_get_usage(IODEV_USB0))
         return -1;
     set_step(3);
@@ -494,5 +479,4 @@ int usb_cdc_link_start(void (*set_step)(unsigned step), bool force_swapped)
         return -1;
     }
     return 0;
-#endif
 }
