@@ -9,7 +9,7 @@ class ExternalDependencyGroup(unittest.TestCase):
     def test_real_fdt_success_missing_reference_and_rollback(self):
         root = pathlib.Path(__file__).parents[2]
         source = (root / 'src/kboot.c').read_text()
-        code = 'static int dt_t8140_power_paths' + source.split('static int dt_t8140_power_paths', 1)[1].split('/* Leave the external DCP', 1)[0]
+        code = 'static int dt_t8140_power_paths' + source.split('static int dt_t8140_power_paths', 1)[1].split('/* A specifier occupies', 1)[0]
         prefix = r'''
 #include <assert.h>
 #include <stdlib.h>
