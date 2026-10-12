@@ -2908,7 +2908,7 @@ static void dt_t8140_external_metadata(void)
         {"segment-ranges", false}, {"segment-names", false},
         {"iommu-parent", true},
     };
-    fdt32_t translated[2 + ARRAY_SIZE(paths) * 18];
+    fdt32_t translated[2 + ARRAY_SIZE(paths) * 34];
     size_t translated_used = 0;
     fdt32_t words[1024];
     size_t used = 0;
@@ -2927,7 +2927,7 @@ static void dt_t8140_external_metadata(void)
         u32 registers = 0;
         /* The public ADT translator applies every parent bus range. Never
          * infer physical addresses from the raw bus-relative reg cells. */
-        for (unsigned reg = 0; node >= 0 && reg < 4; reg++) {
+        for (unsigned reg = 0; node >= 0 && reg < 8; reg++) {
             u64 address, size;
             if (adt_get_reg(adt, trace, "reg", reg, &address, &size) < 0)
                 break;
