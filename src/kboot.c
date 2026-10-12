@@ -2683,8 +2683,68 @@ static int dt_t8140_refuse_display(void)
     return 0;
 }
 
+/* A bounded observation of register descriptions, not firmware contents.
+ * IDs and lengths make absent Linux aliases diagnosable without exporting ADT. */
+static void dt_t8140_external_metadata(void)
+{
+    static const char *const paths[] = {
+        "/arm-io/dcpext", "/arm-io/dart-dcpext", "/arm-io/dart-dispext0",
+        "/arm-io/dcpext/iop-dcpext-nub",
+    };
+    static const struct {
+        const char *name;
+        bool cells;
+    } props[] = {
+        {"reg", true}, {"interrupts", true}, {"clock-gates", true},
+        {"device-id", true}, {"AAPL,phandle", true},
+        {"#address-cells", true}, {"#size-cells", true},
+        {"ranges", false}, {"dpxbar-parent", false},
+        {"dp-switch-dfp-port", false}, {"dp-switch-dfp-endpoint", false},
+        {"atc-dp-link", false}, {"service-gates", false},
+        {"segment-ranges", false}, {"segment-names", false},
+    };
+    fdt32_t words[1024];
+    size_t used = 0;
+    int chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen < 0 || !adt || adt_get_size() > 16 * SZ_1M)
+        return;
+    words[used++] = cpu_to_fdt32(1);
+    words[used++] = cpu_to_fdt32(ARRAY_SIZE(paths));
+    for (size_t i = 0; i < ARRAY_SIZE(paths); i++) {
+        int node = adt_path_offset(adt, paths[i]);
+        words[used++] = cpu_to_fdt32(i);
+        words[used++] = cpu_to_fdt32(node >= 0);
+        words[used++] = cpu_to_fdt32(ARRAY_SIZE(props));
+        for (size_t j = 0; j < ARRAY_SIZE(props); j++) {
+            u32 length = 0;
+            const void *value = node >= 0 ? adt_getprop(adt, node, props[j].name, &length) : NULL;
+            /* Only public register/cell descriptions have a numeric payload.
+             * Segments, routes and every unknown encoding remain size-only. */
+            size_t count = value && props[j].cells && length <= 128 && !(length & 3)
+                               ? length / sizeof(u32) : 0;
+            if (used + 4 + count > ARRAY_SIZE(words)) {
+                printf("FDT: external metadata exceeds bounded output\n");
+                return;
+            }
+            words[used++] = cpu_to_fdt32(j);
+            words[used++] = cpu_to_fdt32(value != NULL);
+            words[used++] = cpu_to_fdt32(value ? length : 0);
+            words[used++] = cpu_to_fdt32(count);
+            for (size_t k = 0; k < count; k++) {
+                u32 cell;
+                memcpy(&cell, (const u8 *)value + k * sizeof(cell), sizeof(cell));
+                words[used++] = cpu_to_fdt32(cell);
+            }
+        }
+    }
+    if (fdt_setprop(dt, chosen, "asahi,external-display-metadata", words,
+                    used * sizeof(words[0])))
+        printf("FDT: external metadata observation unavailable\n");
+}
+
 static int dt_set_display_t8140(void)
 {
+    dt_t8140_external_metadata();
     int ret = -1;
     const char *reason = "validation failed";
     const char *step = "preflight";
