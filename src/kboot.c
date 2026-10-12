@@ -2660,6 +2660,31 @@ static int dt_t8140_disable_typec_routes(const char *dcp_path)
     return 0;
 }
 
+/* Follow the bounded, zero-cell power-domain chain described by the DT. */
+static int dt_t8140_power_paths(int node, char paths[3][128])
+{
+    int count = 0;
+    while (node >= 0) {
+        int length;
+        const fdt32_t *ref = fdt_getprop(dt, node, "power-domains", &length);
+        if (!ref)
+            return length == -FDT_ERR_NOTFOUND ? count : -1;
+        if (length != sizeof(*ref) || count == 3)
+            return -1;
+        node = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(*ref));
+        if (node < 0 || fdt_get_path(dt, node, paths[count], sizeof(paths[0])))
+            return -1;
+        for (int i = 0; i < count; i++)
+            if (!strcmp(paths[i], paths[count]))
+                return -1;
+        const fdt32_t *cells = fdt_getprop(dt, node, "#power-domain-cells", &length);
+        if (!cells || length != sizeof(*cells) || fdt32_to_cpu(*cells))
+            return -1;
+        count++;
+    }
+    return -1;
+}
+
 /* Publish the external controller only when its complete dependency group can
  * be enabled. Node offsets must be refreshed after each FDT mutation. */
 static int dt_t8140_enable_external(const char *path)
@@ -2680,7 +2705,11 @@ static int dt_t8140_enable_external(const char *path)
         return -1;
 
     int nodes[] = {dcp_dart, display_dart, mbox, piodma, node};
-    char paths[ARRAY_SIZE(nodes)][128];
+    char paths[8][128];
+    int power_count = dt_t8140_power_paths(node, &paths[5]);
+    if (power_count <= 0)
+        return -1;
+    size_t count = ARRAY_SIZE(nodes) + power_count;
     for (size_t i = 0; i < ARRAY_SIZE(nodes); i++)
         if (fdt_get_path(dt, nodes[i], paths[i], sizeof(paths[i])))
             return -1;
@@ -2690,7 +2719,7 @@ static int dt_t8140_enable_external(const char *path)
         return -1;
     memcpy(saved, dt, dt_bufsize);
     int ret = 0;
-    for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
+    for (size_t i = 0; i < count; i++) {
         node = fdt_path_offset(dt, paths[i]);
         ret = node < 0 ? node : fdt_setprop_string(dt, node, "status", "okay");
         if (ret)
@@ -2718,8 +2747,19 @@ static int dt_t8140_disable_dcpext(void)
     if (node < 0)
         return 0;
     char path[128];
+    char power_paths[3][128];
+    int power_count = dt_t8140_power_paths(node, power_paths);
     if (fdt_get_path(dt, node, path, sizeof(path)))
         return -1;
+    /* An invalid chain was never published by enable_external(). */
+    if (power_count < 0)
+        power_count = 0;
+    for (int i = 0; i < power_count; i++) {
+        int power = fdt_path_offset(dt, power_paths[i]);
+        if (power < 0 || fdt_setprop_string(dt, power, "status", "disabled"))
+            return -1;
+    }
+    node = fdt_path_offset(dt, path);
     if (dt_t8140_disable_refs(node, "iommus", "#iommu-cells"))
         return -1;
     node = fdt_path_offset(dt, path);

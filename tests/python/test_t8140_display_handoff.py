@@ -320,6 +320,12 @@ static void setup(void)
         assert(fdt_setprop(dt, fdt_path_offset(dt, name), "mboxes", mbox,
                            sizeof(mbox)) == 0);
     }
+    int supply = fdt_add_subnode(dt, fdt_path_offset(dt, "/soc"), "external-power");
+    assert(supply >= 0);
+    assert(!fdt_setprop_u32(dt, supply, "phandle", 200));
+    assert(!fdt_setprop_u32(dt, supply, "#power-domain-cells", 0));
+    assert(!fdt_setprop_string(dt, supply, "status", "disabled"));
+    assert(!fdt_setprop_u32(dt, fdt_path_offset(dt, "/soc/dcpext"), "power-domains", 200));
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc/dcpext"), "piodma") >= 0);
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/chosen"), "framebuffer") >= 0);
     cur_boot_args.phys_base = 0x1000342c000;
@@ -388,12 +394,24 @@ int main(void)
     const fdt32_t *preflight = fdt_getprop(dt, fdt_path_offset(dt, "/chosen"),
                                          "asahi,external-display-preflight", NULL);
     assert(preflight && fdt32_to_cpu(*preflight) == 0x100);
+    check_status("external-power", "okay");
     check_status("dispext0", "disabled");
     assert(reservation_calls == 11);
     assert(fdt_path_offset(dt, "/reserved-memory/framebuffer@101eb4b8000") >= 0);
     assert(fdt_path_offset(dt, "/reserved-memory/dcp_data_tail@101eb488000") >= 0);
     assert(fdt_path_offset(dt, "/reserved-memory/dcpext0_data_tail@101ea79c000") >= 0);
     assert(fdt_path_offset(dt, "/chosen/framebuffer") >= 0);
+    check_claim(true);
+    assert(!dt_t8140_disable_dcpext());
+    check_status("external-power", "disabled");
+    check_status("dcp", "okay");
+
+    setup();
+    assert(!fdt_setprop_u32(dt, fdt_path_offset(dt, "/soc/external-power"),
+                           "power-domains", 200));
+    assert(!dt_set_display_t8140());
+    check_status("dcp", "okay");
+    check_status("dcpext", "disabled");
     check_claim(true);
 
     setup();
