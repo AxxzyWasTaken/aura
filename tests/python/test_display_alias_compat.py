@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: GPL-2.0-only
+# Generated-by: LLM
+# Assisted-by: LLM
 """The shared display reservation keeps its older-SoC alias fallback."""
 
 from pathlib import Path
 import subprocess
 
+import pytest
 
-def test_missing_display_alias_is_fatal_only_on_t8140(tmp_path):
+
+@pytest.mark.parametrize("older_chip", [0x8103, 0x8112], ids=["M1", "M2"])
+def test_missing_display_alias_is_fatal_only_on_t8140(tmp_path, older_chip):
     repo = Path(__file__).resolve().parents[2]
     source = (repo / "src/kboot.c").read_text()
     helper = source[source.index("struct disp_mapping {"):source.index("static int dt_carveout_reserved_regions(")]
@@ -46,7 +51,7 @@ int main(void)
     const char *aliases[] = {"dcp", "disp", "piodma"};
     for (int i = 0; i < 3; i++) {
         missing = aliases[i];
-        chip_id = 0x8103;
+        chip_id = OLDER_CHIP;
         assert(dt_add_reserved_regions("dcp", "disp", "piodma", NULL,
                                        NULL, NULL, 0) == 0);
         chip_id = T8140;
@@ -57,7 +62,7 @@ int main(void)
 }
 '''
     binary = tmp_path / "display-alias-compat"
-    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+    subprocess.run(["cc", f"-DOLDER_CHIP={older_chip}", "-std=c11", "-Wall", "-Wextra", "-Werror",
                     "-x", "c", "-", "-o", str(binary)],
                    input=harness, text=True, check=True)
     subprocess.run([str(binary)], check=True)
