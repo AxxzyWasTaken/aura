@@ -4141,6 +4141,34 @@ static int dt_set_isp_fwdata(void)
     return 0;
 }
 
+/* J700 is sold both with and without a built-in Touch ID sensor.  A paired
+ * external keyboard is not evidence of the SPI sensor: iBoot omits spi2 from
+ * the ADT on the sensorless variant.  Leave every other machine unchanged. */
+static int dt_disable_missing_j700_touch_id(void)
+{
+    if (fdt_node_check_compatible(dt, 0, "apple,j700") != 0)
+        return 0;
+    if (adt_path_offset(adt, "/arm-io") < 0)
+        return -1;
+    if (adt_path_offset(adt, "/arm-io/spi2") >= 0)
+        return 0;
+
+    int sensor = fdt_node_offset_by_compatible(dt, -1, "apple,mesa-fingerprint");
+    if (sensor == -FDT_ERR_NOTFOUND)
+        return 0;
+    if (sensor < 0)
+        return -1;
+    int controller = fdt_parent_offset(dt, sensor);
+    if (controller < 0 || fdt_node_check_compatible(dt, controller, "apple,t8140-spi") != 0)
+        return -1;
+
+    /* The parent gate prevents probing either the absent controller or child. */
+    if (fdt_setprop_string(dt, controller, "status", "disabled") < 0)
+        return -1;
+    printf("FDT: disabled J700 Touch ID controller absent from ADT\n");
+    return 0;
+}
+
 static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix, int max_devs,
                                    int regnum)
 {
@@ -4740,6 +4768,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_disable_missing_devs("acio", "cio@", 8, 2))
         return -1;
     if (dt_disable_missing_devs("i2c", "i2c@", 8, 0))
+        return -1;
+    if (dt_disable_missing_j700_touch_id())
         return -1;
     if (dt_setup_sio())
         return -1;
