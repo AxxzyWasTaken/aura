@@ -51,7 +51,12 @@ static void fixture(int omit) {
         suffix = r'''
 int main(void) {
  const char *paths[]={"/dart0","/dart1","/mbox","/external/piodma","/external","/power-leaf","/power-mid","/power-root"};
- fixture(0);assert(!dt_t8140_enable_external("/external"));
+ fixture(0);char power[3][128];int external=fdt_path_offset(dt,"/external");
+ assert(dt_t8140_power_paths(external,power,3)==3);
+ assert(dt_t8140_power_paths(external,power,0)<0);
+ assert(dt_t8140_power_paths(external,power,4)<0);
+ assert(dt_t8140_power_paths(external,power,1)<0);
+ assert(!dt_t8140_enable_external("/external"));
  for(unsigned i=0;i<ARRAY_SIZE(paths);i++) { int n=fdt_path_offset(dt,paths[i]); assert(n>=0); assert(!strcmp(fdt_getprop(dt,n,"status",NULL),"okay")); }
  unsigned char before[sizeof(storage)];
  fixture(0);int n=fdt_path_offset(dt,"/external");assert(!fdt_setprop_u32(dt,n,"mboxes",99));memcpy(before,dt,sizeof(storage));

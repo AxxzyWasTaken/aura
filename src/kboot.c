@@ -2793,15 +2793,17 @@ static int dt_t8140_disable_typec_routes(const char *dcp_path)
 }
 
 /* Follow the bounded, zero-cell power-domain chain described by the DT. */
-static int dt_t8140_power_paths(int node, char paths[3][128])
+static int dt_t8140_power_paths(int node, char (*paths)[128], size_t capacity)
 {
+    if (!capacity || capacity > 3)
+        return -1;
     int count = 0;
     while (node >= 0) {
         int length;
         const fdt32_t *ref = fdt_getprop(dt, node, "power-domains", &length);
         if (!ref)
             return length == -FDT_ERR_NOTFOUND ? count : -1;
-        if (length != sizeof(*ref) || count == 3)
+        if (length != sizeof(*ref) || (size_t)count == capacity)
             return -1;
         node = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(*ref));
         if (node < 0 || fdt_get_path(dt, node, paths[count], sizeof(paths[0])))
@@ -2838,7 +2840,8 @@ static int dt_t8140_enable_external(const char *path)
 
     int nodes[] = {dcp_dart, display_dart, mbox, piodma, node};
     char paths[8][128];
-    int power_count = dt_t8140_power_paths(node, &paths[5]);
+    int power_count = dt_t8140_power_paths(node, &paths[ARRAY_SIZE(nodes)],
+                                             ARRAY_SIZE(paths) - ARRAY_SIZE(nodes));
     if (power_count <= 0)
         return -1;
     size_t count = ARRAY_SIZE(nodes) + power_count;
@@ -2993,7 +2996,7 @@ static int dt_t8140_disable_dcpext(void)
         return node == -FDT_ERR_NOTFOUND ? 0 : -1;
     char path[128];
     char power_paths[3][128];
-    int power_count = dt_t8140_power_paths(node, power_paths);
+    int power_count = dt_t8140_power_paths(node, power_paths, ARRAY_SIZE(power_paths));
     if (fdt_get_path(dt, node, path, sizeof(path)))
         return -1;
     /* An invalid chain was never published by enable_external(). */
