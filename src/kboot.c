@@ -2643,7 +2643,8 @@ static int dt_t8140_alias_offset(const char *alias)
     if (length < 2 || path[0] != '/' ||
         memchr(path, '\0', length) != path + length - 1)
         return -FDT_ERR_BADVALUE;
-    return fdt_path_offset(dt, path);
+    int node = fdt_path_offset(dt, path);
+    return node == -FDT_ERR_NOTFOUND ? -FDT_ERR_BADVALUE : node;
 }
 
 /* A PD controller linked to a Type-C route on a disabled DCP would wait for a
@@ -2866,9 +2867,176 @@ static int dt_t8140_withdraw_external_scanout(int external)
     return ret;
 }
 
+/* Refusal aliases must identify the role established by the public DT graph.
+ * Keep offsets only during this read-only preflight; edits reacquire paths. */
+struct dt_t8140_refusal_group {
+    int controller, piodma;
+    int providers[4][64]; /* controller DART, scanout DART, mailbox, power */
+    int count[4];
+};
+
+static int dt_t8140_ref_nodes(int node, const char *prop, const char *cells_prop,
+                              int *nodes)
+{
+    int length;
+    const fdt32_t *refs = fdt_getprop(dt, node, prop, &length);
+    if (!refs)
+        return length == -FDT_ERR_NOTFOUND ? 0 : -1;
+    if (length < 0 || length % sizeof(*refs) || length > 64 * (int)sizeof(*refs))
+        return -1;
+    int count = 0, cells = length / sizeof(*refs);
+    for (int i = 0; i < cells;) {
+        int provider = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(refs[i]));
+        int size;
+        const fdt32_t *args = provider < 0 ? NULL :
+            fdt_getprop(dt, provider, cells_prop, &size);
+        if (!args || size != sizeof(*args))
+            return -1;
+        u32 width = fdt32_to_cpu(*args);
+        if (width > 16 || width >= (u32)(cells - i))
+            return -1;
+        nodes[count++] = provider;
+        i += width + 1;
+    }
+    return count;
+}
+
+static bool dt_t8140_group_has(const struct dt_t8140_refusal_group *group,
+                               int role, int node)
+{
+    for (int i = 0; i < group->count[role]; i++)
+        if (group->providers[role][i] == node)
+            return true;
+    return false;
+}
+
+static int dt_t8140_refusal_group(const char *compatible,
+                                  struct dt_t8140_refusal_group *group)
+{
+    memset(group, 0, sizeof(*group));
+    group->controller = fdt_node_offset_by_compatible(dt, -1, compatible);
+    group->piodma = -FDT_ERR_NOTFOUND;
+    if (group->controller < 0)
+        return group->controller == -FDT_ERR_NOTFOUND ? 0 : -1;
+    /* An alias cannot choose among multiple controllers of the same role. */
+    if (fdt_node_offset_by_compatible(dt, group->controller, compatible) != -FDT_ERR_NOTFOUND)
+        return -1;
+    group->piodma = fdt_subnode_offset(dt, group->controller, "piodma");
+    if (group->piodma < 0 && group->piodma != -FDT_ERR_NOTFOUND)
+        return -1;
+    group->count[0] = dt_t8140_ref_nodes(group->controller, "iommus", "#iommu-cells",
+                                        group->providers[0]);
+    group->count[1] = group->piodma < 0 ? 0 :
+        dt_t8140_ref_nodes(group->piodma, "iommus", "#iommu-cells", group->providers[1]);
+    group->count[2] = dt_t8140_ref_nodes(group->controller, "mboxes", "#mbox-cells",
+                                        group->providers[2]);
+    char paths[3][128];
+    group->count[3] = dt_t8140_power_paths(group->controller, paths, ARRAY_SIZE(paths));
+    for (int role = 0; role < 4; role++) {
+        if (group->count[role] < 0)
+            return -1;
+        for (int i = 0; i < group->count[role]; i++) {
+            int node = role == 3 ? fdt_path_offset(dt, paths[i]) : group->providers[role][i];
+            if (node < 0)
+                return -1;
+            group->providers[role][i] = node;
+            const char *type = role < 2 ? "apple,t8140-dart" :
+                role == 2 ? "apple,t8140-asc-mailbox" : "apple,t8140-pmgr-pwrstate";
+            if (fdt_node_check_compatible(dt, node, type))
+                return -1;
+        }
+    }
+    return 0;
+}
+
+/* A component master is owned only through its complete scanout tuples. */
+static int dt_t8140_refusal_master(int node, const struct dt_t8140_refusal_group *internal,
+                                   const struct dt_t8140_refusal_group *external,
+                                   bool external_only)
+{
+    if (fdt_node_check_compatible(dt, node, "apple,display-subsystem"))
+        return 0;
+    int refs[64];
+    int count = dt_t8140_ref_nodes(node, "iommus", "#iommu-cells", refs);
+    if (count < 0)
+        return -1;
+    bool ours = false, other = false;
+    for (int i = 0; i < count; i++) {
+        bool owned = dt_t8140_group_has(external, 1, refs[i]) ||
+                     (!external_only && dt_t8140_group_has(internal, 1, refs[i]));
+        ours |= owned;
+        other |= !owned;
+    }
+    return ours && other ? -1 : ours;
+}
+
+static int dt_t8140_refusal_preflight(bool whole,
+                                     struct dt_t8140_refusal_group *internal,
+                                     struct dt_t8140_refusal_group *external)
+{
+    if (dt_t8140_refusal_group("apple,t8140-dcp", internal) ||
+        dt_t8140_refusal_group("apple,t8140-dcpext", external))
+        return -1;
+    if (internal->controller >= 0 && internal->controller == external->controller)
+        return -1;
+    static const char *const aliases[] = {
+        "dcpext", "dispext0", "dcpext_dart", "dispext0_dart", "dcpext_mbox",
+        "dcp", "disp0", "dcp_dart", "disp0_dart", "dcp_mbox",
+    };
+    for (size_t i = 0; i < (whole ? ARRAY_SIZE(aliases) : 5); i++) {
+        int node = dt_t8140_alias_offset(aliases[i]);
+        if (node == -FDT_ERR_NOTFOUND)
+            continue;
+        if (node < 0)
+            return -1;
+        const struct dt_t8140_refusal_group *group = i < 5 ? external : internal;
+        size_t role = i % 5;
+        bool owned = role == 0 ? node == group->controller :
+            role == 1 ? dt_t8140_refusal_master(node, internal, external, i < 5) == 1 :
+            dt_t8140_group_has(group, role - 2, node);
+        if (!owned)
+            return -1;
+    }
+    /* Suppliers cannot be withdrawn while another consumer still owns them.
+     * Scan complete specifiers so argument cells cannot impersonate phandles. */
+    static const char *const props[] = {"iommus", "mboxes", "power-domains"};
+    static const char *const widths[] = {"#iommu-cells", "#mbox-cells", "#power-domain-cells"};
+    int node = -1, depth = 0;
+    while ((node = fdt_next_node(dt, node, &depth)) >= 0 && depth >= 0) {
+        for (size_t p = 0; p < ARRAY_SIZE(props); p++) {
+            int refs[64];
+            int count = dt_t8140_ref_nodes(node, props[p], widths[p], refs);
+            if (count < 0)
+                return -1;
+            for (int i = 0; i < count; i++) {
+                bool ext = dt_t8140_group_has(external, p == 0 ? 0 : p + 1, refs[i]) ||
+                           (p == 0 && dt_t8140_group_has(external, 1, refs[i]));
+                bool in = whole && p < 2 &&
+                          (dt_t8140_group_has(internal, p == 0 ? 0 : 2, refs[i]) ||
+                           (p == 0 && dt_t8140_group_has(internal, 1, refs[i])));
+                if (!ext && !in)
+                    continue;
+                const struct dt_t8140_refusal_group *group = ext ? external : internal;
+                bool owned = node == group->controller || node == group->piodma;
+                if (p == 2)
+                    owned |= dt_t8140_group_has(group, 2, node) ||
+                             dt_t8140_group_has(group, 3, node);
+                if (p == 0 && dt_t8140_group_has(group, 1, refs[i]))
+                    owned |= !fdt_node_check_compatible(dt, node, "apple,display-subsystem");
+                if (!owned)
+                    return -1;
+            }
+        }
+    }
+    return node == -FDT_ERR_NOTFOUND || (node >= 0 && depth < 0) ? 0 : -1;
+}
+
 /* Leave the external DCP to its firmware: disable it, its DART, mailbox and routes. */
 static int dt_t8140_disable_dcpext(void)
 {
+    struct dt_t8140_refusal_group internal, external_group;
+    if (dt_t8140_refusal_preflight(false, &internal, &external_group))
+        return -1;
     int external = fdt_node_offset_by_compatible(dt, -1, "apple,t8140-dcpext");
     if (external < 0 && external != -FDT_ERR_NOTFOUND)
         return -1;
@@ -2894,9 +3062,8 @@ static int dt_t8140_disable_dcpext(void)
     int power_count = dt_t8140_power_paths(node, power_paths, ARRAY_SIZE(power_paths));
     if (fdt_get_path(dt, node, path, sizeof(path)))
         return -1;
-    /* An invalid chain was never published by enable_external(). */
     if (power_count < 0)
-        power_count = 0;
+        return -1;
     for (int i = 0; i < power_count; i++) {
         int power = fdt_path_offset(dt, power_paths[i]);
         if (power < 0 || fdt_setprop_string(dt, power, "status", "disabled"))
@@ -2928,10 +3095,9 @@ static int dt_t8140_disable_dcpext(void)
 /* A refused handoff must not let Linux bind an unclaimed live controller. */
 static int dt_t8140_refuse_display(void)
 {
-    /* Withdraw the external suppliers even when the internal handoff fails. */
-    if (dt_t8140_disable_dcpext())
+    struct dt_t8140_refusal_group internal, external;
+    if (dt_t8140_refusal_preflight(true, &internal, &external))
         return -1;
-
     static const char *const compatibles[] = {
         "apple,t8140-dcp",
         "apple,t8140-dcpext",
@@ -2947,13 +3113,16 @@ static int dt_t8140_refuse_display(void)
     int chosen = fdt_path_offset(dt, "/chosen");
     if (chosen < 0)
         return -1;
-    int ret = fdt_delprop(dt, chosen, "apple,dcp-rtkit-quiesced");
-    if (ret && ret != -FDT_ERR_NOTFOUND)
-        return -1;
-
     for (size_t i = 0; i < ARRAY_SIZE(compatibles); i++) {
         int node = -1;
         while ((node = fdt_node_offset_by_compatible(dt, node, compatibles[i])) >= 0) {
+            if (i == 2) {
+                int owned = dt_t8140_refusal_master(node, &internal, &external, false);
+                if (owned < 0)
+                    return -1;
+                if (!owned)
+                    continue;
+            }
             if (count == ARRAY_SIZE(paths) ||
                 fdt_get_path(dt, node, paths[count], sizeof(paths[count])))
                 return -1;
@@ -2962,11 +3131,28 @@ static int dt_t8140_refuse_display(void)
         if (node != -FDT_ERR_NOTFOUND)
             return -1;
     }
+    /* Ownership and the complete owned path set were checked before edits. */
+    if (dt_t8140_disable_dcpext())
+        return -1;
+    chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen < 0)
+        return -1;
+    int ret = fdt_delprop(dt, chosen, "apple,dcp-rtkit-quiesced");
+    if (ret && ret != -FDT_ERR_NOTFOUND)
+        return -1;
     for (size_t i = 0; i < count; i++) {
         int node = fdt_path_offset(dt, paths[i]);
         if (node < 0)
             return -1;
-        if (dt_t8140_disable_refs(node, "iommus", "#iommu-cells"))
+        int piodma = fdt_subnode_offset(dt, node, "piodma");
+        if (piodma >= 0) {
+            if (dt_t8140_disable_refs(piodma, "iommus", "#iommu-cells"))
+                return -1;
+        } else if (piodma != -FDT_ERR_NOTFOUND) {
+            return -1;
+        }
+        node = fdt_path_offset(dt, paths[i]);
+        if (node < 0 || dt_t8140_disable_refs(node, "iommus", "#iommu-cells"))
             return -1;
         node = fdt_path_offset(dt, paths[i]);
         if (node < 0 || dt_t8140_disable_refs(node, "mboxes", "#mbox-cells"))

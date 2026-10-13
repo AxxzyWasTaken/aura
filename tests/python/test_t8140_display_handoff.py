@@ -306,6 +306,8 @@ static void setup(void)
         char path[64];
         snprintf(path, sizeof(path), "/soc/%s", refs[i]);
         assert(fdt_setprop_string(dt, fdt_path_offset(dt, "/aliases"), aliases[i], path) == 0);
+        assert(!fdt_setprop_string(dt, fdt_path_offset(dt, path), "compatible",
+                                  i < 2 ? "apple,t8140-dart" : "apple,t8140-asc-mailbox"));
         assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path), "phandle", 100 + i) == 0);
         assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path),
                                i < 2 ? "#iommu-cells" : "#mbox-cells", i < 2 ? 1 : 0) == 0);
@@ -322,11 +324,34 @@ static void setup(void)
     }
     int supply = fdt_add_subnode(dt, fdt_path_offset(dt, "/soc"), "external-power");
     assert(supply >= 0);
+    assert(!fdt_setprop_string(dt, supply, "compatible", "apple,t8140-pmgr-pwrstate"));
     assert(!fdt_setprop_u32(dt, supply, "phandle", 200));
     assert(!fdt_setprop_u32(dt, supply, "#power-domain-cells", 0));
     assert(!fdt_setprop_string(dt, supply, "status", "disabled"));
     assert(!fdt_setprop_u32(dt, fdt_path_offset(dt, "/soc/dcpext"), "power-domains", 200));
-    assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc/dcpext"), "piodma") >= 0);
+
+    /* Model the public PIODMA-to-scanout topology instead of empty masters. */
+    for (int i = 0; i < 2; i++) {
+        const char *dart_name = i ? "dart-dispext" : "dart-disp";
+        assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc"), dart_name) >= 0);
+        char dart_path[64];
+        snprintf(dart_path, sizeof(dart_path), "/soc/%s", dart_name);
+        int n = fdt_path_offset(dt, dart_path);
+        assert(!fdt_setprop_string(dt, n, "compatible", "apple,t8140-dart"));
+        assert(!fdt_setprop_u32(dt, n, "phandle", 104 + i));
+        assert(!fdt_setprop_u32(dt, n, "#iommu-cells", 1));
+        assert(!fdt_setprop_string(dt, n, "status", "okay"));
+        const char *controller = i ? "/soc/dcpext" : "/soc/dcp";
+        assert(fdt_add_subnode(dt, fdt_path_offset(dt, controller), "piodma") >= 0);
+        char child[64];
+        snprintf(child, sizeof(child), "%s/piodma", controller);
+        fdt32_t tuple[] = {cpu_to_fdt32(104 + i), cpu_to_fdt32(16)};
+        assert(!fdt_setprop(dt, fdt_path_offset(dt, child), "iommus", tuple, sizeof(tuple)));
+        tuple[1] = 0;
+        assert(!fdt_setprop(dt, fdt_path_offset(dt, i ? "/soc/dispext0" : "/soc/disp0"),
+                           "iommus", tuple, sizeof(tuple)));
+    }
+
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/chosen"), "framebuffer") >= 0);
     cur_boot_args.phys_base = 0x1000342c000;
     cur_boot_args.mem_size = 0x1e39e8000;
@@ -409,10 +434,9 @@ int main(void)
     setup();
     assert(!fdt_setprop_u32(dt, fdt_path_offset(dt, "/soc/external-power"),
                            "power-domains", 200));
-    assert(!dt_set_display_t8140());
-    check_status("dcp", "okay");
-    check_status("dcpext", "disabled");
-    check_claim(true);
+    memcpy(before, dt, sizeof(tree));
+    assert(dt_set_display_t8140() < 0);
+    assert(!memcmp(before, dt, sizeof(tree)));
 
     setup();
     physical_size = carveouts[0].pa - physical_base + carveouts[0].size - SZ_16K;

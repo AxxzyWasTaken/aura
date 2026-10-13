@@ -153,14 +153,18 @@ static void setup(void)
     const char *darts[] = {"/soc/dcp-dart", "/soc/disp-dart",
                           "/soc/external-dcp-dart", "/soc/external-disp-dart"};
     for (unsigned i = 0; i < ARRAY_SIZE(darts); i++) {
+        string(darts[i], "compatible", "apple,t8140-dart");
         cell(darts[i], "#iommu-cells", 1);
         string(darts[i], "status", i < 2 ? "okay" : "disabled");
     }
     iommu("/soc/dcp", 3, 23);
+    add("/soc/dcp", "piodma", 0);
+    iommu("/soc/dcp/piodma", 4, 16);
     fdt32_t masters[] = {cpu_to_fdt32(4), cpu_to_fdt32(0),
                          cpu_to_fdt32(6), cpu_to_fdt32(0)};
     assert(!fdt_setprop(dt, node("/soc/display"), "iommus", masters, sizeof(masters)));
     add("/soc", "external-mbox", 7);
+    string("/soc/external-mbox", "compatible", "apple,t8140-asc-mailbox");
     cell("/soc/external-mbox", "#mbox-cells", 0);
     string("/soc/external-mbox", "status", "disabled");
     add("/soc", "external", 8);
@@ -178,6 +182,7 @@ static void setup(void)
         add("/soc", powers[i], 10 + i);
         char path[64];
         snprintf(path, sizeof(path), "/soc/%s", powers[i]);
+        string(path, "compatible", "apple,t8140-pmgr-pwrstate");
         cell(path, "#power-domain-cells", 0);
         string(path, "status", "disabled");
         if (i)
@@ -235,6 +240,102 @@ int main(int argc, char **argv)
         status("/soc/dcp", "okay");
         status("/soc/external", "disabled");
         assert(node("/chosen/framebuffer") >= 0);
+        return 0;
+    }
+
+    if (!strncmp(argv[1], "owner:", 6)) {
+        const char *test = argv[1] + 6;
+        bool whole = !strncmp(test, "whole-", 6);
+        if (whole) test += 6;
+        if (!strcmp(test, "internal-dcp")) string("/aliases", "dcpext", "/soc/dcp");
+        else if (!strcmp(test, "keeper")) string("/aliases", "dispext0", "/soc/display");
+        else if (!strcmp(test, "internal-dart")) string("/aliases", "dcpext_dart", "/soc/dcp-dart");
+        else if (!strcmp(test, "internal-scanout")) string("/aliases", "dispext0_dart", "/soc/disp-dart");
+        else if (!strcmp(test, "wrong-role")) string("/aliases", "dcpext", "/soc/external-dcp-dart");
+        else if (!strcmp(test, "power-alias")) string("/aliases", "dcpext_dart", "/soc/power-cpu");
+        else if (!strcmp(test, "mailbox-role")) string("/aliases", "dcpext_mbox", "/soc/external-dcp-dart");
+        else if (!strcmp(test, "repeated-alias")) {
+            string("/aliases", "dcpext", "/soc/external");
+            string("/aliases", "dcpext_dart", "/soc/external");
+        } else if (!strcmp(test, "dangling")) string("/aliases", "dcpext", "/soc/missing");
+        else if (!strcmp(test, "ambiguous")) {
+            add("/soc", "second-external", 30);
+            string("/soc/second-external", "compatible", "apple,t8140-dcpext");
+        } else if (!strcmp(test, "ambiguous-role")) {
+            const char types[] = "apple,t8140-dcpext\0apple,t8140-dcp";
+            assert(!fdt_setprop(dt, node("/soc/external"), "compatible", types, sizeof(types)));
+            assert(!fdt_delprop(dt, node("/soc/dcp"), "compatible"));
+        } else if (!strcmp(test, "unrelated-provider")) {
+            add("/soc", "unrelated-dart", 30);
+            string("/soc/unrelated-dart", "compatible", "apple,t8140-dart");
+            cell("/soc/unrelated-dart", "#iommu-cells", 1);
+            string("/soc/unrelated-dart", "status", "okay");
+            string("/aliases", "dcpext_dart", "/soc/unrelated-dart");
+        } else if (!strcmp(test, "another-dcp-dart")) {
+            add("/soc", "other-dcp", 30);
+            string("/soc/other-dcp", "compatible", "apple,t6020-dcp");
+            iommu("/soc/other-dcp", 5, 23);
+        } else if (!strcmp(test, "shared-power")) cell("/soc/dcp", "power-domains", 12);
+        else if (!strcmp(test, "shared-scanout")) iommu("/soc/dcp/piodma", 6, 16);
+        else if (!strcmp(test, "malformed-controller")) cell("/soc/external", "iommus", 5);
+        else if (!strcmp(test, "malformed-power")) cell("/soc/power-cpu", "power-domains", 99);
+        else if (!strcmp(test, "non-provider")) string("/soc/external-dcp-dart", "compatible", "apple,unrelated");
+        else if (!strcmp(test, "internal-alias")) {
+            whole = true;
+            string("/aliases", "dcp", "/soc/external");
+        } else assert(0);
+        unsigned char before[sizeof(tree)];
+        memcpy(before, tree, sizeof(tree));
+        int ret = whole ? dt_t8140_refuse_display() : dt_t8140_disable_dcpext();
+        assert(ret < 0);
+        assert(!memcmp(before, tree, sizeof(tree)));
+        status("/soc/dcp", "okay");
+        status("/soc/dcp-dart", "okay");
+        assert(node("/chosen/framebuffer") >= 0);
+        return 0;
+    }
+    if (!strcmp(argv[1], "whole-piodma-only")) {
+        assert(!fdt_delprop(dt, node("/soc/display"), "iommus"));
+        assert(!fdt_delprop(dt, node("/aliases"), "disp0"));
+        assert(!dt_t8140_refuse_display());
+        status("/soc/disp-dart", "disabled");
+        status("/soc/dcp", "disabled");
+        return 0;
+    }
+    if (!strcmp(argv[1], "static-aliases") || !strcmp(argv[1], "unrelated-whole") ||
+        !strcmp(argv[1], "repeated-refusal")) {
+        add("/soc", "external-display", 30);
+        string("/soc/external-display", "compatible", "apple,display-subsystem");
+        string("/soc/external-display", "status", "okay");
+        iommu("/soc/external-display", 6, 0);
+        string("/aliases", "dcpext", "/soc/external");
+        string("/aliases", "dispext0", "/soc/external-display");
+        string("/aliases", "dcpext_dart", "/soc/external-dcp-dart");
+        string("/aliases", "dispext0_dart", "/soc/external-disp-dart");
+        string("/aliases", "dcpext_mbox", "/soc/external-mbox");
+        if (!strcmp(argv[1], "unrelated-whole")) {
+            add("/soc", "other-dart", 31);
+            string("/soc/other-dart", "compatible", "apple,t8140-dart");
+            cell("/soc/other-dart", "#iommu-cells", 1);
+            string("/soc/other-dart", "status", "okay");
+            add("/soc", "other-display", 32);
+            string("/soc/other-display", "compatible", "apple,display-subsystem");
+            string("/soc/other-display", "status", "okay");
+            iommu("/soc/other-display", 31, 0);
+            assert(!dt_t8140_refuse_display());
+            status("/soc/other-display", "okay");
+            status("/soc/other-dart", "okay");
+        } else {
+            assert(!dt_t8140_disable_dcpext());
+            status("/soc/dcp", "okay");
+            status("/soc/display", "okay");
+            status("/soc/external-display", "disabled");
+            if (!strcmp(argv[1], "repeated-refusal")) {
+                /* A retired component master has no remaining external tuples. */
+                assert(!fdt_delprop(dt, node("/aliases"), "dispext0"));
+                assert(!dt_t8140_disable_dcpext());
+            }
+        }
         return 0;
     }
     if (!strcmp(argv[1], "external")) {
@@ -375,3 +476,19 @@ def test_refusal_rejects_malformed_alias_before_resolution(refusal_binary, kind,
 
 def test_external_refusal_accepts_valid_optional_alias(refusal_binary):
     subprocess.run([str(refusal_binary), "valid-external-alias"], check=True)
+
+
+@pytest.mark.parametrize("scenario", [
+    "internal-dcp", "keeper", "internal-dart", "internal-scanout", "wrong-role",
+    "power-alias", "mailbox-role", "repeated-alias", "dangling", "ambiguous",
+    "unrelated-provider", "another-dcp-dart", "shared-power", "shared-scanout",
+    "malformed-controller", "malformed-power", "non-provider", "internal-alias",
+    "whole-internal-dcp", "whole-internal-dart", "whole-unrelated-provider", "ambiguous-role",
+])
+def test_refusal_rejects_wrong_ownership_before_any_edit(refusal_binary, scenario):
+    subprocess.run([str(refusal_binary), "owner:" + scenario], check=True)
+
+
+@pytest.mark.parametrize("scenario", ["static-aliases", "unrelated-whole", "repeated-refusal", "whole-piodma-only"])
+def test_refusal_preserves_valid_static_and_unrelated_topology(refusal_binary, scenario):
+    subprocess.run([str(refusal_binary), scenario], check=True)
