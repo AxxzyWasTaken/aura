@@ -18,7 +18,7 @@
 
 #define PMGR_POLL_TIMEOUT 10000
 
-#define PMGR_FLAG_VIRTUAL 0x10
+#define PMGR_FLAG_VIRTUAL     0x10
 #define PMGR_MAX_PARENT_DEPTH 32
 
 struct pmgr_device {

@@ -163,7 +163,9 @@ static void dart_gen3_tlb_invalidate(dart_dev_t *dart)
                  "dsb ish\n"
                  ".inst 0xd50881bf\n" /* tlbi vale1os, xzr */
                  "dsb osh\n"
-                 : : "r"(lo), "r"(hi), "r"(dart->tlbi_aperture) : "memory");
+                 :
+                 : "r"(lo), "r"(hi), "r"(dart->tlbi_aperture)
+                 : "memory");
 }
 
 const struct dart_params dart_t8020 = {
@@ -245,12 +247,10 @@ static dart_dev_t *dart_gen3_adopt_adt(int node, uintptr_t base, int device, boo
     int tlbi_node = adt_path_offset_trace(adt, "/arm-io/dart-tlbi-aperture", tlbi_path);
     u64 aperture, size, offset;
     u32 sid_count;
-    if (tlbi_node < 0 ||
-        adt_get_reg(adt, tlbi_path, "reg", 0, &aperture, &size) < 0 ||
+    if (tlbi_node < 0 || adt_get_reg(adt, tlbi_path, "reg", 0, &aperture, &size) < 0 ||
         ADT_GETPROP(adt, node, "tlbi-aperture-offset", &offset) < 0 ||
-        ADT_GETPROP(adt, node, "sid-count", &sid_count) < 0 ||
-        sid_count > 256 || (u32)device >= sid_count || size < 16 ||
-        offset > size - 16 || (offset & 15)) {
+        ADT_GETPROP(adt, node, "sid-count", &sid_count) < 0 || sid_count > 256 ||
+        (u32)device >= sid_count || size < 16 || offset > size - 16 || (offset & 15)) {
         printf("dart: invalid Gen3 SID/TLBI metadata\n");
         return NULL;
     }
@@ -260,9 +260,8 @@ static dart_dev_t *dart_gen3_adopt_adt(int node, uintptr_t base, int device, boo
     u32 sid_config = read32(base + DART_T8110_TCR_OFF + 4 * device);
     u32 enabled = read32(base + DART_T8110_ENABLE_STREAMS + 4 * (device >> 5));
     u32 ttbr = read32(base + DART_T8110_TTBR_OFF + 4 * device);
-    if (((config >> 24) & 15) != 14 || version != 0x300 ||
-        (sid_config & 15) != 1 || !(enabled & BIT(device & 31)) ||
-        !(ttbr & DART_T8110_TTBR_VALID)) {
+    if (((config >> 24) & 15) != 14 || version != 0x300 || (sid_config & 15) != 1 ||
+        !(enabled & BIT(device & 31)) || !(ttbr & DART_T8110_TTBR_VALID)) {
         printf("dart: Gen3 stream %d is not an active two-level 16K stream\n", device);
         return NULL;
     }
@@ -286,8 +285,8 @@ static dart_dev_t *dart_gen3_adopt_adt(int node, uintptr_t base, int device, boo
     snprintf(prop, sizeof(prop), "vm-base-%d", device);
     if (ADT_GETPROP(adt, node, prop, &dart->vm_base) < 0)
         ADT_GETPROP(adt, node, "vm-base", &dart->vm_base);
-    printf("dart: adopted Gen3 SID %d at 0x%lx, root %p, TLBI route %u%s\n", device,
-           base, dart->l1[0], dart->tlbi_route, dart->locked ? " (locked)" : "");
+    printf("dart: adopted Gen3 SID %d at 0x%lx, root %p, TLBI route %u%s\n", device, base,
+           dart->l1[0], dart->tlbi_route, dart->locked ? " (locked)" : "");
     return dart;
 }
 

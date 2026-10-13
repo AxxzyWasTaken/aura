@@ -1827,12 +1827,10 @@ static int dt_device_set_reserved_mem_from_dart(int node, dart_dev_t *dart, cons
         int owner = fdt_node_offset_by_phandle(dt, phandle);
         int iommu = owner < 0 ? owner : dt_get_iommu_node(owner, 0);
         int len = 0;
-        const fdt64_t *range =
-            iommu < 0 ? NULL : fdt_getprop(dt, iommu, "apple,dma-range", &len);
+        const fdt64_t *range = iommu < 0 ? NULL : fdt_getprop(dt, iommu, "apple,dma-range", &len);
         if (range && len == 16) {
             u64 base = fdt64_ld(&range[0]), span = fdt64_ld(&range[1]);
-            if (span && !(span & (span - 1)) && base >= span && !(base & (span - 1)) &&
-                iova < span)
+            if (span && !(span & (span - 1)) && base >= span && !(base & (span - 1)) && iova < span)
                 iova |= base;
         }
     }
@@ -2987,7 +2985,8 @@ static bool dt_display_phys_reserved(u64 phys, u64 size)
     int parent = fdt_path_offset(dt, "/reserved-memory");
     int node;
 
-    fdt_for_each_subnode(node, dt, parent) {
+    fdt_for_each_subnode(node, dt, parent)
+    {
         int len;
         const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
         if (!reg || len != 16 || !fdt_getprop(dt, node, "no-map", NULL))
@@ -3018,8 +3017,7 @@ static int dt_reserve_m5_display_segments(void)
 
     if (owner < 0)
         return 0;
-    if (nub < 0 || chosen < 0 ||
-        ADT_GETPROP(adt, chosen, "dram-base", &dram) != sizeof(dram) ||
+    if (nub < 0 || chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram) != sizeof(dram) ||
         ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size))
         bail("ADT: missing M5 display firmware memory bounds\n");
     segments = adt_getprop(adt, nub, "segment-ranges", &len);
@@ -3036,21 +3034,19 @@ static int dt_reserve_m5_display_segments(void)
         u64 size = ALIGN_UP((u64)segments[i].size, SZ_16K);
         total += size;
         if (!size || (start & (SZ_16K - 1)) || start < (1ULL << 40) ||
-            start - (1ULL << 40) >= (1ULL << 36) ||
-            size > (1ULL << 36) - (start - (1ULL << 40)) || total > 128 * SZ_1M)
+            start - (1ULL << 40) >= (1ULL << 36) || size > (1ULL << 36) - (start - (1ULL << 40)) ||
+            total > 128 * SZ_1M)
             bail_cleanup("ADT: unsupported M5 display firmware segment\n");
         for (u64 offset = 0; offset < size;) {
             u64 iova = start + offset;
             u64 phys = (u64)dart_translate(dart, iova);
-            if (phys < dram || phys - dram > dram_size - SZ_16K ||
-                (phys & (SZ_16K - 1)))
+            if (phys < dram || phys - dram > dram_size - SZ_16K || (phys & (SZ_16K - 1)))
                 bail_cleanup("DART: invalid M5 display firmware page\n");
             bool reserved = dt_display_phys_reserved(phys, SZ_16K);
             u64 count = SZ_16K;
             while (offset + count < size) {
                 u64 next = (u64)dart_translate(dart, iova + count);
-                if (next != phys + count || next < dram ||
-                    next - dram > dram_size - SZ_16K ||
+                if (next != phys + count || next < dram || next - dram > dram_size - SZ_16K ||
                     dt_display_phys_reserved(next, SZ_16K) != reserved)
                     break;
                 count += SZ_16K;
@@ -3156,8 +3152,8 @@ static int dt_set_display(void)
         /* noop */
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t8142")) {
         ret = dt_carveout_reserved_regions("dcp", "disp0", "disp0_piodma",
-                                          disp_reserved_regions_t8142,
-                                          ARRAY_SIZE(disp_reserved_regions_t8142));
+                                           disp_reserved_regions_t8142,
+                                           ARRAY_SIZE(disp_reserved_regions_t8142));
         if (ret)
             return ret;
     } else {

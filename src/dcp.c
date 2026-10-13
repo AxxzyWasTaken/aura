@@ -216,8 +216,8 @@ dcp_dev_t *dcp_init(const display_config_t *cfg)
     }
 
     /* Keep unqualified ASCWrap-v8 firmware from trapping startup in a wait. */
-    bool booted = asc_is_v8(dcp->asc) ? rtkit_boot_timed(dcp->rtkit, 2000000)
-                                       : rtkit_boot(dcp->rtkit);
+    bool booted =
+        asc_is_v8(dcp->asc) ? rtkit_boot_timed(dcp->rtkit, 2000000) : rtkit_boot(dcp->rtkit);
     if (!booted) {
         printf("dcp: failed to boot RTKit\n");
         goto out_iovad;

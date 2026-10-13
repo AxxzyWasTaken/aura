@@ -6,14 +6,14 @@
 #include "string.h"
 #include "utils.h"
 
-#define ASC_CPU_CONTROL       0x44
-#define ASC_CPU_CONTROL_START 0x10
+#define ASC_CPU_CONTROL        0x44
+#define ASC_CPU_CONTROL_START  0x10
 #define ASC_CPU_STATUS         0x48
 #define ASC_CPU_STATUS_STOPPED BIT(1)
 
 #define ASC_MBOX_CONTROL_ENABLE   BIT(0)
-#define ASC_MBOX_CONTROL_FULL  BIT(16)
-#define ASC_MBOX_CONTROL_EMPTY BIT(17)
+#define ASC_MBOX_CONTROL_FULL     BIT(16)
+#define ASC_MBOX_CONTROL_EMPTY    BIT(17)
 #define ASC_MBOX_CONTROL_OVERFLOW BIT(18)
 #define ASC_MBOX_CONTROL_COUNT    GENMASK(23, 20)
 
@@ -255,8 +255,9 @@ bool asc_send(asc_dev_t *asc, const struct asc_message *msg)
             }
         }
         dma_wmb();
-        asm volatile("stp %0, %1, [%2]" :: "r"(msg->msg0), "r"((u64)msg->msg1),
-                     "r"(asc->base + ASC_V8_MBOX_SEND) : "memory");
+        asm volatile("stp %0, %1, [%2]" ::"r"(msg->msg0), "r"((u64)msg->msg1),
+                     "r"(asc->base + ASC_V8_MBOX_SEND)
+                     : "memory");
         return true;
     }
     if (poll32(asc->base + ASC_MBOX_A2I_CONTROL, ASC_MBOX_CONTROL_FULL, 0, 200000)) {

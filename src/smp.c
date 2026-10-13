@@ -456,8 +456,8 @@ static int smp_init_t8152(void)
     int path[8];
     int pmgr = adt_path_offset_trace(adt, "/arm-io/pmgr-child", path);
     int cpus = adt_path_offset(adt, "/cpus");
-    if (!in_el2() || board_id != 0x24 || !adt_is_compatible(adt, 0, "J873gAP") ||
-        pmgr < 0 || cpus < 0 || !adt_is_compatible(adt, pmgr, "pmgr2,t8152"))
+    if (!in_el2() || board_id != 0x24 || !adt_is_compatible(adt, 0, "J873gAP") || pmgr < 0 ||
+        cpus < 0 || !adt_is_compatible(adt, pmgr, "pmgr2,t8152"))
         return -1;
 
     u32 len;
@@ -473,13 +473,14 @@ static int smp_init_t8152(void)
         reg_index = maps[i];
     }
     u64 base, size;
-    if (reg_index < 0 || adt_get_reg(adt, path, "reg", reg_index, &base, &size) ||
-        size < 0x4010 || base != 0x300730000ULL)
+    if (reg_index < 0 || adt_get_reg(adt, path, "reg", reg_index, &base, &size) || size < 0x4010 ||
+        base != 0x300730000ULL)
         return -1;
 
     u64 present = 0;
     int node = cpus;
-    ADT_FOREACH_CHILD(adt, node) {
+    ADT_FOREACH_CHILD(adt, node)
+    {
         u32 id, reg;
         u64 impl[2];
         if (ADT_GETPROP(adt, node, "cpu-id", &id) != sizeof(id) || id >= 12 ||

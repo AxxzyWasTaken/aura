@@ -177,7 +177,8 @@ int boot_storage_load(const char *spec, struct kernel_header **kernel, void **fd
     kboot_set_initrd(files[2], sizes[2]);
     *kernel = prepared;
     *fdt = files[1];
-    printf("boot: ESP image and DTB validated%s\n", have_initrd ? " with initramfs" : " without initramfs");
+    printf("boot: ESP image and DTB validated%s\n",
+           have_initrd ? " with initramfs" : " without initramfs");
     rust_free_image(files[0], sizes[0]);
     free(fields);
     free(file_spec);

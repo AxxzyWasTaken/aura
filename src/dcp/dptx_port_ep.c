@@ -129,9 +129,9 @@ static int afk_service_call(afk_epic_service_t *service, u16 group, u32 command,
     if (ret)
         goto out;
 
-    if (rx_len < sizeof(*call) || call->magic != EPIC_SERVICE_CALL_MAGIC ||
-        call->group != group || call->command != command ||
-        call->data_len > rx_len - sizeof(*call) || call->data_len < output_len) {
+    if (rx_len < sizeof(*call) || call->magic != EPIC_SERVICE_CALL_MAGIC || call->group != group ||
+        call->command != command || call->data_len > rx_len - sizeof(*call) ||
+        call->data_len < output_len) {
         ret = -1;
         goto out;
     }
@@ -532,8 +532,8 @@ static void dptxport_init(afk_epic_service_t *service, const char *name, const c
     }
 }
 
-static u32 dptxport_call_v2(afk_epic_service_t *service, u16 group, u32 command,
-                           const void *data, size_t data_size, void *reply, size_t reply_size)
+static u32 dptxport_call_v2(afk_epic_service_t *service, u16 group, u32 command, const void *data,
+                            size_t data_size, void *reply, size_t reply_size)
 {
     if (group && !(group == 1 && command == DPTX_APCALL_SET_DRIVE_SETTINGS))
         return 0xe00002c7; /* kIOReturnUnsupported */
@@ -542,10 +542,10 @@ static u32 dptxport_call_v2(afk_epic_service_t *service, u16 group, u32 command,
     if ((!port || !port->phy) &&
         (command == DPTX_APCALL_ACTIVATE || command == DPTX_APCALL_DEACTIVATE ||
          command == DPTX_APCALL_WILL_CHANGE_LINKG_CONFIG ||
-         command == DPTX_APCALL_DID_CHANGE_LINK_CONFIG ||
-         command == DPTX_APCALL_SET_LINK_RATE || command == DPTX_APCALL_SET_DOWN_SPREAD ||
-         command == DPTX_APCALL_SET_ACTIVE_LANE_COUNT || command == DPTX_APCALL_SET_DRIVE_SETTINGS ||
-         command == DPTX_APCALL_GET_LINK_RATE || command == DPTX_APCALL_GET_ACTIVE_LANE_COUNT))
+         command == DPTX_APCALL_DID_CHANGE_LINK_CONFIG || command == DPTX_APCALL_SET_LINK_RATE ||
+         command == DPTX_APCALL_SET_DOWN_SPREAD || command == DPTX_APCALL_SET_ACTIVE_LANE_COUNT ||
+         command == DPTX_APCALL_SET_DRIVE_SETTINGS || command == DPTX_APCALL_GET_LINK_RATE ||
+         command == DPTX_APCALL_GET_ACTIVE_LANE_COUNT))
         return 0xe00002d8; /* kIOReturnNotReady */
     /* Only the hardware-qualified HBR/four-lane configuration is exposed.
      * Training changes still require their own implementation. */
@@ -564,7 +564,8 @@ static u32 dptxport_call_v2(afk_epic_service_t *service, u16 group, u32 command,
         case DPTX_APCALL_WILL_CHANGE_LINKG_CONFIG:
         case DPTX_APCALL_DID_CHANGE_LINK_CONFIG:
             return dptx_phy_set_route(port->phy, command == DPTX_APCALL_DID_CHANGE_LINK_CONFIG)
-                       ? 0xe00002bc : 0;
+                       ? 0xe00002bc
+                       : 0;
         case DPTX_APCALL_GET_MAX_LINK_RATE:
             value = LINK_RATE_HBR;
             break;

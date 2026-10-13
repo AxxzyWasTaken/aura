@@ -4,20 +4,21 @@
  * are separate stages; common initialization alone does not establish a link. */
 #include "atc_phy.h"
 #include "dptx_phy.h"
+#include "malloc.h"
+#include "string.h"
+
 #include "../ace3.h"
 #include "../adt.h"
-#include "malloc.h"
 #include "../soc.h"
-#include "string.h"
 #include "../tps6598x.h"
 #include "../utils.h"
 
-#define ATC_CFG          0x60000
-#define ATC_AON          0x1e00
-#define ATC_XBAR         0x74000
-#define ATC_TIMEOUT      10000
-#define ATC_SAVED_MAX    192
-#define ATC_PSD58        0x303a13a00ULL
+#define ATC_CFG       0x60000
+#define ATC_AON       0x1e00
+#define ATC_XBAR      0x74000
+#define ATC_TIMEOUT   10000
+#define ATC_SAVED_MAX 192
+#define ATC_PSD58     0x303a13a00ULL
 
 struct atc_saved {
     u32 offset;
@@ -60,8 +61,7 @@ static const struct atc_tunable tunables[] = {
     {"tunable_ASDC_AUX_SHM_DFLT", 0x2300, 0x14, false},
 };
 
-static const u64 gate_addr[] = {0x3082901c0ULL, ATC_PSD58, 0x3082900c0ULL,
-                                0x3082900e0ULL};
+static const u64 gate_addr[] = {0x3082901c0ULL, ATC_PSD58, 0x3082900c0ULL, 0x3082900e0ULL};
 static const u32 gate_idle[] = {0x300, 6, 0x244, 0x244};
 
 static int atc_tunable_check(atc_phy_t *phy, unsigned int index, bool apply);
@@ -72,8 +72,7 @@ static bool atc_crossbar_check(void)
     int node = adt_path_offset_trace(adt, "/arm-io/atc3-dpxbar", trace);
     u64 base, size;
     if (node < 0 || !adt_is_compatible(adt, node, "atc-dpxbar,t8142") ||
-        adt_get_reg(adt, trace, "reg", 0, &base, &size) ||
-        base != 0x413074000ULL || size != 0x4000)
+        adt_get_reg(adt, trace, "reg", 0, &base, &size) || base != 0x413074000ULL || size != 0x4000)
         return false;
     u32 len;
     const u32 *handle = adt_getprop(adt, node, "AAPL,phandle", &len);
@@ -100,7 +99,10 @@ static u64 atc_dp_clock(int node)
     const void *link = adt_getprop(adt, node, "atc-dp-link", &len);
     if (!link || len != sizeof(expected_link) || memcmp(link, expected_link, len))
         return 0;
-    struct group { u16 id, map; u32 offset; };
+    struct group {
+        u16 id, map;
+        u32 offset;
+    };
     const struct group *groups = adt_getprop(adt, node, "reg-groups", &len);
     if (!groups || len % sizeof(*groups))
         return 0;
@@ -113,7 +115,9 @@ static u64 atc_dp_clock(int node)
             break;
         }
     }
-    struct mapping { u16 reg, id; };
+    struct mapping {
+        u16 reg, id;
+    };
     const struct mapping *maps = adt_getprop(adt, node, "reg-maps", &len);
     if (map < 0 || !maps || len % sizeof(*maps))
         return 0;
@@ -126,8 +130,7 @@ static u64 atc_dp_clock(int node)
     int trace[8];
     u64 base, size;
     if (reg < 0 || adt_path_offset_trace(adt, "/arm-io/pmgr-child", trace) != node ||
-        adt_get_reg(adt, trace, "reg", reg, &base, &size) ||
-        (u64)offset + 0x44 + 3 * 8 + 4 > size)
+        adt_get_reg(adt, trace, "reg", reg, &base, &size) || (u64)offset + 0x44 + 3 * 8 + 4 > size)
         return 0;
     u64 addr = base + offset + 0x44 + 3 * 8;
     return addr == 0x30002005cULL ? addr : 0;
@@ -170,8 +173,7 @@ static int atc_tunable_check(atc_phy_t *phy, unsigned int index, bool apply)
     for (u32 i = 0; i < len / 4; i += 3) {
         u32 offset = p[i] & 0x7ffffff;
         /* The live tables use only the qualified 32-bit masked-write opcode. */
-        if (p[i] >> 27 != 4 || (offset & 3) || offset + 4 > t->size ||
-            (p[i + 2] & ~p[i + 1]))
+        if (p[i] >> 27 != 4 || (offset & 3) || offset + 4 > t->size || (p[i + 2] & ~p[i + 1]))
             return -1;
         if (apply && atc_update(phy, t->offset + offset, p[i + 1], p[i + 2]))
             return -1;
@@ -183,8 +185,7 @@ static int atc_psd_wait(u32 state)
 {
     u64 deadline = timeout_calculate(ATC_TIMEOUT);
     do {
-        if ((read32(ATC_PSD58 + 0xbc) & 1) &&
-            (read32(ATC_PSD58 + 0x80) & 7) == state)
+        if ((read32(ATC_PSD58 + 0xbc) & 1) && (read32(ATC_PSD58 + 0x80) & 7) == state)
             return 0;
         udelay(1);
     } while (!timeout_expired(deadline));
@@ -199,8 +200,8 @@ static int atc_gates_restore(atc_phy_t *phy)
         if (i == 1) {
             write32(ATC_PSD58 + 0x90, gate_idle[i]);
             if (atc_psd_wait(gate_idle[i])) {
-                printf("ATC3: PSD restore status=%#x ack=%#x\n",
-                       read32(ATC_PSD58 + 0x80), read32(ATC_PSD58 + 0xbc));
+                printf("ATC3: PSD restore status=%#x ack=%#x\n", read32(ATC_PSD58 + 0x80),
+                       read32(ATC_PSD58 + 0xbc));
                 ret = -1;
             }
         } else {
@@ -212,8 +213,8 @@ static int atc_gates_restore(atc_phy_t *phy)
                 waited = poll32(gate_addr[i], 0xffffffff, gate_idle[i], ATC_TIMEOUT);
             u32 actual = read32(gate_addr[i]);
             if (waited || actual != gate_idle[i]) {
-                printf("ATC3: gate %u restore wait=%d expected=%#x actual=%#x\n", i,
-                       waited, gate_idle[i], actual);
+                printf("ATC3: gate %u restore wait=%d expected=%#x actual=%#x\n", i, waited,
+                       gate_idle[i], actual);
                 ret = -1;
             }
         }
@@ -257,12 +258,11 @@ atc_phy_t *atc_phy_init(const char *path)
     u64 base, size;
     const u32 expected_gates[] = {173, 58, 188, 189};
     u32 len = 0;
-    if (chip_id != T8152 || board_id != 0x24 ||
-        !adt_is_compatible(adt, 0, "J873gAP") || node < 0 || pmgr < 0 ||
-        !adt_is_compatible(adt, node, "atc-phy,t8152") ||
+    if (chip_id != T8152 || board_id != 0x24 || !adt_is_compatible(adt, 0, "J873gAP") || node < 0 ||
+        pmgr < 0 || !adt_is_compatible(adt, node, "atc-phy,t8152") ||
         !adt_is_compatible(adt, pmgr, "pmgr2,t8152") ||
-        adt_get_reg(adt, trace, "reg", 2, &base, &size) ||
-        base != 0x413000000ULL || size != 0x84000)
+        adt_get_reg(adt, trace, "reg", 2, &base, &size) || base != 0x413000000ULL ||
+        size != 0x84000)
         return NULL;
     const void *gates = adt_getprop(adt, node, "service-gates", &len);
     if (!gates || len != sizeof(expected_gates) || memcmp(gates, expected_gates, len))
@@ -329,8 +329,8 @@ static int atc_restore(atc_phy_t *phy, struct atc_saved *saved)
     mask32(addr, saved->mask, saved->value & saved->mask);
     u32 actual = read32(addr);
     if ((actual ^ saved->value) & saved->mask) {
-        printf("ATC3: restore %#x mask %#x expected %#x got %#x\n", saved->offset,
-               saved->mask, saved->value, actual);
+        printf("ATC3: restore %#x mask %#x expected %#x got %#x\n", saved->offset, saved->mask,
+               saved->value, actual);
         return -1;
     }
     saved->mask = 0;
@@ -342,10 +342,8 @@ static int atc_route_stop(atc_phy_t *phy)
 {
     if (!phy->route_started)
         return 0;
-    if (atc_update(phy, ATC_XBAR + 0x3c, 1, 0) ||
-        atc_update(phy, ATC_XBAR, 1, 0) ||
-        atc_update(phy, ATC_XBAR + 0xc, 1, 0) ||
-        atc_update(phy, ATC_XBAR + 0x24, 0x100, 0))
+    if (atc_update(phy, ATC_XBAR + 0x3c, 1, 0) || atc_update(phy, ATC_XBAR, 1, 0) ||
+        atc_update(phy, ATC_XBAR + 0xc, 1, 0) || atc_update(phy, ATC_XBAR + 0x24, 0x100, 0))
         return -1;
     udelay(1);
     if (poll32(phy->base + ATC_XBAR + 0x800, 1, 0, ATC_TIMEOUT) ||
@@ -354,12 +352,9 @@ static int atc_route_stop(atc_phy_t *phy)
         printf("ATC3: crossbar stop acknowledgement timeout\n");
         return -1;
     }
-    if (atc_update(phy, ATC_XBAR + 8, 1, 0) ||
-        atc_update(phy, ATC_XBAR + 0x20, 7, 0) ||
-        atc_update(phy, ATC_XBAR + 0x38, 0x700, 0) ||
-        atc_update(phy, ATC_XBAR + 4, 1, 1) ||
-        atc_update(phy, ATC_XBAR + 0x1c, 1, 1) ||
-        atc_update(phy, ATC_XBAR + 0x34, 0x100, 0x100))
+    if (atc_update(phy, ATC_XBAR + 8, 1, 0) || atc_update(phy, ATC_XBAR + 0x20, 7, 0) ||
+        atc_update(phy, ATC_XBAR + 0x38, 0x700, 0) || atc_update(phy, ATC_XBAR + 4, 1, 1) ||
+        atc_update(phy, ATC_XBAR + 0x1c, 1, 1) || atc_update(phy, ATC_XBAR + 0x34, 0x100, 0x100))
         return -1;
     for (unsigned int i = phy->saved_count; i > 0; i--) {
         struct atc_saved *s = &phy->saved[i - 1];
@@ -384,35 +379,27 @@ static int atc_route_start(atc_phy_t *phy)
     u64 base = phy->base + ATC_XBAR;
     /* Reject an existing owner of this source or destination. */
     if ((read32(base) | read32(base + 0xc) | read32(base + 0x3c)) & 1 ||
-        read32(base + 0x24) & 0x100 || read32(base + 0x20) & 7 ||
-        read32(base + 0x38) & 0x700) {
+        read32(base + 0x24) & 0x100 || read32(base + 0x20) & 7 || read32(base + 0x38) & 0x700) {
         printf("ATC3: display route is already in use\n");
         return -1;
     }
     phy->route_started = true;
     /* Both DFP0 mux fields select DCP0. T8142 needs no cycle-slip workaround. */
     if (atc_update(phy, ATC_XBAR + 0x44, 0x00f00000, 0) ||
-        atc_update(phy, ATC_XBAR + 0x44, 0x00000f00, 0) ||
-        atc_update(phy, ATC_XBAR + 4, 1, 0) ||
-        atc_update(phy, ATC_XBAR + 0x1c, 1, 0) ||
-        atc_update(phy, ATC_XBAR + 0x34, 0x100, 0))
+        atc_update(phy, ATC_XBAR + 0x44, 0x00000f00, 0) || atc_update(phy, ATC_XBAR + 4, 1, 0) ||
+        atc_update(phy, ATC_XBAR + 0x1c, 1, 0) || atc_update(phy, ATC_XBAR + 0x34, 0x100, 0))
         goto fail;
     udelay(1);
-    if (poll32(base + 0x804, 1, 0, ATC_TIMEOUT) ||
-        poll32(base + 0x818, 1, 0, ATC_TIMEOUT) ||
+    if (poll32(base + 0x804, 1, 0, ATC_TIMEOUT) || poll32(base + 0x818, 1, 0, ATC_TIMEOUT) ||
         poll32(base + 0x82c, 0x100, 0, ATC_TIMEOUT)) {
         printf("ATC3: crossbar reset acknowledgement timeout\n");
         goto fail;
     }
-    if (atc_update(phy, ATC_XBAR + 8, 1, 1) ||
-        atc_update(phy, ATC_XBAR + 0x20, 7, 1) ||
-        atc_update(phy, ATC_XBAR + 0x38, 0x700, 0x100) ||
-        atc_update(phy, ATC_XBAR + 0x48, 1, 0) ||
-        atc_update(phy, ATC_XBAR, 1, 1) ||
-        atc_update(phy, ATC_XBAR + 0xc, 1, 1) ||
+    if (atc_update(phy, ATC_XBAR + 8, 1, 1) || atc_update(phy, ATC_XBAR + 0x20, 7, 1) ||
+        atc_update(phy, ATC_XBAR + 0x38, 0x700, 0x100) || atc_update(phy, ATC_XBAR + 0x48, 1, 0) ||
+        atc_update(phy, ATC_XBAR, 1, 1) || atc_update(phy, ATC_XBAR + 0xc, 1, 1) ||
         atc_update(phy, ATC_XBAR + 0x24, 0x100, 0x100) ||
-        atc_update(phy, ATC_XBAR + 0x4c, 0x100, 0x100) ||
-        atc_update(phy, ATC_XBAR + 0x3c, 1, 1))
+        atc_update(phy, ATC_XBAR + 0x4c, 0x100, 0x100) || atc_update(phy, ATC_XBAR + 0x3c, 1, 1))
         goto fail;
     printf("ATC3: DCP0 to local DFP0 route configured\n");
     return 0;
@@ -428,8 +415,7 @@ static int atc_dp_stop(atc_phy_t *phy)
     if (atc_route_stop(phy))
         return -1;
     /* Stop the shim clock before withdrawing the PMGR source. */
-    if (atc_update(phy, ATC_CFG + 0x14, 7, 7) ||
-        atc_update(phy, ATC_CFG + 0x18, 1, 0) ||
+    if (atc_update(phy, ATC_CFG + 0x14, 7, 7) || atc_update(phy, ATC_CFG + 0x18, 1, 0) ||
         poll32(phy->base + ATC_CFG + 0x1c, 1, 0, ATC_TIMEOUT)) {
         printf("ATC3: DPTX clock stop failed\n");
         return -1;
@@ -437,12 +423,9 @@ static int atc_dp_stop(atc_phy_t *phy)
     if (atc_update(phy, 0x2040, BIT(16), 0))
         return -1;
     udelay(5);
-    if (atc_update(phy, 0x2000, BIT(15), 0) ||
-        atc_update(phy, 0x2000, BIT(13), 0) ||
-        atc_update(phy, 0x2000, BIT(14), 0) ||
-        atc_update(phy, 0x2000, BIT(2), 0) ||
-        atc_update(phy, 0x2000, BIT(3), BIT(3)) ||
-        atc_update(phy, 0xe10, BIT(2), BIT(2)) ||
+    if (atc_update(phy, 0x2000, BIT(15), 0) || atc_update(phy, 0x2000, BIT(13), 0) ||
+        atc_update(phy, 0x2000, BIT(14), 0) || atc_update(phy, 0x2000, BIT(2), 0) ||
+        atc_update(phy, 0x2000, BIT(3), BIT(3)) || atc_update(phy, 0xe10, BIT(2), BIT(2)) ||
         atc_update(phy, 0xe08, BIT(29), BIT(29)))
         return -1;
     if (phy->clock_owned) {
@@ -614,7 +597,9 @@ fail:
 
 /* Common four-lane setup. Rate-dependent fields are applied separately below.
  * These offsets are specific to T8152 ATC, not the older standalone DPTX PHY. */
-static const struct { u32 offset, mask, value; } dp_setup[] = {
+static const struct {
+    u32 offset, mask, value;
+} dp_setup[] = {
     {0x2044, 0xffff, 0x4b0},
     {0x4c, 0x3c0000, 0x3c0000},
     {0x4c80, 0x40, 0x40},
@@ -666,11 +651,9 @@ int atc_phy_set_link_rate(atc_phy_t *phy, u32 rate)
     if (clock & BIT(30))
         return -1;
     phy->dp_started = true;
-    if (atc_update(phy, ATC_CFG + 0x14, 7, 0) ||
-        atc_update(phy, ATC_CFG + 0x18, 1, 1))
+    if (atc_update(phy, ATC_CFG + 0x14, 7, 0) || atc_update(phy, ATC_CFG + 0x18, 1, 1))
         goto fail;
-    if (!r && (atc_update(phy, 0xe10, BIT(2), BIT(2)) ||
-               atc_update(phy, 0xe08, BIT(29), BIT(29))))
+    if (!r && (atc_update(phy, 0xe10, BIT(2), BIT(2)) || atc_update(phy, 0xe08, BIT(29), BIT(29))))
         goto fail;
 
     for (u32 i = 0; i < 2; i++) {
@@ -712,12 +695,10 @@ int atc_phy_set_link_rate(atc_phy_t *phy, u32 rate)
             goto fail;
     }
     static const u32 wake_count[] = {0xbb5, 0xbb7, 0xbb8, 0xbb9};
-    if (atc_update(phy, 0x2000, 0x70, 0x10) ||
-        atc_update(phy, 0x2000, BIT(13), BIT(13)) ||
+    if (atc_update(phy, 0x2000, 0x70, 0x10) || atc_update(phy, 0x2000, BIT(13), BIT(13)) ||
         atc_update(phy, 0x2044, 0xffff0000, wake_count[r] << 16) ||
         atc_update(phy, phy->swap ? 0x89f0 : 0x119f0, BIT(14), BIT(14)) ||
-        atc_update(phy, 0x2000, BIT(2), BIT(2)) ||
-        atc_update(phy, 0x2000, BIT(3), BIT(3)) ||
+        atc_update(phy, 0x2000, BIT(2), BIT(2)) || atc_update(phy, 0x2000, BIT(3), BIT(3)) ||
         atc_update(phy, 0x2040, BIT(16), BIT(16)))
         goto fail;
 
@@ -728,8 +709,7 @@ int atc_phy_set_link_rate(atc_phy_t *phy, u32 rate)
     if (atc_route_start(phy))
         goto fail;
     phy->link_rate = rate;
-    printf("ATC3: four-lane DPTX setup rate %#x, %u registers saved\n", rate,
-           phy->saved_count);
+    printf("ATC3: four-lane DPTX setup rate %#x, %u registers saved\n", rate, phy->saved_count);
     return 0;
 fail:
     printf("ATC3: DPTX setup failed\n");
@@ -774,13 +754,12 @@ int atc_phy_set_drive_settings(atc_phy_t *phy, const dptx_drive_settings_t *sett
         /* Even DP lanes use the PMA RX pair, odd lanes use its TX pair. */
         u32 offset = ((i & 1) ? 0x4eb0 : 0x8b10) + pma * 0x9000;
         u32 preset = presets[i];
-        u32 control = 1 | (((preset >> 13) & 0x3f) << 17) |
-                      (((preset >> 7) & 0x3f) << 5);
+        u32 control = 1 | (((preset >> 13) & 0x3f) << 17) | (((preset >> 7) & 0x3f) << 5);
         if (atc_update(phy, offset, 0x7e07ff, control) ||
             atc_update(phy, offset - 0x14, 0x7f, (preset & 0x3f) | 0x40))
             return -1;
-        dprintf("ATC3: DP lane %u voltage %u emphasis %u preset %#x\n", i,
-               settings[i].voltage, settings[i].pre_emphasis, preset);
+        dprintf("ATC3: DP lane %u voltage %u emphasis %u preset %#x\n", i, settings[i].voltage,
+                settings[i].pre_emphasis, preset);
     }
     return 0;
 }

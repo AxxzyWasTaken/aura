@@ -35,8 +35,8 @@ typedef struct afk_epic_service_ops {
                 void *reply, size_t reply_size);
     /* Native DCPAV callbacks use a 64-byte header, unlike legacy EPIC. Opt in
      * separately so new firmware cannot enter an older hardware callback. */
-    u32 (*call_v2)(afk_epic_service_t *service, u16 group, u32 command,
-                   const void *data, size_t data_size, void *reply, size_t reply_size);
+    u32 (*call_v2)(afk_epic_service_t *service, u16 group, u32 command, const void *data,
+                   size_t data_size, void *reply, size_t reply_size);
 } afk_epic_service_ops_t;
 
 afk_epic_t *afk_epic_init(rtkit_dev_t *rtkit);

@@ -170,17 +170,15 @@ static int dcp_ib_cmd(dcp_iboot_if_t *iboot, int op, size_t in_size)
      * setters. Supplying a reply buffer makes firmware try to copy an empty
      * message and assert in AFKEPCommandContext::enqueueResponse. */
     bool status_only = afk_epic_is_v2(iboot->epic) &&
-                       (op == IBOOT_SET_POWER || op == IBOOT_SET_MODE ||
-                        op == IBOOT_SET_SURFACE);
+                       (op == IBOOT_SET_POWER || op == IBOOT_SET_MODE || op == IBOOT_SET_SURFACE);
     assert(in_size <= TXBUF_LEN - sizeof(struct txcmd));
 
     iboot->txcmd.op = op;
     iboot->txcmd.len = sizeof(struct txcmd) + in_size;
 
     int ret = afk_epic_command(iboot->epic, iboot->channel, 0xc0, iboot->txbuf,
-                              sizeof(struct txcmd) + in_size,
-                              status_only ? NULL : iboot->rxbuf,
-                              status_only ? NULL : &rxsize);
+                               sizeof(struct txcmd) + in_size, status_only ? NULL : iboot->rxbuf,
+                               status_only ? NULL : &rxsize);
     if (ret)
         return ret;
     if (status_only)

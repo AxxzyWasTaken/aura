@@ -29,7 +29,6 @@
 #define ACE3_SELECT_TIMEOUT_US 20000
 #define ACE3_SELECT_POLL_US    50
 
-
 static size_t ace3_chunk(size_t left)
 {
     return left > ACE3_SPMI_BURST ? ACE3_SPMI_BURST : left;

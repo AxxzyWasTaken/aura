@@ -2,7 +2,13 @@ name: release
 on:
   workflow_dispatch:
   push:
-    tags: [ 'aura-v*' ]
+    branches: [ main ]
+    tags: [ 'v*', 'aura-v*' ]
+  pull_request:
+    branches: [ main ]
+    paths:
+      - .github/workflows/release.yml
+      - tools/package_release.py
 permissions:
   contents: read
 jobs:
@@ -10,19 +16,65 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Install build tools
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y gcc-aarch64-linux-gnu
           rustup target add aarch64-unknown-none-softfloat
-      - name: Build Aura
-        run: make -j2 ARCH=aarch64-linux-gnu- RELEASE=1 CHAINLOADING=1
+      - name: Select build version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            echo "AURA_VERSION_TAG=$REF_NAME" >> "$GITHUB_ENV"
+          else
+            echo "AURA_VERSION_TAG=dev-${GITHUB_SHA:0:12}" >> "$GITHUB_ENV"
+          fi
+      - name: Build and package both stages
+        run: |
+          for stage in stage1 stage2; do
+            esp=0
+            if [ "$stage" = stage2 ]; then esp=1; fi
+            make clean
+            make -j2 ARCH=aarch64-linux-gnu- RELEASE=1 CHAINLOADING=1 ESP_STAGE2="$esp"
+            python3 tools/package_release.py --version "$AURA_VERSION_TAG" --variant "$stage" --compiler aarch64-linux-gnu-gcc
+          done
+          cd dist
+          sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
-          name: aura-${{ github.ref_name }}
-          path: |
-            build/aura.bin
-            build/aura.macho
-            LICENSE
-            LICENSES/
-            3rdparty_licenses/
+          name: aura-release
+          path: dist/*
+          if-no-files-found: error
+  draft:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: aura-release
+          path: dist
+      - name: Create or update draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json 2>/dev/null; then
+            jq -e '.isDraft == true' release-state.json
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            notes="docs/releases/${RELEASE_TAG#v}.md"
+            if [ ! -f "$notes" ]; then
+              printf 'Draft release %s. Edit these notes before publishing.\n' "$RELEASE_TAG" > release-notes.txt
+              notes=release-notes.txt
+            fi
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --draft \
+              --title "Aura ${RELEASE_TAG#v}" --notes-file "$notes"
+          fi

@@ -43,10 +43,10 @@
 #define MSG_OSLOG_INIT 0x10
 #define MSG_OSLOG_ACK  0x30
 
-#define OSLOG_TYPE GENMASK(63, 56)
+#define OSLOG_TYPE                GENMASK(63, 56)
 #define OSLOG_TYPE_BUFFER_REQUEST 1
-#define OSLOG_SIZE GENMASK(55, 36)
-#define OSLOG_IOVA GENMASK(35, 0)
+#define OSLOG_SIZE                GENMASK(55, 36)
+#define OSLOG_IOVA                GENMASK(35, 0)
 
 #define MGMT_MSG_HELLO        1
 #define MGMT_MSG_HELLO_ACK    2
@@ -372,8 +372,8 @@ static bool rtkit_handle_oslog_request(rtkit_dev_t *rtk, struct rtkit_message *m
             bfr->dva = dva;
             bfr->bfr = phys + (dva - page);
             bfr->sz = sz;
-            rtkit_printf("pre-allocated oslog buffer (dva %#lx, phys %p, size %#zx)\n",
-                         dva, bfr->bfr, sz);
+            rtkit_printf("pre-allocated oslog buffer (dva %#lx, phys %p, size %#zx)\n", dva,
+                         bfr->bfr, sz);
             return true;
         }
         rtkit_printf("oslog buffer request outside mapped DART (%#lx, %#zx)\n", addr, sz);
@@ -534,7 +534,8 @@ int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
                 }
                 break;
             case RTKIT_EP_OSLOG:
-                if (asc_is_v8(rtk->asc) && FIELD_GET(OSLOG_TYPE, msg->msg) == OSLOG_TYPE_BUFFER_REQUEST) {
+                if (asc_is_v8(rtk->asc) &&
+                    FIELD_GET(OSLOG_TYPE, msg->msg) == OSLOG_TYPE_BUFFER_REQUEST) {
                     ok = ok && rtkit_handle_oslog_request(rtk, msg);
                     break;
                 }
@@ -571,8 +572,7 @@ bool rtkit_start_ep(rtkit_dev_t *rtk, u8 ep)
 }
 
 static bool rtkit_wait_for_power(rtkit_dev_t *rtk, enum rtkit_power_state *state,
-                                 enum rtkit_power_state target, u32 timeout_usec,
-                                 const char *name)
+                                 enum rtkit_power_state target, u32 timeout_usec, const char *name)
 {
     u64 timeout = timeout_usec ? timeout_calculate(timeout_usec) : 0;
 

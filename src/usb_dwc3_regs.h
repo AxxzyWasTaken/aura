@@ -318,8 +318,8 @@
 #else
 #define DWC3_DGCMD_STATUS(n) (((n) >> 15) & 1)
 #endif
-#define DWC3_DGCMD_CMDACT    (1 << 10)
-#define DWC3_DGCMD_CMDIOC    (1 << 8)
+#define DWC3_DGCMD_CMDACT (1 << 10)
+#define DWC3_DGCMD_CMDIOC (1 << 8)
 
 /* Device Generic Command Parameter Register */
 #define DWC3_DGCMDPAR_FORCE_LINKPM_ACCEPT (1 << 0)
@@ -336,11 +336,11 @@
 #ifdef J700_CDC_PROXY
 #define DWC3_DEPCMD_STATUS(x) (((x) >> 12) & 0xf)
 #else
-#define DWC3_DEPCMD_STATUS(x)      (((x) >> 15) & 1)
+#define DWC3_DEPCMD_STATUS(x) (((x) >> 15) & 1)
 #endif
-#define DWC3_DEPCMD_HIPRI_FORCERM  (1 << 11)
-#define DWC3_DEPCMD_CMDACT         (1 << 10)
-#define DWC3_DEPCMD_CMDIOC         (1 << 8)
+#define DWC3_DEPCMD_HIPRI_FORCERM (1 << 11)
+#define DWC3_DEPCMD_CMDACT        (1 << 10)
+#define DWC3_DEPCMD_CMDIOC        (1 << 8)
 
 #define DWC3_DEPCMD_DEPSTARTCFG    (0x09 << 0)
 #define DWC3_DEPCMD_ENDTRANSFER    (0x08 << 0)

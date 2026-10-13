@@ -6,7 +6,6 @@
 #include "adt.h"
 #include "assert.h"
 #include "dcp.h"
-#include "dcp/dptx_phy.h"
 #include "dcp_iboot.h"
 #include "fb.h"
 #include "firmware.h"
@@ -15,6 +14,8 @@
 #include "string.h"
 #include "utils.h"
 #include "xnuboot.h"
+
+#include "dcp/dptx_phy.h"
 
 #define DISPLAY_STATUS_DELAY         100
 #define DISPLAY_STATUS_RETRIES(dptx) ((dptx) ? 100 : 20)
@@ -580,8 +581,8 @@ int display_configure(const char *config)
         cur_boot_args.video.stride = stride;
         cur_boot_args.video.width = tbest.width;
         cur_boot_args.video.height = tbest.height;
-        cur_boot_args.video.depth = (chip_id == T8152 ? 32 : 30) |
-                                   (opts.retina ? FB_DEPTH_FLAG_RETINA : 0);
+        cur_boot_args.video.depth =
+            (chip_id == T8152 ? 32 : 30) | (opts.retina ? FB_DEPTH_FLAG_RETINA : 0);
         reinit = true;
     }
 
