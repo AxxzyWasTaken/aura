@@ -3060,6 +3060,9 @@ static int dt_t8140_refuse_display(void)
     chosen = fdt_path_offset(dt, "/chosen");
     if (chosen < 0 || fdt_setprop_string(dt, chosen, "apple,dcp-handoff-reason", "withdrawn"))
         return -1;
+    /* Withdraw the external suppliers even when the internal handoff fails. */
+    if (dt_t8140_disable_dcpext())
+        return -1;
 
     for (size_t i = 0; i < ARRAY_SIZE(compatibles); i++) {
         int node = -1;
