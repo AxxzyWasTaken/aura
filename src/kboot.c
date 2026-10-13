@@ -2901,6 +2901,10 @@ static int dt_t8140_disable_dcpext(void)
 /* A refused handoff must not let Linux bind an unclaimed live controller. */
 static int dt_t8140_refuse_display(void)
 {
+    /* Withdraw the external suppliers even when the internal handoff fails. */
+    if (dt_t8140_disable_dcpext())
+        return -1;
+
     static const char *const compatibles[] = {
         "apple,t8140-dcp",
         "apple,t8140-dcpext",

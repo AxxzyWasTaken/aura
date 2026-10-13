@@ -169,6 +169,11 @@ int main(int argc, char **argv)
         assert(dt_t8140_disable_dcpext() < 0);
         status("/soc/external-disp-dart", "okay");
         assert(node("/chosen/framebuffer") >= 0);
+    } else if (!strcmp(argv[1], "whole-power-write-failure")) {
+        failed_path = "/soc/power-cpu";
+        assert(dt_t8140_refuse_display() < 0);
+        status("/soc/power-cpu", "okay");
+        assert(node("/chosen/framebuffer") >= 0);
     } else if (!strcmp(argv[1], "malformed-piodma")) {
         cell("/soc/external-disp-dart", "#iommu-cells", 2);
         unsigned char before[sizeof(tree)];
@@ -224,3 +229,7 @@ def test_external_refusal_rejects_scanout_provider_write_failure(refusal_binary)
 
 def test_external_refusal_rejects_malformed_piodma_tuple_without_edits(refusal_binary):
     subprocess.run([str(refusal_binary), "malformed-piodma"], check=True)
+
+
+def test_whole_refusal_rejects_power_supplier_write_failure(refusal_binary):
+    subprocess.run([str(refusal_binary), "whole-power-write-failure"], check=True)
