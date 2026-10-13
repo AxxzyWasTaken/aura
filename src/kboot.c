@@ -2706,20 +2706,6 @@ static int dt_t8140_reserve_piodma_tables(const char *alias, bool required,
 static int dt_t8140_disable_refs(int node, const char *prop, const char *cells_prop)
 {
     int len;
-    if (!strcmp(cells_prop, "#iommu-cells")) {
-        int child = fdt_subnode_offset(dt, node, "piodma");
-        if (child >= 0) {
-            char path[128];
-            if (fdt_get_path(dt, node, path, sizeof(path)) ||
-                dt_t8140_disable_refs(child, prop, cells_prop))
-                return -1;
-            node = fdt_path_offset(dt, path);
-            if (node < 0)
-                return -1;
-        } else if (child != -FDT_ERR_NOTFOUND) {
-            return -1;
-        }
-    }
     const fdt32_t *refs = fdt_getprop(dt, node, prop, &len);
     if (!refs)
         return len == -FDT_ERR_NOTFOUND ? 0 : -1;
@@ -3098,11 +3084,59 @@ static int dt_t8140_refusal_master(int node, const struct dt_t8140_refusal_group
     return ours && other ? -1 : ours;
 }
 
+/* Phandles and saved paths must identify one node before establishing ownership. */
+static int dt_t8140_refusal_identity(void)
+{
+    int node = -1, depth = 0;
+    while ((node = fdt_next_node(dt, node, &depth)) >= 0 && depth >= 0) {
+        int name_length;
+        const char *name = fdt_get_name(dt, node, &name_length);
+        if (!name || name_length < 0)
+            return -1;
+        int parent = fdt_parent_offset(dt, node);
+        if (parent >= 0) {
+            int sibling = fdt_first_subnode(dt, parent);
+            for (; sibling >= 0 && sibling != node; sibling = fdt_next_subnode(dt, sibling)) {
+                int length;
+                const char *other = fdt_get_name(dt, sibling, &length);
+                if (!other || length < 0 ||
+                    (length == name_length && !memcmp(name, other, length)))
+                    return -1;
+            }
+            if (sibling != node)
+                return -1;
+        } else if (parent != -FDT_ERR_NOTFOUND || node != 0) {
+            return -1;
+        }
+        u32 phandle = 0;
+        static const char *const props[] = {"phandle", "linux,phandle"};
+        for (size_t i = 0; i < ARRAY_SIZE(props); i++) {
+            int length;
+            const fdt32_t *value = fdt_getprop(dt, node, props[i], &length);
+            if (!value) {
+                if (length != -FDT_ERR_NOTFOUND)
+                    return -1;
+                continue;
+            }
+            if (length != sizeof(*value))
+                return -1;
+            u32 current = fdt32_to_cpu(*value);
+            if (!current || current == UINT32_MAX || (phandle && current != phandle))
+                return -1;
+            phandle = current;
+        }
+        if (phandle && fdt_node_offset_by_phandle(dt, phandle) != node)
+            return -1;
+    }
+    return node == -FDT_ERR_NOTFOUND || (node >= 0 && depth < 0) ? 0 : -1;
+}
+
 static int dt_t8140_refusal_preflight(bool whole,
                                      struct dt_t8140_refusal_group *internal,
                                      struct dt_t8140_refusal_group *external)
 {
-    if (dt_t8140_refusal_group("apple,t8140-dcp", internal) ||
+    if (dt_t8140_refusal_identity() ||
+        dt_t8140_refusal_group("apple,t8140-dcp", internal) ||
         dt_t8140_refusal_group("apple,t8140-dcpext", external))
         return -1;
     if (internal->controller >= 0 && internal->controller == external->controller)
@@ -3278,7 +3312,11 @@ static int dt_t8140_refuse_display(void)
         int node = fdt_path_offset(dt, paths[i]);
         if (node < 0)
             return -1;
-        int piodma = fdt_subnode_offset(dt, node, "piodma");
+        /* A master is selected only through direct scanout references. Its
+         * other references do not establish ownership of those suppliers. */
+        bool controller = !fdt_node_check_compatible(dt, node, "apple,t8140-dcp") ||
+                          !fdt_node_check_compatible(dt, node, "apple,t8140-dcpext");
+        int piodma = controller ? fdt_subnode_offset(dt, node, "piodma") : -FDT_ERR_NOTFOUND;
         if (piodma >= 0) {
             if (dt_t8140_disable_refs(piodma, "iommus", "#iommu-cells"))
                 return -1;
@@ -3289,7 +3327,7 @@ static int dt_t8140_refuse_display(void)
         if (node < 0 || dt_t8140_disable_refs(node, "iommus", "#iommu-cells"))
             return -1;
         node = fdt_path_offset(dt, paths[i]);
-        if (node < 0 || dt_t8140_disable_refs(node, "mboxes", "#mbox-cells"))
+        if (node < 0 || (controller && dt_t8140_disable_refs(node, "mboxes", "#mbox-cells")))
             return -1;
         node = fdt_path_offset(dt, paths[i]);
         if (node < 0)

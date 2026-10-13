@@ -201,6 +201,52 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     setup();
+
+    if (!strcmp(argv[1], "whole-master-mailbox") ||
+        !strcmp(argv[1], "whole-master-piodma") ||
+        !strcmp(argv[1], "duplicate-phandle") ||
+        !strcmp(argv[1], "duplicate-power-node")) {
+        bool duplicate_name = !strcmp(argv[1], "duplicate-power-node");
+        bool duplicate = !strncmp(argv[1], "duplicate-", 10);
+        bool mailbox = !strcmp(argv[1], "whole-master-mailbox");
+        add("/soc", "unrelated-provider", !duplicate_name && duplicate ? 5 : 30);
+        string("/soc/unrelated-provider", "compatible",
+               mailbox ? "apple,t8140-asc-mailbox" : "apple,t8140-dart");
+        cell("/soc/unrelated-provider", mailbox ? "#mbox-cells" : "#iommu-cells",
+             mailbox ? 0 : 1);
+        string("/soc/unrelated-provider", "status", "okay");
+        add("/soc", "keeper", 31);
+        if (duplicate_name) {
+            assert(!fdt_delprop(dt, node("/soc/power-cpu"), "power-domains"));
+            string("/soc/unrelated-provider", "compatible", "apple,t8140-pmgr-pwrstate");
+            cell("/soc/unrelated-provider", "#power-domain-cells", 0);
+            assert(!fdt_set_name(dt, node("/soc/unrelated-provider"), "power-cpu"));
+        }
+        if (mailbox) {
+            cell("/soc/display", "mboxes", 30);
+            cell("/soc/keeper", "mboxes", 30);
+        } else if (!duplicate) {
+            add("/soc/display", "piodma", 0);
+            iommu("/soc/display/piodma", 30, 0);
+            iommu("/soc/keeper", 30, 1);
+        }
+        unsigned char before[sizeof(tree)];
+        memcpy(before, tree, sizeof(tree));
+        int ret = duplicate ? dt_t8140_disable_dcpext() : dt_t8140_refuse_display();
+        printf("review case %s: ret=%d unchanged=%d\n", argv[1], ret,
+               !memcmp(before, tree, sizeof(tree)));
+        fflush(stdout);
+        if (duplicate) {
+            assert(ret < 0);
+            assert(!memcmp(before, tree, sizeof(tree)));
+        } else {
+            assert(!ret);
+            status("/soc/display", "disabled");
+        }
+        status(duplicate_name ? "/soc/power-cpu" : "/soc/unrelated-provider", "okay");
+        return 0;
+    }
+
     if (!strncmp(argv[1], "bad-alias:", 10)) {
         const char *kind = argv[1] + 10;
         bool whole = !strncmp(kind, "whole:", 6);
@@ -491,4 +537,9 @@ def test_refusal_rejects_wrong_ownership_before_any_edit(refusal_binary, scenari
 
 @pytest.mark.parametrize("scenario", ["static-aliases", "unrelated-whole", "repeated-refusal", "whole-piodma-only"])
 def test_refusal_preserves_valid_static_and_unrelated_topology(refusal_binary, scenario):
+    subprocess.run([str(refusal_binary), scenario], check=True)
+
+
+@pytest.mark.parametrize("scenario", ["whole-master-mailbox", "whole-master-piodma", "duplicate-phandle", "duplicate-power-node"])
+def test_refusal_does_not_claim_unvalidated_providers(refusal_binary, scenario):
     subprocess.run([str(refusal_binary), scenario], check=True)
