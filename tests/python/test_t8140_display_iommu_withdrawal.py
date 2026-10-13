@@ -17,7 +17,7 @@ class ExternalScanoutWithdrawal(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         source = (root / "src/kboot.c").read_text()
         start = source.index("/* A specifier occupies its provider phandle")
-        end = source.index("/* Leave the external DCP to its firmware:", start)
+        end = source.index("/* Refusal aliases must identify the role", start)
         cc = shlex.split(os.environ.get("CC", "cc"))
         flags = shlex.split(os.environ.get("CPPFLAGS", ""))
         link = shlex.split(os.environ.get("LDFLAGS", ""))
