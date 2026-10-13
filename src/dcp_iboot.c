@@ -14,18 +14,17 @@
 #define TXBUF_LEN 0x4000
 #define RXBUF_LEN 0x4000
 
+/* Payload bytes reside in the fixed-size transport buffers. */
 struct txcmd {
     u32 op;
     u32 len;
     u32 unk1;
     u32 unk2;
-    u8 payload[];
 };
 
 struct rxcmd {
     u32 op;
     u32 len;
-    u8 payload[];
 };
 
 struct dcp_iboot_if {
@@ -193,13 +192,13 @@ static int dcp_ib_cmd(dcp_iboot_if_t *iboot, int op, size_t in_size)
         (op == IBOOT_SWAP_BEGIN && payload_size < sizeof(struct swap_start_resp)))
         return -1;
     if (op == IBOOT_GET_TIMING_MODES) {
-        struct get_tmode_resp *resp = (void *)iboot->rxcmd.payload;
+        struct get_tmode_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
         if (payload_size < sizeof(*resp) ||
             resp->count > (payload_size - sizeof(*resp)) / sizeof(resp->modes[0]))
             return -1;
     }
     if (op == IBOOT_GET_COLOR_MODES) {
-        struct get_cmode_resp *resp = (void *)iboot->rxcmd.payload;
+        struct get_cmode_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
         if (payload_size < sizeof(*resp) ||
             resp->count > (payload_size - sizeof(*resp)) / sizeof(resp->modes[0]))
             return -1;
@@ -213,7 +212,7 @@ static int dcp_ib_cmd(dcp_iboot_if_t *iboot, int op, size_t in_size)
 
 int dcp_ib_set_surface(dcp_iboot_if_t *iboot, dcp_layer_t *layer)
 {
-    dcp_layer_t *cmd = (void *)iboot->txcmd.payload;
+    dcp_layer_t *cmd = (void *)(iboot->txbuf + sizeof(struct txcmd));
     *cmd = *layer;
 
     return dcp_ib_cmd(iboot, IBOOT_SET_SURFACE, sizeof(*layer));
@@ -221,7 +220,7 @@ int dcp_ib_set_surface(dcp_iboot_if_t *iboot, dcp_layer_t *layer)
 
 int dcp_ib_set_power(dcp_iboot_if_t *iboot, bool power)
 {
-    u32 *pwr = (void *)iboot->txcmd.payload;
+    u32 *pwr = (void *)(iboot->txbuf + sizeof(struct txcmd));
     *pwr = power;
 
     return dcp_ib_cmd(iboot, IBOOT_SET_POWER, 1);
@@ -229,7 +228,7 @@ int dcp_ib_set_power(dcp_iboot_if_t *iboot, bool power)
 
 int dcp_ib_get_hpd(dcp_iboot_if_t *iboot, int *timing_cnt, int *color_cnt)
 {
-    struct get_hpd_resp *resp = (void *)iboot->rxcmd.payload;
+    struct get_hpd_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
     int ret = dcp_ib_cmd(iboot, IBOOT_GET_HPD, 0);
 
     if (ret < 0)
@@ -245,7 +244,7 @@ int dcp_ib_get_hpd(dcp_iboot_if_t *iboot, int *timing_cnt, int *color_cnt)
 
 int dcp_ib_get_timing_modes(dcp_iboot_if_t *iboot, dcp_timing_mode_t **modes)
 {
-    struct get_tmode_resp *resp = (void *)iboot->rxcmd.payload;
+    struct get_tmode_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
     int ret = dcp_ib_cmd(iboot, IBOOT_GET_TIMING_MODES, 0);
 
     if (ret < 0)
@@ -257,7 +256,7 @@ int dcp_ib_get_timing_modes(dcp_iboot_if_t *iboot, dcp_timing_mode_t **modes)
 
 int dcp_ib_get_color_modes(dcp_iboot_if_t *iboot, dcp_color_mode_t **modes)
 {
-    struct get_cmode_resp *resp = (void *)iboot->rxcmd.payload;
+    struct get_cmode_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
     int ret = dcp_ib_cmd(iboot, IBOOT_GET_COLOR_MODES, 0);
 
     if (ret < 0)
@@ -272,7 +271,7 @@ int dcp_ib_set_mode(dcp_iboot_if_t *iboot, dcp_timing_mode_t *tmode, dcp_color_m
     struct {
         dcp_timing_mode_t tmode;
         dcp_color_mode_t cmode;
-    } *cmd = (void *)iboot->txcmd.payload;
+    } *cmd = (void *)(iboot->txbuf + sizeof(struct txcmd));
 
     cmd->tmode = *tmode;
     cmd->cmode = *cmode;
@@ -281,7 +280,7 @@ int dcp_ib_set_mode(dcp_iboot_if_t *iboot, dcp_timing_mode_t *tmode, dcp_color_m
 
 int dcp_ib_swap_begin(dcp_iboot_if_t *iboot)
 {
-    struct swap_start_resp *resp = (void *)iboot->rxcmd.payload;
+    struct swap_start_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
     int ret = dcp_ib_cmd(iboot, IBOOT_SWAP_BEGIN, 0);
     if (ret < 0)
         return ret;
@@ -292,7 +291,7 @@ int dcp_ib_swap_begin(dcp_iboot_if_t *iboot)
 static int swap_set_layer_v12_3(dcp_iboot_if_t *iboot, int layer_id, dcp_layer_t *layer,
                                 dcp_rect_t *src_rect, dcp_rect_t *dst_rect)
 {
-    struct swap_set_layer_cmd *cmd = (void *)iboot->txcmd.payload;
+    struct swap_set_layer_cmd *cmd = (void *)(iboot->txbuf + sizeof(struct txcmd));
     memset(cmd, 0, sizeof(*cmd));
     cmd->layer_id = layer_id;
     cmd->layer = *layer;
@@ -305,7 +304,7 @@ static int swap_set_layer_v12_3(dcp_iboot_if_t *iboot, int layer_id, dcp_layer_t
 static int swap_set_layer_v13_3(dcp_iboot_if_t *iboot, int layer_id, dcp_layer_t *layer,
                                 dcp_rect_t *src_rect, dcp_rect_t *dst_rect)
 {
-    struct swap_set_layer_cmd_v13_3 *cmd = (void *)iboot->txcmd.payload;
+    struct swap_set_layer_cmd_v13_3 *cmd = (void *)(iboot->txbuf + sizeof(struct txcmd));
     memset(cmd, 0, sizeof(*cmd));
     cmd->layer_id = layer_id;
     cmd->layer = *layer;
@@ -326,6 +325,6 @@ int dcp_ib_swap_set_layer(dcp_iboot_if_t *iboot, int layer_id, dcp_layer_t *laye
 
 int dcp_ib_swap_end(dcp_iboot_if_t *iboot)
 {
-    memset(iboot->txcmd.payload, 0, 12);
+    memset(iboot->txbuf + sizeof(struct txcmd), 0, 12);
     return dcp_ib_cmd(iboot, IBOOT_SWAP_END, 12);
 }
