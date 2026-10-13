@@ -38,8 +38,9 @@ ARCH ?= aarch64-linux-gnu-
 endif
 
 ifeq ($(USE_CLANG),1)
-CC := $(TOOLCHAIN)clang --target=$(ARCH)
-AS := $(TOOLCHAIN)clang --target=$(ARCH)
+CLANG_TARGET := $(if $(ARCH),--target=$(ARCH))
+CC := $(TOOLCHAIN)clang $(CLANG_TARGET)
+AS := $(TOOLCHAIN)clang $(CLANG_TARGET)
 LD := $(LLDDIR)ld.lld
 OBJCOPY := $(TOOLCHAIN)llvm-objcopy
 CLANG_FORMAT ?= $(TOOLCHAIN)clang-format
