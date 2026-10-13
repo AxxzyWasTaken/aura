@@ -10,7 +10,7 @@ def test_isp_reservation_no_space(tmp_path):
     firmware = source[source.index("static int dt_reserve_asc_firmware("):
                       source.index("static int dt_set_ave(")]
     heap = source[source.index("static int dt_set_isp_fwdata(void)"):
-                  source.index("static int dt_disable_missing_devs(")]
+                  source.index("static int dt_disable_missing_j700_touch_id(")]
     harness = r'''
 #include <assert.h>
 #include <stdbool.h>

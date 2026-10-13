@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Release package contents must include the FAT and logo licences."""
 
 import hashlib
@@ -16,7 +17,7 @@ def test_package_includes_fatfs_license(tmp_path, monkeypatch):
         folder = tmp_path / name
         folder.mkdir()
         (folder / "BUILD-INFO.txt").write_text(
-            f"kind: m1n1\ncommit: {commit}\ndirty-files: 0\n"
+            f"kind: aura\ncommit: {commit}\ndirty-files: 0\n"
             "build_tag: package-test\n"
             "make-vars: RELEASE=1 CHAINLOADING=1 BUILTIN_LOGO=aurora\n"
         )

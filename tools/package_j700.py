@@ -16,7 +16,7 @@ REQUIRED = ("#define RELEASE", "#define CHAINLOADING")
 def build_identity(folder: Path, commit: str, stage: str) -> tuple[str, str]:
     info = (folder / "BUILD-INFO.txt").read_text()
     fields = dict(line.split(": ", 1) for line in info.splitlines() if ": " in line)
-    if fields.get("kind") != "m1n1" or fields.get("commit") != commit:
+    if fields.get("kind") not in {"aura", "m1n1"} or fields.get("commit") != commit:
         raise ValueError(f"{folder}: source commit mismatch")
     if fields.get("dirty-files") != "0":
         raise ValueError(f"{folder}: dirty build")
@@ -67,8 +67,8 @@ def main() -> None:
 
     (args.output / "SOURCE-AND-BUILDS.txt").write_text(
         f"source commit: {commit}\nbuild tag: {tag1}\n"
-        f"stage1: bb-build.sh m1n1 {REPO} {args.stage1_out.name} {vars1}\n"
-        f"stage2: bb-build.sh m1n1 {REPO} {args.stage2_out.name} {vars2}\n"
+        f"stage1 make variables: {vars1}\n"
+        f"stage2 make variables: {vars2}\n"
     )
     lines = []
     for path in sorted(args.output.rglob("*")):

@@ -2640,8 +2640,7 @@ static int dt_t8140_alias_offset(const char *alias)
     if (!path)
         return length;
     /* Relative aliases can recurse, and malformed strings can overrun the property. */
-    if (length < 2 || path[0] != '/' ||
-        memchr(path, '\0', length) != path + length - 1)
+    if (length < 2 || path[0] != '/' || memchr(path, '\0', length) != path + length - 1)
         return -FDT_ERR_BADVALUE;
     int node = fdt_path_offset(dt, path);
     return node == -FDT_ERR_NOTFOUND ? -FDT_ERR_BADVALUE : node;
@@ -2665,8 +2664,7 @@ static int dt_t8140_disable_typec_routes(const char *dcp_path)
     {
         int length;
         const char *name = fdt_get_name(dt, route, &length);
-        if (!name || length < 0 || (size_t)length >= sizeof(names[0]) ||
-            count == ARRAY_SIZE(names))
+        if (!name || length < 0 || (size_t)length >= sizeof(names[0]) || count == ARRAY_SIZE(names))
             return -1;
         memcpy(names[count++], name, length + 1);
     }
@@ -2723,8 +2721,7 @@ static int dt_t8140_enable_external(const char *path)
     int display_dart = piodma < 0 ? piodma : dt_get_iommu_node(piodma, 0);
     int length = 0;
     const fdt32_t *mailbox = fdt_getprop(dt, node, "mboxes", &length);
-    if (piodma < 0 || dcp_dart < 0 || display_dart < 0 || !mailbox ||
-        length != sizeof(*mailbox))
+    if (piodma < 0 || dcp_dart < 0 || display_dart < 0 || !mailbox || length != sizeof(*mailbox))
         return -1;
     int mbox = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(*mailbox));
     if (mbox < 0)
@@ -2733,7 +2730,7 @@ static int dt_t8140_enable_external(const char *path)
     int nodes[] = {dcp_dart, display_dart, mbox, piodma, node};
     char paths[8][128];
     int power_count = dt_t8140_power_paths(node, &paths[ARRAY_SIZE(nodes)],
-                                             ARRAY_SIZE(paths) - ARRAY_SIZE(nodes));
+                                           ARRAY_SIZE(paths) - ARRAY_SIZE(nodes));
     if (power_count <= 0)
         return -1;
     size_t count = ARRAY_SIZE(nodes) + power_count;
@@ -2765,8 +2762,7 @@ static int dt_t8140_iommu_width(const fdt32_t *cells, int remaining)
         return -1;
     int provider = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(cells[0]));
     int length;
-    const fdt32_t *args = provider < 0 ? NULL :
-        fdt_getprop(dt, provider, "#iommu-cells", &length);
+    const fdt32_t *args = provider < 0 ? NULL : fdt_getprop(dt, provider, "#iommu-cells", &length);
     if (!args || length != sizeof(*args))
         return -1;
     u32 count = fdt32_to_cpu(*args);
@@ -2855,9 +2851,9 @@ static int dt_t8140_withdraw_external_scanout(int external)
     int ret = 0;
     for (int i = 0; i < n_edits; i++) {
         master = fdt_path_offset(dt, edits[i].path);
-        ret = master < 0 ? master :
-            fdt_setprop(dt, master, "iommus", edits[i].cells,
-                        edits[i].count * sizeof(fdt32_t));
+        ret = master < 0 ? master
+                         : fdt_setprop(dt, master, "iommus", edits[i].cells,
+                                       edits[i].count * sizeof(fdt32_t));
         if (ret)
             break;
     }
@@ -2875,8 +2871,7 @@ struct dt_t8140_refusal_group {
     int count[4];
 };
 
-static int dt_t8140_ref_nodes(int node, const char *prop, const char *cells_prop,
-                              int *nodes)
+static int dt_t8140_ref_nodes(int node, const char *prop, const char *cells_prop, int *nodes)
 {
     int length;
     const fdt32_t *refs = fdt_getprop(dt, node, prop, &length);
@@ -2888,8 +2883,7 @@ static int dt_t8140_ref_nodes(int node, const char *prop, const char *cells_prop
     for (int i = 0; i < cells;) {
         int provider = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(refs[i]));
         int size;
-        const fdt32_t *args = provider < 0 ? NULL :
-            fdt_getprop(dt, provider, cells_prop, &size);
+        const fdt32_t *args = provider < 0 ? NULL : fdt_getprop(dt, provider, cells_prop, &size);
         if (!args || size != sizeof(*args))
             return -1;
         u32 width = fdt32_to_cpu(*args);
@@ -2901,8 +2895,7 @@ static int dt_t8140_ref_nodes(int node, const char *prop, const char *cells_prop
     return count;
 }
 
-static bool dt_t8140_group_has(const struct dt_t8140_refusal_group *group,
-                               int role, int node)
+static bool dt_t8140_group_has(const struct dt_t8140_refusal_group *group, int role, int node)
 {
     for (int i = 0; i < group->count[role]; i++)
         if (group->providers[role][i] == node)
@@ -2910,8 +2903,7 @@ static bool dt_t8140_group_has(const struct dt_t8140_refusal_group *group,
     return false;
 }
 
-static int dt_t8140_refusal_group(const char *compatible,
-                                  struct dt_t8140_refusal_group *group)
+static int dt_t8140_refusal_group(const char *compatible, struct dt_t8140_refusal_group *group)
 {
     memset(group, 0, sizeof(*group));
     group->controller = fdt_node_offset_by_compatible(dt, -1, compatible);
@@ -2924,12 +2916,13 @@ static int dt_t8140_refusal_group(const char *compatible,
     group->piodma = fdt_subnode_offset(dt, group->controller, "piodma");
     if (group->piodma < 0 && group->piodma != -FDT_ERR_NOTFOUND)
         return -1;
-    group->count[0] = dt_t8140_ref_nodes(group->controller, "iommus", "#iommu-cells",
-                                        group->providers[0]);
-    group->count[1] = group->piodma < 0 ? 0 :
-        dt_t8140_ref_nodes(group->piodma, "iommus", "#iommu-cells", group->providers[1]);
-    group->count[2] = dt_t8140_ref_nodes(group->controller, "mboxes", "#mbox-cells",
-                                        group->providers[2]);
+    group->count[0] =
+        dt_t8140_ref_nodes(group->controller, "iommus", "#iommu-cells", group->providers[0]);
+    group->count[1] = group->piodma < 0 ? 0
+                                        : dt_t8140_ref_nodes(group->piodma, "iommus",
+                                                             "#iommu-cells", group->providers[1]);
+    group->count[2] =
+        dt_t8140_ref_nodes(group->controller, "mboxes", "#mbox-cells", group->providers[2]);
     char paths[3][128];
     group->count[3] = dt_t8140_power_paths(group->controller, paths, ARRAY_SIZE(paths));
     for (int role = 0; role < 4; role++) {
@@ -2940,8 +2933,9 @@ static int dt_t8140_refusal_group(const char *compatible,
             if (node < 0)
                 return -1;
             group->providers[role][i] = node;
-            const char *type = role < 2 ? "apple,t8140-dart" :
-                role == 2 ? "apple,t8140-asc-mailbox" : "apple,t8140-pmgr-pwrstate";
+            const char *type = role < 2    ? "apple,t8140-dart"
+                               : role == 2 ? "apple,t8140-asc-mailbox"
+                                           : "apple,t8140-pmgr-pwrstate";
             if (fdt_node_check_compatible(dt, node, type))
                 return -1;
         }
@@ -2985,8 +2979,7 @@ static int dt_t8140_refusal_identity(void)
             for (; sibling >= 0 && sibling != node; sibling = fdt_next_subnode(dt, sibling)) {
                 int length;
                 const char *other = fdt_get_name(dt, sibling, &length);
-                if (!other || length < 0 ||
-                    (length == name_length && !memcmp(name, other, length)))
+                if (!other || length < 0 || (length == name_length && !memcmp(name, other, length)))
                     return -1;
             }
             if (sibling != node)
@@ -3017,19 +3010,17 @@ static int dt_t8140_refusal_identity(void)
     return node == -FDT_ERR_NOTFOUND || (node >= 0 && depth < 0) ? 0 : -1;
 }
 
-static int dt_t8140_refusal_preflight(bool whole,
-                                     struct dt_t8140_refusal_group *internal,
-                                     struct dt_t8140_refusal_group *external)
+static int dt_t8140_refusal_preflight(bool whole, struct dt_t8140_refusal_group *internal,
+                                      struct dt_t8140_refusal_group *external)
 {
-    if (dt_t8140_refusal_identity() ||
-        dt_t8140_refusal_group("apple,t8140-dcp", internal) ||
+    if (dt_t8140_refusal_identity() || dt_t8140_refusal_group("apple,t8140-dcp", internal) ||
         dt_t8140_refusal_group("apple,t8140-dcpext", external))
         return -1;
     if (internal->controller >= 0 && internal->controller == external->controller)
         return -1;
     static const char *const aliases[] = {
         "dcpext", "dispext0", "dcpext_dart", "dispext0_dart", "dcpext_mbox",
-        "dcp", "disp0", "dcp_dart", "disp0_dart", "dcp_mbox",
+        "dcp",    "disp0",    "dcp_dart",    "disp0_dart",    "dcp_mbox",
     };
     for (size_t i = 0; i < (whole ? ARRAY_SIZE(aliases) : 5); i++) {
         int node = dt_t8140_alias_offset(aliases[i]);
@@ -3039,9 +3030,9 @@ static int dt_t8140_refusal_preflight(bool whole,
             return -1;
         const struct dt_t8140_refusal_group *group = i < 5 ? external : internal;
         size_t role = i % 5;
-        bool owned = role == 0 ? node == group->controller :
-            role == 1 ? dt_t8140_refusal_master(node, internal, external, i < 5) == 1 :
-            dt_t8140_group_has(group, role - 2, node);
+        bool owned = role == 0   ? node == group->controller
+                     : role == 1 ? dt_t8140_refusal_master(node, internal, external, i < 5) == 1
+                                 : dt_t8140_group_has(group, role - 2, node);
         if (!owned)
             return -1;
     }
@@ -3067,8 +3058,8 @@ static int dt_t8140_refusal_preflight(bool whole,
                 const struct dt_t8140_refusal_group *group = ext ? external : internal;
                 bool owned = node == group->controller || node == group->piodma;
                 if (p == 2)
-                    owned |= dt_t8140_group_has(group, 2, node) ||
-                             dt_t8140_group_has(group, 3, node);
+                    owned |=
+                        dt_t8140_group_has(group, 2, node) || dt_t8140_group_has(group, 3, node);
                 if (p == 0 && dt_t8140_group_has(group, 1, refs[i]))
                     owned |= !fdt_node_check_compatible(dt, node, "apple,display-subsystem");
                 if (!owned)
@@ -3232,21 +3223,30 @@ static int dt_t8140_refuse_display(void)
 static void dt_t8140_external_metadata(void)
 {
     static const char *const paths[] = {
-        "/arm-io/dcpext", "/arm-io/dart-dcpext", "/arm-io/dart-dispext0",
-        "/arm-io/dcpext/iop-dcpext-nub",
-        "/arm-io/dart-dcpext0", "/arm-io/dispext0", "/arm-io/disp-ext0",
+        "/arm-io/dcpext",        "/arm-io/dart-dcpext",
+        "/arm-io/dart-dispext0", "/arm-io/dcpext/iop-dcpext-nub",
+        "/arm-io/dart-dcpext0",  "/arm-io/dispext0",
+        "/arm-io/disp-ext0",
     };
     static const struct {
         const char *name;
         bool cells;
     } props[] = {
-        {"reg", true}, {"interrupts", true}, {"clock-gates", true},
-        {"device-id", true}, {"AAPL,phandle", true},
-        {"#address-cells", true}, {"#size-cells", true},
-        {"ranges", false}, {"dpxbar-parent", false},
-        {"dp-switch-dfp-port", false}, {"dp-switch-dfp-endpoint", false},
-        {"atc-dp-link", false}, {"service-gates", false},
-        {"segment-ranges", false}, {"segment-names", false},
+        {"reg", true},
+        {"interrupts", true},
+        {"clock-gates", true},
+        {"device-id", true},
+        {"AAPL,phandle", true},
+        {"#address-cells", true},
+        {"#size-cells", true},
+        {"ranges", false},
+        {"dpxbar-parent", false},
+        {"dp-switch-dfp-port", false},
+        {"dp-switch-dfp-endpoint", false},
+        {"atc-dp-link", false},
+        {"service-gates", false},
+        {"segment-ranges", false},
+        {"segment-names", false},
         {"iommu-parent", true},
     };
     fdt32_t translated[2 + ARRAY_SIZE(paths) * 34];
@@ -3288,7 +3288,8 @@ static void dt_t8140_external_metadata(void)
             /* Only public register/cell descriptions have a numeric payload.
              * Segments, routes and every unknown encoding remain size-only. */
             size_t count = value && props[j].cells && length <= 128 && !(length & 3)
-                               ? length / sizeof(u32) : 0;
+                               ? length / sizeof(u32)
+                               : 0;
             if (used + 4 + count > ARRAY_SIZE(words)) {
                 printf("FDT: external metadata exceeds bounded output\n");
                 return;
@@ -3304,8 +3305,7 @@ static void dt_t8140_external_metadata(void)
             }
         }
     }
-    if (fdt_setprop(dt, chosen, "asahi,external-display-metadata", words,
-                    used * sizeof(words[0])))
+    if (fdt_setprop(dt, chosen, "asahi,external-display-metadata", words, used * sizeof(words[0])))
         printf("FDT: external metadata observation unavailable\n");
     /* Mapper phandle/stream pairs are public ADT cell descriptions. Export
      * neither names nor arbitrary child properties, and cap both traversal
@@ -3608,8 +3608,7 @@ static int dt_set_display_t8140(void)
         goto rollback;
     /* A diagnostic result for this preflight, not a hardware-ready claim.
      * 0: absent, 1: power off, 2..7: validation stage, 8: dependencies. */
-    if (fdt_setprop_u32(dt, node, "asahi,external-display-preflight",
-                        ext_ready ? 0x100 : ext_step))
+    if (fdt_setprop_u32(dt, node, "asahi,external-display-preflight", ext_ready ? 0x100 : ext_step))
         printf("FDT: external preflight observation unavailable\n");
     free(saved);
     printf("FDT: T8140 DCP enabled with validated framebuffer, firmware and live ASC%s;"

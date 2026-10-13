@@ -5,9 +5,9 @@
 
 #include "../config.h"
 
-#include "boot_options.h"
 #include "adt.h"
 #include "aic.h"
+#include "boot_options.h"
 #include "cpufreq.h"
 #include "display.h"
 #include "exception.h"
