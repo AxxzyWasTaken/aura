@@ -66,6 +66,16 @@ static int guarded_path_offset(const void *blob, const char *path)
         return -FDT_ERR_BADSTRUCTURE;
     return fdt_path_offset(blob, path);
 }
+static const void *guarded_getprop(const void *blob, int offset, const char *name,
+                                   int *length)
+{
+    if (lookup_fault && !strcmp(lookup_fault, "alias-lookup") &&
+        !strcmp(name, "dcpext")) {
+        *length = -FDT_ERR_BADSTRUCTURE;
+        return NULL;
+    }
+    return fdt_getprop(blob, offset, name, length);
+}
 static int guarded_setprop_string(void *blob, int offset, const char *name,
                                   const char *value)
 {
@@ -81,6 +91,7 @@ static int guarded_setprop_string(void *blob, int offset, const char *name,
 #define fdt_next_subnode guarded_next_subnode
 #define fdt_node_offset_by_compatible guarded_compatible
 #define fdt_path_offset guarded_path_offset
+#define fdt_getprop guarded_getprop
 ''' + iommu + helpers + r'''
 static int node(const char *path)
 {
@@ -185,6 +196,47 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     setup();
+    if (!strncmp(argv[1], "bad-alias:", 10)) {
+        const char *kind = argv[1] + 10;
+        bool whole = !strncmp(kind, "whole:", 6);
+        if (whole)
+            kind += 6;
+        const char *alias = whole ? "dcp" : "dcpext";
+        const char *value;
+        int length;
+        if (!strcmp(kind, "self")) {
+            value = alias;
+            length = strlen(alias) + 1;
+        } else if (!strcmp(kind, "relative")) {
+            value = "soc/external";
+            length = strlen(value) + 1;
+        } else if (!strcmp(kind, "empty")) {
+            value = "";
+            length = 0;
+        } else if (!strcmp(kind, "unterminated")) {
+            value = "/soc/external";
+            length = strlen(value);
+        } else {
+            assert(!strcmp(kind, "embedded-nul"));
+            value = "/soc/external\0ignored";
+            length = 22;
+        }
+        assert(!fdt_setprop(dt, node("/aliases"), alias, value, length));
+        assert((whole ? dt_t8140_refuse_display() : dt_t8140_disable_dcpext()) < 0);
+        assert(node("/chosen/framebuffer") >= 0);
+        if (!whole)
+            status("/soc/dcp", "okay");
+        assert(!fdt_check_header(dt));
+        return 0;
+    }
+    if (!strcmp(argv[1], "valid-external-alias")) {
+        string("/aliases", "dcpext", "/soc/external");
+        assert(!dt_t8140_disable_dcpext());
+        status("/soc/dcp", "okay");
+        status("/soc/external", "disabled");
+        assert(node("/chosen/framebuffer") >= 0);
+        return 0;
+    }
     if (!strcmp(argv[1], "external")) {
         assert(!dt_t8140_disable_dcpext());
         status("/soc/dcp", "okay");
@@ -312,3 +364,14 @@ def test_refusal_rejects_incomplete_topology(refusal_binary, scenario):
 ])
 def test_external_refusal_rejects_every_supplier_and_route_write_failure(refusal_binary, path):
     subprocess.run([str(refusal_binary), "write:" + path], check=True)
+
+
+@pytest.mark.parametrize("whole", [False, True])
+@pytest.mark.parametrize("kind", ["self", "relative", "empty", "unterminated", "embedded-nul"])
+def test_refusal_rejects_malformed_alias_before_resolution(refusal_binary, kind, whole):
+    scenario = "bad-alias:" + ("whole:" if whole else "") + kind
+    subprocess.run([str(refusal_binary), scenario], check=True)
+
+
+def test_external_refusal_accepts_valid_optional_alias(refusal_binary):
+    subprocess.run([str(refusal_binary), "valid-external-alias"], check=True)

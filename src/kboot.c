@@ -2757,6 +2757,23 @@ static int dt_t8140_disable_refs(int node, const char *prop, const char *cells_p
     return 0;
 }
 
+/* Validate optional aliases before libfdt follows their property as a C string. */
+static int dt_t8140_alias_offset(const char *alias)
+{
+    int aliases = fdt_path_offset(dt, "/aliases");
+    if (aliases < 0)
+        return aliases;
+    int length;
+    const char *path = fdt_getprop(dt, aliases, alias, &length);
+    if (!path)
+        return length;
+    /* Relative aliases can recurse, and malformed strings can overrun the property. */
+    if (length < 2 || path[0] != '/' ||
+        memchr(path, '\0', length) != path + length - 1)
+        return -FDT_ERR_BADVALUE;
+    return fdt_path_offset(dt, path);
+}
+
 /* A PD controller linked to a Type-C route on a disabled DCP would wait for a
  * mode switch that never registers. */
 static int dt_t8140_disable_typec_routes(const char *dcp_path)
@@ -2990,10 +3007,8 @@ static int dt_t8140_disable_dcpext(void)
         "dcpext", "dispext0", "dcpext_dart", "dispext0_dart", "dcpext_mbox",
     };
     for (size_t i = 0; i < ARRAY_SIZE(aliases); i++) {
-        int node = fdt_path_offset(dt, aliases[i]);
-        /* A missing optional alias is reported as BADPATH by libfdt. */
-        if (node < 0 && node != -FDT_ERR_NOTFOUND &&
-            (node != -FDT_ERR_BADPATH || fdt_get_alias(dt, aliases[i])))
+        int node = dt_t8140_alias_offset(aliases[i]);
+        if (node < 0 && node != -FDT_ERR_NOTFOUND)
             return -1;
         if (node >= 0 && fdt_setprop_string(dt, node, "status", "disabled") < 0)
             return -1;
@@ -3101,10 +3116,8 @@ static int dt_t8140_refuse_display(void)
             return -1;
     }
     for (size_t i = 0; i < ARRAY_SIZE(consumers); i++) {
-        int node = fdt_path_offset(dt, consumers[i]);
-        /* A missing optional alias is reported as BADPATH by libfdt. */
-        if (node < 0 && node != -FDT_ERR_NOTFOUND &&
-            (node != -FDT_ERR_BADPATH || fdt_get_alias(dt, consumers[i])))
+        int node = dt_t8140_alias_offset(consumers[i]);
+        if (node < 0 && node != -FDT_ERR_NOTFOUND)
             return -1;
         if (node >= 0 && fdt_setprop_string(dt, node, "status", "disabled"))
             return -1;
