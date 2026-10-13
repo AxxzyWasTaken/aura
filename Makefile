@@ -239,9 +239,9 @@ all: build/$(TARGET) build/$(TARGET_RAW)
 clean:
 	rm -rf build/* build/.deps
 format:
-	$(CLANG_FORMAT) -i src/*.c src/chickens/*.c src/dcp/*.c src/hv/*.c src/math/*.c src/*.h src/dcp/*.h src/hv/*.h src/math/*.h sysinc/*.h
+	$(CLANG_FORMAT) -i src/*.c src/*.inc src/chickens/*.c src/dcp/*.c src/hv/*.c src/math/*.c src/*.h src/dcp/*.h src/hv/*.h src/math/*.h sysinc/*.h
 format-check:
-	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/chickens/*.c src/dcp/*.c src/hv/*.c src/math/*.c src/*.h src/dcp/*.h src/hv/*.h src/math/*.h sysinc/*.h
+	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/*.inc src/chickens/*.c src/dcp/*.c src/hv/*.c src/math/*.c src/*.h src/dcp/*.h src/hv/*.h src/math/*.h sysinc/*.h
 rustfmt:
 	cd rust && cargo fmt
 rustfmt-check:
