@@ -34,6 +34,18 @@ typedef uint32_t u32;
 static unsigned char tree[16384];
 static void *dt = tree;
 static size_t dt_bufsize = sizeof(tree);
+static const char *failed_path;
+static int guarded_setprop_string(void *blob, int offset, const char *name,
+                                  const char *value)
+{
+    char path[256];
+    if (failed_path && !strcmp(name, "status") && !strcmp(value, "disabled") &&
+        !fdt_get_path(blob, offset, path, sizeof(path)) && !strcmp(path, failed_path))
+        return -FDT_ERR_NOSPACE;
+    return fdt_setprop_string(blob, offset, name, value);
+}
+#undef fdt_setprop_string
+#define fdt_setprop_string guarded_setprop_string
 ''' + iommu + helpers + r'''
 static int node(const char *path)
 {
@@ -152,6 +164,17 @@ int main(int argc, char **argv)
         assert(refs && length == 8 && fdt32_to_cpu(refs[0]) == 4);
         assert(fdt_getprop(dt, node("/chosen"), "apple,dcp-rtkit-quiesced", NULL));
         status("/soc/external-disp-dart", "disabled");
+    } else if (!strcmp(argv[1], "scanout-write-failure")) {
+        failed_path = "/soc/external-disp-dart";
+        assert(dt_t8140_disable_dcpext() < 0);
+        status("/soc/external-disp-dart", "okay");
+        assert(node("/chosen/framebuffer") >= 0);
+    } else if (!strcmp(argv[1], "malformed-piodma")) {
+        cell("/soc/external-disp-dart", "#iommu-cells", 2);
+        unsigned char before[sizeof(tree)];
+        memcpy(before, tree, sizeof(tree));
+        assert(dt_t8140_disable_dcpext() < 0);
+        assert(!memcmp(before, tree, sizeof(tree)));
     } else {
         assert(!strcmp(argv[1], "whole"));
         assert(!dt_t8140_refuse_display());
@@ -193,3 +216,11 @@ def test_external_refusal_withdraws_scanout_provider_without_alias(refusal_binar
 
 def test_whole_refusal_withdraws_published_external_power_chain(refusal_binary):
     subprocess.run([str(refusal_binary), "whole"], check=True)
+
+
+def test_external_refusal_rejects_scanout_provider_write_failure(refusal_binary):
+    subprocess.run([str(refusal_binary), "scanout-write-failure"], check=True)
+
+
+def test_external_refusal_rejects_malformed_piodma_tuple_without_edits(refusal_binary):
+    subprocess.run([str(refusal_binary), "malformed-piodma"], check=True)
