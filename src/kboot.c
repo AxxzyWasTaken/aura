@@ -3008,7 +3008,18 @@ static int dt_t8140_disable_dcpext(void)
             return -1;
     }
     node = fdt_path_offset(dt, path);
-    if (dt_t8140_disable_refs(node, "iommus", "#iommu-cells"))
+    if (node < 0)
+        return -1;
+    /* PIODMA has its own scanout DART. External resource aliases are optional. */
+    int piodma = fdt_subnode_offset(dt, node, "piodma");
+    if (piodma >= 0) {
+        if (dt_t8140_disable_refs(piodma, "iommus", "#iommu-cells"))
+            return -1;
+    } else if (piodma != -FDT_ERR_NOTFOUND) {
+        return -1;
+    }
+    node = fdt_path_offset(dt, path);
+    if (node < 0 || dt_t8140_disable_refs(node, "iommus", "#iommu-cells"))
         return -1;
     node = fdt_path_offset(dt, path);
     if (node < 0 || dt_t8140_disable_refs(node, "mboxes", "#mbox-cells"))
