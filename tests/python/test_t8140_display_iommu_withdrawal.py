@@ -22,13 +22,16 @@ class ExternalScanoutWithdrawal(unittest.TestCase):
         link = shlex.split(os.environ.get("LDFLAGS", ""))
         # Exercise Aura's production libfdt rather than a host-installed version.
         library = root / "src/libfdt"
-        sources = sorted(library.glob("*.c"))
+        sources = [library / name for name in (
+            "fdt.c", "fdt_ro.c", "fdt_rw.c", "fdt_sw.c", "fdt_wip.c",
+            "fdt_empty_tree.c", "fdt_strerror.c",
+        )]
         fixture = root / "tests/data/t8140-iommu-withdrawal.c"
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
             (work / "helper.c").write_text(source[start:end])
             binary = work / "withdrawal-test"
-            subprocess.run(cc + ["-std=c11", "-Wall", "-Wextra", "-Werror"] + flags +
+            subprocess.run(cc + ["-D_GNU_SOURCE", "-std=c11", "-Wall", "-Wextra", "-Werror"] + flags +
                            ["-I" + directory, "-I" + str(library), str(fixture)] +
                            list(map(str, sources)) + link + ["-o", str(binary)], check=True)
             result = subprocess.run([str(binary)], check=True, text=True, capture_output=True)
