@@ -2773,17 +2773,19 @@ static int dt_t8140_disable_typec_routes(const char *dcp_path)
         return routes == -FDT_ERR_NOTFOUND ? 0 : -1;
     fdt_for_each_subnode(route, dt, routes)
     {
-        int name_len;
-        const char *name = fdt_get_name(dt, route, &name_len);
-        if (!name || name_len < 0 || name_len >= (int)sizeof(names[0]) ||
+        int length;
+        const char *name = fdt_get_name(dt, route, &length);
+        if (!name || length < 0 || (size_t)length >= sizeof(names[0]) ||
             count == ARRAY_SIZE(names))
             return -1;
-        snprintf(names[count++], sizeof(names[0]), "%s", name);
+        memcpy(names[count++], name, length + 1);
     }
+    if (route != -FDT_ERR_NOTFOUND)
+        return -1;
     for (size_t i = 0; i < count; i++) {
         char path[160];
         int length = snprintf(path, sizeof(path), "%s/typec-routes/%s", dcp_path, names[i]);
-        if (length < 0 || length >= (int)sizeof(path))
+        if (length < 0 || (size_t)length >= sizeof(path))
             return -1;
         node = fdt_path_offset(dt, path);
         if (node < 0 || fdt_setprop_string(dt, node, "status", "disabled") < 0)
@@ -2979,6 +2981,8 @@ static int dt_t8140_withdraw_external_scanout(int external)
 static int dt_t8140_disable_dcpext(void)
 {
     int external = fdt_node_offset_by_compatible(dt, -1, "apple,t8140-dcpext");
+    if (external < 0 && external != -FDT_ERR_NOTFOUND)
+        return -1;
     if (external >= 0 && dt_t8140_withdraw_external_scanout(external))
         return -1;
 
@@ -2987,6 +2991,10 @@ static int dt_t8140_disable_dcpext(void)
     };
     for (size_t i = 0; i < ARRAY_SIZE(aliases); i++) {
         int node = fdt_path_offset(dt, aliases[i]);
+        /* A missing optional alias is reported as BADPATH by libfdt. */
+        if (node < 0 && node != -FDT_ERR_NOTFOUND &&
+            (node != -FDT_ERR_BADPATH || fdt_get_alias(dt, aliases[i])))
+            return -1;
         if (node >= 0 && fdt_setprop_string(dt, node, "status", "disabled") < 0)
             return -1;
     }
@@ -3072,6 +3080,8 @@ static int dt_t8140_refuse_display(void)
                 return -1;
             count++;
         }
+        if (node != -FDT_ERR_NOTFOUND)
+            return -1;
     }
     for (size_t i = 0; i < count; i++) {
         int node = fdt_path_offset(dt, paths[i]);
@@ -3092,6 +3102,10 @@ static int dt_t8140_refuse_display(void)
     }
     for (size_t i = 0; i < ARRAY_SIZE(consumers); i++) {
         int node = fdt_path_offset(dt, consumers[i]);
+        /* A missing optional alias is reported as BADPATH by libfdt. */
+        if (node < 0 && node != -FDT_ERR_NOTFOUND &&
+            (node != -FDT_ERR_BADPATH || fdt_get_alias(dt, consumers[i])))
+            return -1;
         if (node >= 0 && fdt_setprop_string(dt, node, "status", "disabled"))
             return -1;
     }

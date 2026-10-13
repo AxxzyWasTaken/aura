@@ -35,6 +35,37 @@ static unsigned char tree[16384];
 static void *dt = tree;
 static size_t dt_bufsize = sizeof(tree);
 static const char *failed_path;
+static const char *lookup_fault;
+static int guarded_subnode_offset(const void *blob, int parent, const char *name)
+{
+    if (lookup_fault && !strcmp(lookup_fault, "route-lookup") &&
+        !strcmp(name, "typec-routes"))
+        return -FDT_ERR_BADSTRUCTURE;
+    return fdt_subnode_offset(blob, parent, name);
+}
+static int guarded_next_subnode(const void *blob, int offset)
+{
+    if (lookup_fault && !strcmp(lookup_fault, "route-iteration"))
+        return -FDT_ERR_BADSTRUCTURE;
+    return fdt_next_subnode(blob, offset);
+}
+static int guarded_compatible(const void *blob, int start, const char *compatible)
+{
+    if (lookup_fault &&
+        ((!strcmp(lookup_fault, "external-lookup") &&
+          !strcmp(compatible, "apple,t8140-dcpext")) ||
+         (!strcmp(lookup_fault, "whole-iteration") &&
+          !strcmp(compatible, "apple,t8140-dcp"))))
+        return -FDT_ERR_BADSTRUCTURE;
+    return fdt_node_offset_by_compatible(blob, start, compatible);
+}
+static int guarded_path_offset(const void *blob, const char *path)
+{
+    if (lookup_fault && !strcmp(lookup_fault, "alias-lookup") &&
+        !strcmp(path, "dcpext"))
+        return -FDT_ERR_BADSTRUCTURE;
+    return fdt_path_offset(blob, path);
+}
 static int guarded_setprop_string(void *blob, int offset, const char *name,
                                   const char *value)
 {
@@ -46,6 +77,10 @@ static int guarded_setprop_string(void *blob, int offset, const char *name,
 }
 #undef fdt_setprop_string
 #define fdt_setprop_string guarded_setprop_string
+#define fdt_subnode_offset guarded_subnode_offset
+#define fdt_next_subnode guarded_next_subnode
+#define fdt_node_offset_by_compatible guarded_compatible
+#define fdt_path_offset guarded_path_offset
 ''' + iommu + helpers + r'''
 static int node(const char *path)
 {
@@ -180,6 +215,33 @@ int main(int argc, char **argv)
         memcpy(before, tree, sizeof(tree));
         assert(dt_t8140_disable_dcpext() < 0);
         assert(!memcmp(before, tree, sizeof(tree)));
+    } else if (!strncmp(argv[1], "write:", 6)) {
+        failed_path = argv[1] + 6;
+        assert(dt_t8140_disable_dcpext() < 0);
+        assert(node("/chosen/framebuffer") >= 0);
+    } else if (!strcmp(argv[1], "long-route")) {
+        /* Both names are legal FDT names. The 31-byte name is the prefix of
+         * the longer one, so silent truncation can disable the wrong route. */
+        const char *short_name = "route01234567890123456789012345";
+        const char *long_name = "route01234567890123456789012345x";
+        assert(strlen(short_name) == 31);
+        add("/soc/external/typec-routes", short_name, 0);
+        add("/soc/external/typec-routes", long_name, 0);
+        string("/soc/external/typec-routes/route01234567890123456789012345", "status", "okay");
+        string("/soc/external/typec-routes/route01234567890123456789012345x", "status", "okay");
+        assert(dt_t8140_disable_dcpext() < 0);
+        status("/soc/external/typec-routes/route01234567890123456789012345x", "okay");
+    } else if (!strcmp(argv[1], "route-lookup") ||
+               !strcmp(argv[1], "route-iteration") ||
+               !strcmp(argv[1], "external-lookup") ||
+               !strcmp(argv[1], "alias-lookup")) {
+        lookup_fault = argv[1];
+        assert(dt_t8140_disable_dcpext() < 0);
+        assert(node("/chosen/framebuffer") >= 0);
+    } else if (!strcmp(argv[1], "whole-iteration")) {
+        lookup_fault = argv[1];
+        assert(dt_t8140_refuse_display() < 0);
+        assert(node("/chosen/framebuffer") >= 0);
     } else {
         assert(!strcmp(argv[1], "whole"));
         assert(!dt_t8140_refuse_display());
@@ -233,3 +295,20 @@ def test_external_refusal_rejects_malformed_piodma_tuple_without_edits(refusal_b
 
 def test_whole_refusal_rejects_power_supplier_write_failure(refusal_binary):
     subprocess.run([str(refusal_binary), "whole-power-write-failure"], check=True)
+
+
+@pytest.mark.parametrize("scenario", [
+    "long-route", "route-lookup", "route-iteration", "external-lookup",
+    "alias-lookup", "whole-iteration",
+])
+def test_refusal_rejects_incomplete_topology(refusal_binary, scenario):
+    subprocess.run([str(refusal_binary), scenario], check=True)
+
+
+@pytest.mark.parametrize("path", [
+    "/soc/external-dcp-dart", "/soc/external-disp-dart", "/soc/external-mbox",
+    "/soc/external", "/soc/external/typec-routes/route@0",
+    "/soc/power-cpu", "/soc/power-fe", "/soc/power-sys",
+])
+def test_external_refusal_rejects_every_supplier_and_route_write_failure(refusal_binary, path):
+    subprocess.run([str(refusal_binary), "write:" + path], check=True)
