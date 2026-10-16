@@ -1,10 +1,7 @@
 # Aura
 
 Aura is Aurora Silicon's bootloader and experimentation environment for
-Apple Silicon. It is an independent hard fork of m1n1, with the complete
-history of Aurora's `aurora-wip` branch retained. Future development lives
-here; the project does not track upstream m1n1 changes. Existing tags retain
-their historical meaning; new Aura release tags use the `aura-v` prefix.
+Apple Silicon.
 
 ## Build
 
