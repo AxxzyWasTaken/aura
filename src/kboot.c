@@ -1977,7 +1977,14 @@ static const char dcpext_aliases[][8] = {
     "dcpext4", "dcpext5", "dcpext6", "dcpext7",
 };
 
-static int dt_reserve_dcpext_firmware(void)
+/*
+ * T8122 firmware-ready handoff adapted from Marius Gehrmann's public patch.
+ * Copyright (c) 2026 Marius Gehrmann; additional MIT notice:
+ * 3rdparty_licenses/LICENSE.Marius-Gehrmann.
+ *
+ * With enable=false, leave the controller disabled for the kernel's gate.
+ */
+static int dt_reserve_dcpext_firmware(bool enable)
 {
     /* reserve asc for all  */
     for (size_t n = 0; n < ARRAY_SIZE(dcpext_aliases); n++) {
@@ -2005,6 +2012,14 @@ static int dt_reserve_dcpext_firmware(void)
 
         // refresh dcpext_node
         dcpext_node = fdt_path_offset(dt, dcpext_alias);
+        if (!enable) {
+            if (dcpext_node < 0 ||
+                fdt_setprop_u32(dt, dcpext_node, "apple,t8122-dcpext-firmware-ready", 1) < 0)
+                printf("FDT: failed to mark '%s' firmware ready\n", dcpext_alias);
+            else
+                printf("FDT: '%s' firmware reserved, left to the kernel\n", dcpext_alias);
+            continue;
+        }
         if ((dcpext_node < 0) || (fdt_setprop_string(dt, dcpext_node, "status", "okay") < 0))
             printf("FDT: failed to enable '%s'\n", dcpext_alias);
     }
@@ -2707,7 +2722,10 @@ static int dt_set_display(void)
          * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1. On T6031 it does nothing
          * unless the board is a J514C or J516C.
          */
-        return dt_set_display_handoff(dt);
+        ret = dt_set_display_handoff(dt);
+        if (!fdt_node_check_compatible(dt, 0, "apple,t8122"))
+            dt_reserve_dcpext_firmware(false);
+        return ret;
     } else {
         printf("FDT: unknown compatible, skip display reserved-memory setup\n");
         return 0;
@@ -2723,7 +2741,7 @@ static int dt_set_display(void)
         !fdt_node_check_compatible(dt, 0, "apple,t6020") ||
         !fdt_node_check_compatible(dt, 0, "apple,t6021") ||
         !fdt_node_check_compatible(dt, 0, "apple,t6022"))
-        dt_reserve_dcpext_firmware();
+        dt_reserve_dcpext_firmware(true);
 
     const display_config_t *disp_cfg = display_get_config();
 
