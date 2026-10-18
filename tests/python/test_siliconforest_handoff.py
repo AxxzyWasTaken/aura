@@ -29,7 +29,7 @@ def run_c(tmp_path, name, source):
 
 
 def test_partial_display_publication_is_discarded(tmp_path):
-    function = definition((ROOT / "src/kboot.c").read_text(), "dt_t6030_transaction")
+    function = definition((ROOT / "src/kboot.c").read_text(), "dt_display_transaction")
     run_c(tmp_path, "transaction", r'''
 #include <assert.h>
 #include <stdlib.h>
@@ -52,9 +52,9 @@ int main(void)
     int node = fdt_add_subnode(dt, 0, "controller");
     assert(fdt_setprop_string(dt, node, "status", "disabled") == 0);
     memcpy(before, original, sizeof(original));
-    assert(dt_t6030_transaction(publish, 1) == -1);
+    assert(dt_display_transaction(publish, 1) == -1);
     assert(dt == original && !memcmp(original, before, sizeof(original)));
-    assert(dt_t6030_transaction(publish, 0) == 0);
+    assert(dt_display_transaction(publish, 0) == 0);
     assert(dt == original && fdt_check_header(dt) == 0);
     node = fdt_path_offset(dt, "/controller");
     assert(!strcmp(fdt_getprop(dt, node, "status", NULL), "okay"));

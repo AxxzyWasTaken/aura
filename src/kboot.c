@@ -1917,6 +1917,12 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
     if (node < 0)
         bail("ADT: '%s' not found\n", adt_path);
 
+    u32 segments_len = 0;
+    const struct adt_segment_ranges *seg = adt_getprop(adt, node, "segment-ranges", &segments_len);
+    if (!seg || !segments_len || segments_len % sizeof(*seg))
+        bail("ADT: invalid ASC firmware segment list for %s\n", fdt_path);
+    unsigned int num_maps = segments_len / sizeof(*seg);
+
     uint32_t dev_phandle = fdt_get_phandle(dt, fdt_node);
     if (!dev_phandle) {
         ret = fdt_generate_phandle(dt, &dev_phandle);
@@ -1925,12 +1931,6 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
         if (ret != 0)
             bail("FDT: couldn't set '%s.phandle' property: %d\n", fdt_path, ret);
     }
-
-    const struct adt_segment_ranges *seg;
-    u32 segments_len;
-
-    seg = adt_getprop(adt, node, "segment-ranges", &segments_len);
-    unsigned int num_maps = segments_len / sizeof(*seg);
 
     for (unsigned i = 0; i < num_maps; i++) {
         u64 iova = (remap ? seg->remap : seg->iova) | base;
@@ -1947,7 +1947,7 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
         int mem_node =
             dt_get_or_add_reserved_mem(node_name, "apple,asc-mem", true, seg->phys, seg_size);
         if (mem_node < 0)
-            return ret;
+            return mem_node;
         uint32_t mem_phandle = fdt_get_phandle(dt, mem_node);
 
         /*
@@ -1977,6 +1977,57 @@ static const char dcpext_aliases[][8] = {
     "dcpext4", "dcpext5", "dcpext6", "dcpext7",
 };
 
+/* Commit a complete FDT update, or discard every partial edit. */
+static int dt_display_transaction(int (*apply)(unsigned int), unsigned int index)
+{
+    void *original = dt;
+    size_t capacity = fdt_totalsize(original);
+    void *scratch = malloc(capacity);
+    if (!scratch)
+        return -1;
+    memcpy(scratch, original, capacity);
+    dt = scratch;
+    int ret = apply(index);
+    dt = original;
+    if (!ret)
+        memcpy(original, scratch, capacity);
+    free(scratch);
+    return ret;
+}
+
+#define T8122_DCPEXT_READY "apple,t8122-dcpext-firmware-ready"
+
+static int dt_reserve_t8122_dcpext_one(unsigned int n)
+{
+    if (n >= ARRAY_SIZE(dcpext_aliases))
+        return -1;
+    const char *alias = dcpext_aliases[n];
+    char path[48];
+    snprintf(path, sizeof(path), "/arm-io/%s/iop-%s-nub", alias, alias);
+    int nub = adt_path_offset(adt, path);
+    int chosen = adt_path_offset(adt, "/chosen");
+    u32 len = 0;
+    const struct adt_segment_ranges *segments =
+        nub < 0 ? NULL : adt_getprop(adt, nub, "segment-ranges", &len);
+    u64 dram_base = 0, dram_size = 0;
+    if (!segments || !len || len % sizeof(*segments) || len / sizeof(*segments) > 64 ||
+        chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram_base) != sizeof(dram_base) ||
+        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size) ||
+        !dram_size || dram_base > UINT64_MAX - dram_size)
+        return -1;
+    for (u32 i = 0; i < len / sizeof(*segments); i++) {
+        u64 size = ALIGN_UP((u64)segments[i].size, SZ_16K);
+        if (!size || (segments[i].phys & (SZ_16K - 1)) || segments[i].phys < dram_base ||
+            size > dram_size || segments[i].phys - dram_base > dram_size - size ||
+            segments[i].remap > UINT64_MAX - size)
+            return -1;
+    }
+    if (dt_reserve_asc_firmware(path, NULL, alias, true, 0) || dt_set_dcp_firmware(alias))
+        return -1;
+    int node = fdt_path_offset(dt, alias);
+    return node < 0 ? node : fdt_setprop_u32(dt, node, T8122_DCPEXT_READY, 1);
+}
+
 /*
  * T8122 firmware-ready handoff adapted from Marius Gehrmann's public patch.
  * Copyright (c) 2026 Marius Gehrmann; additional MIT notice:
@@ -1986,6 +2037,8 @@ static const char dcpext_aliases[][8] = {
  */
 static int dt_reserve_dcpext_firmware(bool enable)
 {
+    if (!enable && (chip_id != T8122 || fdt_node_check_compatible(dt, 0, "apple,t8122")))
+        return 0;
     /* reserve asc for all  */
     for (size_t n = 0; n < ARRAY_SIZE(dcpext_aliases); n++) {
         const char *dcpext_alias = dcpext_aliases[n];
@@ -1995,12 +2048,30 @@ static int dt_reserve_dcpext_firmware(bool enable)
                  dcpext_alias);
         adt_path[sizeof(adt_path) - 1] = '\0';
 
-        if (adt_path_offset(adt, adt_path) < 0)
+        if (enable && adt_path_offset(adt, adt_path) < 0)
             continue;
 
         int dcpext_node = fdt_path_offset(dt, dcpext_alias);
         if (dcpext_node < 0)
             continue;
+
+        if (!enable) {
+            /* Withdraw a previous promise before attempting a fresh transaction. */
+            int ret = fdt_delprop(dt, dcpext_node, T8122_DCPEXT_READY);
+            if (ret && ret != -FDT_ERR_NOTFOUND)
+                return ret;
+            dcpext_node = fdt_path_offset(dt, dcpext_alias);
+            int len = 0;
+            const char *status = fdt_getprop(dt, dcpext_node, "status", &len);
+            if (!status || len != sizeof("disabled") || strcmp(status, "disabled") ||
+                fdt_node_check_compatible(dt, dcpext_node, "apple,t8122-dcpext"))
+                continue;
+            if (dt_display_transaction(dt_reserve_t8122_dcpext_one, n))
+                printf("FDT: '%s' firmware not ready; kernel gate remains closed\n", dcpext_alias);
+            else
+                printf("FDT: '%s' firmware reserved, left to the kernel\n", dcpext_alias);
+            continue;
+        }
 
         int ret = dt_reserve_asc_firmware(adt_path, NULL, dcpext_alias, true, 0);
         if (ret < 0)
@@ -2012,14 +2083,6 @@ static int dt_reserve_dcpext_firmware(bool enable)
 
         // refresh dcpext_node
         dcpext_node = fdt_path_offset(dt, dcpext_alias);
-        if (!enable) {
-            if (dcpext_node < 0 ||
-                fdt_setprop_u32(dt, dcpext_node, "apple,t8122-dcpext-firmware-ready", 1) < 0)
-                printf("FDT: failed to mark '%s' firmware ready\n", dcpext_alias);
-            else
-                printf("FDT: '%s' firmware reserved, left to the kernel\n", dcpext_alias);
-            continue;
-        }
         if ((dcpext_node < 0) || (fdt_setprop_string(dt, dcpext_node, "status", "okay") < 0))
             printf("FDT: failed to enable '%s'\n", dcpext_alias);
     }
@@ -2616,23 +2679,6 @@ static int dt_t6030_panel(unsigned int unused)
     return dt_set_t6030_dcp_handoff();
 }
 
-static int dt_t6030_transaction(int (*apply)(unsigned int), unsigned int index)
-{
-    void *original = dt;
-    size_t capacity = fdt_totalsize(original);
-    void *scratch = malloc(capacity);
-    if (!scratch)
-        return -1;
-    memcpy(scratch, original, capacity);
-    dt = scratch;
-    int ret = apply(index);
-    dt = original;
-    if (!ret)
-        memcpy(original, scratch, capacity);
-    free(scratch);
-    return ret;
-}
-
 static int dt_set_display(void)
 {
     /* lock dart-disp0 to prevent old software from resetting it */
@@ -2705,12 +2751,12 @@ static int dt_set_display(void)
         int dcp = fdt_path_offset(dt, "dcp");
         if (dcp < 0 || !fdt_getprop(dt, dcp, "apple,j514s-native-piodma", NULL))
             return 0;
-        if (dt_t6030_transaction(dt_t6030_panel, 0)) {
+        if (dt_display_transaction(dt_t6030_panel, 0)) {
             printf("FDT: J514S native handoff refused; keeping the boot framebuffer\n");
             return 0;
         }
         for (unsigned int n = 0; n < 2; n++)
-            if (dt_t6030_transaction(dt_set_t6030_dcpext, n))
+            if (dt_display_transaction(dt_set_t6030_dcpext, n))
                 printf("FDT: J514S DCPEXT%u handoff refused\n", n);
         return 0;
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030") ||
