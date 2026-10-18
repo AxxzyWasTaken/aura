@@ -2289,7 +2289,7 @@ static int dt_set_t6030_dcp_handoff(void)
 {
     int dcp = fdt_path_offset(dt, "dcp");
     if (dcp < 0)
-        return 0; /* no display coprocessor described: boot framebuffer only */
+        return -1; /* no display coprocessor described: boot framebuffer only */
     if (chip_id != T6030 || fdt_node_check_compatible(dt, 0, "apple,j514s") ||
         fdt_node_check_compatible(dt, dcp, "apple,t6030-dcp"))
         bail("FDT: unsupported T6030 DCP handoff target\n");
@@ -2306,8 +2306,8 @@ static int dt_set_t6030_dcp_handoff(void)
 
     int chosen = adt_path_offset(adt, "/chosen");
     u64 dram_base, dram_size;
-    if (chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram_base) < 0 ||
-        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) < 0)
+    if (chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram_base) != sizeof(dram_base) ||
+        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size))
         bail("ADT: missing J514S DRAM bounds\n");
     u64 dram_end = dram_base + dram_size;
     if (!dram_size || dram_end <= dram_base)
@@ -2332,7 +2332,7 @@ static int dt_set_t6030_dcp_handoff(void)
             qualified = true;
     if (!qualified) {
         printf("FDT: J514S DCP firmware %s not supported; keeping the boot framebuffer\n", uuid);
-        return 0;
+        return -1;
     }
     if (fdt_setprop_string(dt, dcp, "apple,firmware-uuid", uuid))
         bail("FDT: cannot publish the J514S DCP firmware UUID\n");
@@ -2349,7 +2349,7 @@ static int dt_set_t6030_dcp_handoff(void)
     dcp = fdt_path_offset(dt, "dcp");
     if (fdt_getprop(dt, dcp, "apple,j514s-native-piodma", NULL)) {
         if (dt_set_t6030_display_maps(segments, count, dram_base, dram_size))
-            printf("FDT: J514S frontend handoff refused; PIODMA and scanout stay disabled\n");
+            return -1; /* The transaction discards partial consumer enablement. */
         chosen = fdt_path_offset(dt, "/chosen");
         if (chosen < 0 ||
             fdt_setprop_string(dt, chosen, "aurora,j514s-display-handoff", t6030_display_handoff))
@@ -2416,7 +2416,8 @@ static int dt_t6030_dcpext_validate(unsigned int n, const char *nub_path, char *
     int chosen = adt_path_offset(adt, "/chosen");
     u64 dram_base = 0, dram_size = 0;
     if (chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram_base) != sizeof(dram_base) ||
-        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size) || !dram_size)
+        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size) ||
+        !dram_size || dram_base > UINT64_MAX - dram_size)
         bail("ADT: J514S DCPEXT%u: no DRAM bounds\n", n);
 
     for (unsigned int i = 0; i < T6030_DCPEXT_SEGMENTS; i++) {
@@ -2444,7 +2445,7 @@ static int dt_t6030_dcpext_validate(unsigned int n, const char *nub_path, char *
 
         if (seg.unk != t6030_dcpext_seg_flags[i] || seg.remap != remap || !seg.size ||
             (seg.phys & (SZ_16K - 1)) || seg.phys < dram_base ||
-            seg.phys + size > dram_base + dram_size)
+            size > dram_size || seg.phys - dram_base > dram_size - size)
             bail("ADT: J514S DCPEXT%u: unexpected segment %u: PA 0x%lx remap 0x%lx size 0x%x "
                  "flags 0x%x\n",
                  n, i, seg.phys, seg.remap, seg.size, seg.unk);
@@ -2470,7 +2471,9 @@ static int dt_t6030_dcpext_validate(unsigned int n, const char *nub_path, char *
 
         snprintf(prop, sizeof(prop), "region-id-%u", t6030_dcpext_table_regions[n][i]);
         if (cmap < 0 || ADT_GETPROP_ARRAY(adt, cmap, prop, region) != sizeof(region) ||
-            !region[1] || (region[0] & (SZ_16K - 1)))
+            !region[1] || (region[0] | region[1]) & (SZ_16K - 1) ||
+            region[0] < dram_base || region[1] > dram_size ||
+            region[0] - dram_base > dram_size - region[1])
             bail("ADT: J514S DCPEXT%u: no DART table storage %s\n", n, prop);
     }
 
@@ -2544,42 +2547,71 @@ static int dt_t6030_dcpext_enable(const char *alias)
     return 0;
 }
 
-static void dt_set_t6030_dcpext(unsigned int n)
+static int dt_set_t6030_dcpext(unsigned int n)
 {
     char alias[16], nub_path[48], uuid[40];
 
+    if (n >= 2)
+        return -1;
+
     snprintf(alias, sizeof(alias), "dcpext%u", n);
     if (!fdt_get_alias(dt, alias))
-        return; /* not described by this device tree */
+        return 0; /* not described by this device tree */
 
     int node = fdt_path_offset(dt, alias);
     if (node < 0)
-        return;
+        return -1;
     const char *status = fdt_getprop(dt, node, "status", NULL);
     if (status && !strcmp(status, "okay")) {
         printf("FDT: J514S DCPEXT%u already enabled; leaving it alone\n", n);
-        return;
+        return 0;
     }
 
     snprintf(nub_path, sizeof(nub_path), "/arm-io/%s/iop-%s-nub", alias, alias);
     if (dt_t6030_dcpext_validate(n, nub_path, uuid))
-        return;
+        return -1;
 
     /* Everything validated: from here on only FDT updates. */
     if (dt_t6030_dcpext_reserve_tables(n) ||
         dt_reserve_asc_firmware(nub_path, NULL, alias, true, 0) || dt_set_dcp_firmware(alias)) {
         printf("FDT: J514S DCPEXT%u: cannot reserve the firmware\n", n);
-        return;
+        return -1;
     }
 
     node = fdt_path_offset(dt, alias);
     if (node < 0 || fdt_setprop_string(dt, node, "apple,firmware-uuid", uuid) ||
         dt_t6030_dcpext_enable(alias)) {
         printf("FDT: J514S DCPEXT%u: cannot publish the controller\n", n);
-        return;
+        return -1;
     }
 
     printf("FDT: J514S DCPEXT%u firmware %s handed over\n", n, uuid);
+    return 0;
+}
+
+/* Native handoffs publish a complete dependency group or leave the live DT
+ * byte-for-byte unchanged. No hardware is changed by these callbacks. */
+static int dt_t6030_panel(unsigned int unused)
+{
+    (void)unused;
+    return dt_set_t6030_dcp_handoff();
+}
+
+static int dt_t6030_transaction(int (*apply)(unsigned int), unsigned int index)
+{
+    void *original = dt;
+    size_t capacity = fdt_totalsize(original);
+    void *scratch = malloc(capacity);
+    if (!scratch)
+        return -1;
+    memcpy(scratch, original, capacity);
+    dt = scratch;
+    int ret = apply(index);
+    dt = original;
+    if (!ret)
+        memcpy(original, scratch, capacity);
+    free(scratch);
+    return ret;
 }
 
 static int dt_set_display(void)
@@ -2648,11 +2680,19 @@ static int dt_set_display(void)
         /* noop */
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030") &&
                !fdt_node_check_compatible(dt, 0, "apple,j514s")) {
-        if (dt_set_t6030_dcp_handoff())
-            printf("FDT: J514S DCP handoff not published; keeping the boot framebuffer\n");
-        /* The external controllers run the panel's image: never fatal either. */
+        /* Keep unconditional live-log reservations and the legacy handoff.
+         * Only the matched development DT asks for native consumer enablement. */
+        dt_set_display_handoff(dt);
+        int dcp = fdt_path_offset(dt, "dcp");
+        if (dcp < 0 || !fdt_getprop(dt, dcp, "apple,j514s-native-piodma", NULL))
+            return 0;
+        if (dt_t6030_transaction(dt_t6030_panel, 0)) {
+            printf("FDT: J514S native handoff refused; keeping the boot framebuffer\n");
+            return 0;
+        }
         for (unsigned int n = 0; n < 2; n++)
-            dt_set_t6030_dcpext(n);
+            if (dt_t6030_transaction(dt_set_t6030_dcpext, n))
+                printf("FDT: J514S DCPEXT%u handoff refused\n", n);
         return 0;
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030") ||
                !fdt_node_check_compatible(dt, 0, "apple,t8122") ||

@@ -2026,7 +2026,7 @@ static const struct g15_soc g15_soc_t8122_standin = {
 };
 
 /*
- * T6031 (M3 Max, G15C), J514C/J516C only, armed unless chosen.asahi,t6031-gpu=0: the J613 14.x
+ * T6031 (M3 Max, G15C), J514C/J516C only, requires chosen.asahi,t6031-gpu=1: the J613 14.x
  * setup with T6031 values, with these differences.
  * - The identity, topology and core masks come from the bounded powered identity read that runs
  *   first (t6031_gpu_probe()), which puts the GPU power closure back exactly as iBoot left it. The
@@ -2074,7 +2074,7 @@ static const struct g15_soc g15_soc_t6031 = {
     .dies = 1,
     .mask2_bits = 32,
     .power_props = true,
-    .armed_default = true,
+    .armed_default = false,
     .family_fw = true,
     .probed = true,
     .csafr = true,
@@ -2434,8 +2434,8 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
      * included. The opt-in is a config line appended to boot.bin (update-m1n1 copies chosen.* lines
      * from /etc/m1n1.conf):  chosen.asahi,t6030-gpu=1 (chosen.asahi,t8122-gpu=1 on T8122)
      * Without it this is a dry run: the firmware identification (DRAM reads only) and all ADT/DT
-     * checks run and are logged, then the gpu node is left disabled. T6031 is armed unless
-     * chosen.asahi,t6031-gpu=0, and its setup itself touches no GPU hardware.
+     * checks run and are logged, then the gpu node is left disabled. T6031 also
+     * requires an explicit opt-in before its powered identity probe.
      */
     bool armed = soc->armed_default ? !t6031_switched_off(dt, soc->optin) : g15_optin(dt, soc->optin);
 
@@ -2658,8 +2658,8 @@ static void t6031_gpu_probe(void *dt)
 
 /*
  * T6031 (J514C/J516C): the firmware image facts, the bounded powered identity read, then the GPU
- * setup (which itself touches no GPU hardware). Each part is fail-soft; chosen.asahi,t6031-gpu=0
- * switches all three off.
+ * setup (which itself touches no GPU hardware). Each part is fail-soft; all three
+ * require chosen.asahi,t6031-gpu=1 because this profile uses unmeasured power stand-ins.
  */
 static int dt_set_gpu_t6031(void *dt)
 {
@@ -2669,8 +2669,9 @@ static int dt_set_gpu_t6031(void *dt)
         printf("FDT: GPU: T6031: not a J514C/J516C device tree, nothing done\n");
         return 0;
     }
-    if (t6031_switched_off(dt, g15_soc_t6031.optin)) {
-        printf("FDT: GPU: T6031: switched off (chosen.%s=0): no identity read, no GPU handoff\n",
+    if (!g15_optin(dt, g15_soc_t6031.optin)) {
+        g15_disable(dt);
+        printf("FDT: GPU: T6031: requires chosen.%s=1: no identity read, no GPU handoff\n",
                g15_soc_t6031.optin);
         return 0;
     }
