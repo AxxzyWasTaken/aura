@@ -48,6 +48,21 @@ u64 isp_iova_base(void)
     }
 }
 
+static int isp_firmware_end(const struct adt_segment_ranges *segments, u32 length, u64 *end)
+{
+    if (!segments || length < 2 * sizeof(*segments) || length % sizeof(*segments))
+        return -1;
+    *end = 0;
+    for (u32 i = 0; i < length / sizeof(*segments); i++) {
+        if (!segments[i].size || segments[i].iova > UINT64_MAX - segments[i].size)
+            return -1;
+        u64 next = segments[i].iova + segments[i].size;
+        if (next > *end)
+            *end = next;
+    }
+    return 0;
+}
+
 int isp_init(void)
 {
     int err = 0;
@@ -64,8 +79,17 @@ int isp_init(void)
         isp_node = adt_path_offset_trace(adt, isp_path, adt_isp_path);
         node = adt_path_offset_trace(adt, dart_path, adt_path);
     }
-    if (node < 0)
+    if (node < 0 || isp_node < 0)
         return 0;
+
+    u32 segments_len = 0;
+    const struct adt_segment_ranges *seg =
+        adt_getprop(adt, isp_node, "segment-ranges", &segments_len);
+    u64 firmware_end;
+    if (isp_node < 0 || isp_firmware_end(seg, segments_len, &firmware_end)) {
+        printf("isp: invalid firmware segment list\n");
+        return -1;
+    }
 
     if (pmgr_adt_power_enable(isp_path) < 0)
         return -1;
@@ -178,15 +202,10 @@ int isp_init(void)
             return -1;
     }
 
-    const struct adt_segment_ranges *seg;
-    u32 segments_len;
-
-    seg = adt_getprop(adt, isp_node, "segment-ranges", &segments_len);
-    unsigned int count = segments_len / sizeof(*seg);
-
-    heap_iova = seg[count - 1].iova + seg[count - 1].size;
+    heap_iova = firmware_end;
     if (heap_iova >= heap_top) {
         printf("isp: firmware ends at 0x%lx, above heap top 0x%lx\n", heap_iova, heap_top);
+        pmgr_adt_power_disable(isp_path);
         return -1;
     }
     heap_size = heap_top - heap_iova;

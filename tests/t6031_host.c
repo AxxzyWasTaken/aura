@@ -892,6 +892,7 @@ static void *load_dt(int room)
 {
     static u8 dt[1 << 21];
     assert(!fdt_open_into(dt_in, dt, fdt_totalsize(dt_in) + room));
+    assert(!fdt_setprop_string(dt, fdt_path_offset(dt, CHOSEN), "asahi,t6031-gpu", "1"));
     return dt;
 }
 

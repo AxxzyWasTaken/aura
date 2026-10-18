@@ -63,6 +63,40 @@ int main(void)
 ''')
 
 
+def test_isp_segments_reject_missing_truncated_and_wrapped_input(tmp_path):
+    function = definition((ROOT / "src/isp.c").read_text(), "isp_firmware_end")
+    header = (ROOT / "src/adt.h").read_text()
+    start = header.index("struct adt_segment_ranges {")
+    layout = header[start:header.index("} PACKED;", start) + len("} PACKED;")]
+    run_c(tmp_path, "isp-span", r'''
+#include <assert.h>
+#include <stdint.h>
+#include <stddef.h>
+typedef uint64_t u64;
+typedef uint32_t u32;
+#define PACKED __attribute__((packed))
+''' + layout + function + r'''
+int main(void)
+{
+    struct adt_segment_ranges seg[2] = {
+        {.iova = 0x9d4000, .size = 0x41c000},
+        {.iova = 0, .size = 0x9d4000},
+    };
+    u64 end = 0;
+    assert(isp_firmware_end(NULL, sizeof(seg), &end) == -1);
+    assert(isp_firmware_end(seg, 0, &end) == -1);
+    assert(isp_firmware_end(seg, sizeof(seg[0]), &end) == -1);
+    assert(isp_firmware_end(seg, sizeof(seg) - 1, &end) == -1);
+    assert(isp_firmware_end(seg, sizeof(seg), &end) == 0 && end == 0xdf0000);
+    seg[0].iova = UINT64_MAX - 1;
+    assert(isp_firmware_end(seg, sizeof(seg), &end) == -1);
+    seg[0].iova = 0; seg[0].size = 0;
+    assert(isp_firmware_end(seg, sizeof(seg), &end) == -1);
+    return 0;
+}
+''')
+
+
 def test_max_probe_requires_exact_opt_in(tmp_path):
     source = (ROOT / "src/kboot_gpu.c").read_text()
     function = definition(source, "dt_set_gpu_t6031")
