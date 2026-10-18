@@ -2,6 +2,7 @@
 """Fault injection into the production handoff transaction and Max opt-in."""
 
 from pathlib import Path
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,6 +93,41 @@ int main(void)
     assert(isp_firmware_end(seg, sizeof(seg), &end) == -1);
     seg[0].iova = 0; seg[0].size = 0;
     assert(isp_firmware_end(seg, sizeof(seg), &end) == -1);
+    return 0;
+}
+''')
+
+
+def test_dart_refuses_bad_streams_before_register_reads(tmp_path):
+    source = (ROOT / "src/dart.c").read_text()
+    start = source.index("int dart_walk_locked_t8110(")
+    function = source[start:source.index("\n}", start) + 2]
+    names = set(re.findall(r"\bDART_[A-Z0-9_]+\b", function))
+    macros = "\n".join(re.search(r"^#define " + name + r"\s+[^\n]+", source, re.M)[0]
+                       for name in sorted(names))
+    run_c(tmp_path, "dart-bounds", r'''
+#include <assert.h>
+#include <stdint.h>
+#include <stddef.h>
+typedef uint64_t u64;
+typedef uint32_t u32;
+typedef uint8_t u8;
+#define BIT(n) (UINT64_C(1) << (n))
+#define GENMASK(h, l) ((UINT64_MAX << (l)) & (UINT64_MAX >> (63 - (h))))
+#define FIELD_GET(mask, value) (((value) & (mask)) >> __builtin_ctzll(mask))
+#define SZ_16K 16384
+static int reads;
+static u32 read32(uintptr_t address) { reads++; return 0; }
+''' + macros + function + r'''
+static int visit(u64 iova, u64 physical, void *context) { assert(0); return -1; }
+int main(void)
+{
+    assert(dart_walk_locked_t8110(0, 16, 0, SZ_16K, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 255, 0, SZ_16K, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0, 0, 1, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0, UINT64_MAX - 1, SZ_16K, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0, 0, SZ_16K, NULL, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 15, 0, SZ_16K, visit, NULL) == -1 && reads == 3);
     return 0;
 }
 ''')

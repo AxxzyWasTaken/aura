@@ -689,7 +689,7 @@ int dart_walk_locked_t8110(uintptr_t base, u8 sid, u64 dram_base, u64 dram_size,
 {
     u64 dram_end = dram_base + dram_size;
 
-    if (!visit || dram_size < SZ_16K || dram_end <= dram_base)
+    if (!visit || sid >= 16 || dram_size < SZ_16K || dram_end <= dram_base)
         return -1;
 
     u32 tcr = read32(base + DART_T8110_TCR_OFF + 4 * sid);

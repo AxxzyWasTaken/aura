@@ -2177,7 +2177,7 @@ static int dt_set_t6030_display_maps(const struct adt_segment_ranges *segments, 
     };
     u32 phandles[2];
     int adt_path[8];
-    u64 adt_base;
+    u64 adt_base, adt_size;
     int len;
 
     /* The frontend DART's registers, as described by both trees. */
@@ -2189,9 +2189,12 @@ static int dt_set_t6030_display_maps(const struct adt_segment_ranges *segments, 
     if (!reg || len < 16)
         return t6030_display_handoff_fail("disp0 DART has no reg");
     u64 dart_base = ((u64)fdt32_ld(&reg[0]) << 32) | fdt32_ld(&reg[1]);
+    u64 dart_size = ((u64)fdt32_ld(&reg[2]) << 32) | fdt32_ld(&reg[3]);
     if (adt_path_offset_trace(adt, "/arm-io/dart-disp0", adt_path) < 0 ||
-        adt_get_reg(adt, adt_path, "reg", 0, &adt_base, NULL) < 0)
+        adt_get_reg(adt, adt_path, "reg", 0, &adt_base, &adt_size) < 0)
         return t6030_display_handoff_fail("ADT has no /arm-io/dart-disp0 reg");
+    if (adt_size < 0x1440 || dart_size < 0x1440 || dart_base > UINT64_MAX - 0x1440)
+        return t6030_display_handoff_fail("disp0 DART register window is too small");
     if (adt_base != dart_base)
         return t6030_display_handoff_fail("DART base: FDT 0x%lx, ADT 0x%lx", dart_base, adt_base);
 
@@ -2482,8 +2485,9 @@ static int dt_t6030_dcpext_validate(unsigned int n, const char *nub_path, char *
     if (!uuid || !len || len > 64 || strnlen(uuid, len) != 36)
         bail("ADT: J514S DCPEXT%u: no firmware UUID\n", n);
     int dcp = fdt_path_offset(dt, "dcp");
-    const char *panel = dcp < 0 ? NULL : fdt_getprop(dt, dcp, "apple,firmware-uuid", NULL);
-    if (!panel)
+    int panel_len = 0;
+    const char *panel = dcp < 0 ? NULL : fdt_getprop(dt, dcp, "apple,firmware-uuid", &panel_len);
+    if (!panel || panel_len != 37)
         bail("FDT: J514S DCPEXT%u: the internal display firmware was not handed over\n", n);
     if (strncmp(uuid, panel, 36) || panel[36])
         bail("FDT: J514S DCPEXT%u: firmware %.36s is not the panel's %s\n", n, uuid, panel);
