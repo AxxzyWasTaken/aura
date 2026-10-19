@@ -621,6 +621,45 @@ static int dt_set_memory(void)
     return 0;
 }
 
+static int dt_reserve_bootloader_handoff(void)
+{
+    int node;
+
+    while ((node = fdt_node_offset_by_compatible(
+                dt, -1, "linux-enablement-mac,resident-bootloader")) >= 0) {
+        int len;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+        if (!reg || len != 2 * (int)sizeof(*reg)) {
+            printf("FDT: invalid resident bootloader range on %s\n", fdt_get_name(dt, node, NULL));
+            return -1;
+        }
+
+        u64 start = fdt64_ld(&reg[0]);
+        u64 size = fdt64_ld(&reg[1]);
+        if (!size || (start | size) & (SZ_16K - 1)) {
+            printf("FDT: unaligned resident bootloader range on %s\n",
+                   fdt_get_name(dt, node, NULL));
+            return -1;
+        }
+
+        if (fdt_add_mem_rsv(dt, start, size))
+            return -1;
+
+        printf("FDT: reserved described bootloader handoff 0x%lx..0x%lx\n", start, start + size);
+
+        /*
+         * This node is packaging metadata, not an OS reserved-memory region.
+         * In particular it may cover the running kernel and initramfs, so a
+         * no-map property would make the handoff image itself inaccessible.
+         * Consume it after promoting the range to the FDT reservation map.
+         */
+        if (fdt_del_node(dt, node))
+            return -1;
+    }
+
+    return 0;
+}
+
 static int dt_set_serial_number(void)
 {
 
@@ -5171,7 +5210,9 @@ int kboot_prepare_dt(void *fdt)
         bail("FDT: couldn't add reservation for the devtree\n");
 
     u64 image_end = (u64)_end;
-    if (chip_id == T8140) {
+    /* Both post-M4 storage paths retain firmware buffers in the m1n1 heap. */
+    if (chip_id == T8140 ||
+        (chip_id == T8132 && !fdt_node_check_compatible(dt, 0, "apple,j713"))) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;
         u64 high_water = heapblock_high_water();
 
@@ -5182,7 +5223,7 @@ int kboot_prepare_dt(void *fdt)
         image_end = max(image_end, inherited);
         if ((u64)_base < cur_boot_args.phys_base || image_end < (u64)_base || image_end > ram_end ||
             high_water > ram_end)
-            bail("FDT: invalid T8140 retained memory extent\n");
+            bail("FDT: invalid retained memory extent\n");
 
         u64 heap_top = max(inherited, high_water);
         if (heap_top > (u64)_end) {
@@ -5230,6 +5271,15 @@ int kboot_prepare_dt(void *fdt)
             printf("WARNING: M4+ SMP-RO is large (48KB)");
         if (fdt_add_mem_rsv(dt, ro_start, ro_end - ro_start))
             bail("FDT: couldn't add reservation for M4+ SMP-RO CTRR area\n");
+    }
+
+    if (chip_id == T8132 && !fdt_node_check_compatible(dt, 0, "apple,j713")) {
+        if (dt_reserve_bootloader_handoff())
+            return -1;
+        u64 start = min(ALIGN_UP((u64)adt + cur_boot_args.devtree_size, SZ_16K), (u64)_base);
+        u64 end = cur_boot_args.top_of_kernel_data;
+        if (end > start && fdt_add_mem_rsv(dt, start, end - start))
+            bail("FDT: couldn't reserve the J713 chainload high-water interval\n");
     }
 
     /* setup console log buffer early to capture as much log as possible */
