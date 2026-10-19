@@ -1739,7 +1739,7 @@ static int dt_enable_dcp_with_typec_routes(const char *alias)
         }
     }
 
-    /* Property growth may have moved the controller. Resolve it again. */
+    /* Resolve the owner again after editing its route properties. */
     node = fdt_path_offset(dt, alias);
     ret = node < 0 ? node : fdt_setprop_string(dt, node, "status", "okay");
 out:
@@ -2156,7 +2156,7 @@ static int dt_reserve_dcpext_firmware(bool enable)
 
         ret = dt_enable_dcp_with_typec_routes(dcpext_alias);
         if (ret)
-            printf("FDT: failed to enable '%s' and its routes\n", dcpext_alias);
+            printf("FDT: failed to enable '%s'\n", dcpext_alias);
     }
 
     return 0;

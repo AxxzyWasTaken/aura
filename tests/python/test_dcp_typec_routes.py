@@ -139,6 +139,75 @@ int main(void)
 ''')
 
 
+def test_optional_external_enable_failure_keeps_later_controllers(tmp_path):
+    source = (ROOT / "src/kboot.c").read_text()
+    start = source.index("static const char dcpext_aliases")
+    aliases = source[start:source.index("\n};", start) + 3]
+    run_c(tmp_path, "dcp-optional-enable", r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "libfdt.h"
+#define T6000 0x6000
+#define T6001 0x6001
+#define T6002 0x6002
+#define T8122 0x8122
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#define T8122_DCPEXT_READY "apple,t8122-dcpext-firmware-ready"
+#define bail(...) do { return -1; } while (0)
+static unsigned char blob[8192];
+static void *dt = blob, *adt;
+static unsigned chip_id = 0x8112;
+static int reservations, versions, inject;
+static int adt_path_offset(void *tree, const char *name)
+{
+    return !strcmp(name, "/arm-io/dcpext0/iop-dcpext0-nub") ||
+           !strcmp(name, "/arm-io/dcpext1/iop-dcpext1-nub") ? 1 : -1;
+}
+static int dt_reserve_asc_firmware(const char *path, const char *alt,
+                                  const char *alias, bool remap, uint64_t base)
+{ reservations++; return 0; }
+static int dt_set_dcp_firmware(const char *alias) { versions++; return 0; }
+static int dt_reserve_t8122_dcpext_one(unsigned int n) { assert(0); return -1; }
+static int dt_display_transaction(int (*apply)(unsigned int), unsigned int n)
+{ assert(0); return -1; }
+static int enable(void *tree, int node, const char *name, const char *value)
+{
+    if (inject && node == fdt_path_offset(tree, "dcpext0"))
+        return -FDT_ERR_NOSPACE;
+    return fdt_setprop(tree, node, name, value, strlen(value) + 1);
+}
+#undef fdt_setprop_string
+#define fdt_setprop_string enable
+''' + aliases + definition(source, "dt_enable_dcp_with_typec_routes") +
+        definition(source, "dt_reserve_dcpext_firmware") + r'''
+int main(void)
+{
+    assert(!fdt_create_empty_tree(dt, sizeof(blob)));
+    assert(fdt_add_subnode(dt, 0, "dcpext0") >= 0);
+    assert(fdt_add_subnode(dt, 0, "dcpext1") >= 0);
+    int node = fdt_path_offset(dt, "/dcpext0");
+    assert(!fdt_setprop_string(dt, node, "status", "disabled"));
+    node = fdt_path_offset(dt, "/dcpext1");
+    assert(!fdt_setprop_string(dt, node, "status", "disabled"));
+    node = fdt_add_subnode(dt, 0, "aliases"); assert(node >= 0);
+    assert(!fdt_setprop_string(dt, node, "dcpext0", "/dcpext0"));
+    assert(!fdt_setprop_string(dt, node, "dcpext1", "/dcpext1"));
+    inject = 1;
+    assert(!dt_reserve_dcpext_firmware(true));
+    assert(reservations == 2 && versions == 2);
+    node = fdt_path_offset(dt, "dcpext0");
+    assert(!strcmp(fdt_getprop(dt, node, "status", NULL), "disabled"));
+    node = fdt_path_offset(dt, "dcpext1");
+    assert(!strcmp(fdt_getprop(dt, node, "status", NULL), "okay"));
+    puts("PASS optional first enable failure still reserves/enables the second controller");
+}
+''')
+
+
 def test_reservation_caller_never_publishes_routes_after_failure(tmp_path):
     source = (ROOT / "src/kboot.c").read_text()
     start = source.index("struct disp_mapping {")
