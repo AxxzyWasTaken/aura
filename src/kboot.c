@@ -2277,7 +2277,8 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
          * its physical address and is not reached through the DART: reserve
          * its RAM, marked as such, without an IOMMU mapping.
          */
-        if (chip_id == T6030 && !strncmp(fdt_path, "dcp", 3) && seg->unk == 0xa)
+        if (((chip_id == T6030 && !strncmp(fdt_path, "dcp", 3)) ||
+             (chip_id == T8132 && !strcmp(fdt_path, "dcp"))) && seg->unk == 0xa)
             ret = fdt_setprop_empty(dt, mem_node, "apple,dcp-os-log");
         else
             ret = dt_device_set_reserved_mem(mem_node, node_name, dev_phandle, iova, seg_size);
@@ -4285,6 +4286,178 @@ static void dt_set_t6030_dcpext(unsigned int n)
     printf("FDT: J514S DCPEXT%u firmware %s handed over\n", n, uuid);
 }
 
+struct j713_display_maps {
+    const struct adt_segment_ranges *segments;
+    u32 count;
+    u64 bytes[32];
+};
+
+static int j713_display_page(u64 iova, u64 physical, void *opaque)
+{
+    struct j713_display_maps *maps = opaque;
+    for (u32 i = 0; i < maps->count; i++) {
+        const struct adt_segment_ranges *seg = &maps->segments[i];
+        u64 start = seg->remap & ((1ULL << 36) - 1);
+        u64 size = ALIGN_UP((u64)seg->size, SZ_16K);
+        if (seg->unk != 2 || iova < start || iova - start >= size)
+            continue;
+        if ((seg->remap >> 36) != 0x10 || physical != seg->phys + iova - start)
+            return -1;
+        maps->bytes[i] += SZ_16K;
+        return 0;
+    }
+    return -1; /* Never drop an inherited mapping that we cannot describe. */
+}
+
+static int dt_set_j713_display_maps(const struct adt_segment_ranges *segments, u32 count,
+                                    u64 dram_start, u64 dram_size)
+{
+    const char *aliases[] = {"disp0", "disp0_piodma"};
+    const u8 streams[] = {0, 16};
+    struct j713_display_maps maps[2] = {
+        {.segments = segments, .count = count}, {.segments = segments, .count = count},
+    };
+    u32 phandles[2];
+
+    /* Exact J713 register block; reading tables must not enable/reset streams. */
+    for (u32 n = 0; n < 2; n++) {
+        if (dart_walk_locked_t8110(0x30a300000, streams[n], dram_start, dram_size,
+                                    j713_display_page, &maps[n]))
+            return -1;
+        u32 regions = 0;
+        for (u32 i = 0; i < count; i++) {
+            if (!maps[n].bytes[i])
+                continue;
+            if (maps[n].bytes[i] != ALIGN_UP((u64)segments[i].size, SZ_16K))
+                return -1;
+            regions++;
+        }
+        if (regions != (n == 0 ? 2 : 1))
+            return -1;
+    }
+
+    /* Publish only after every inherited PTE passed the physical/IOVA check. */
+    for (u32 n = 0; n < 2; n++) {
+        int node = fdt_path_offset(dt, aliases[n]);
+        if (node < 0)
+            return -1;
+        phandles[n] = fdt_get_phandle(dt, node);
+        if (!phandles[n]) {
+            if (fdt_generate_phandle(dt, &phandles[n]) ||
+                fdt_setprop_u32(dt, node, "phandle", phandles[n]))
+                return -1;
+        }
+    }
+    for (u32 i = 0; i < count; i++) {
+        if (!maps[0].bytes[i] && !maps[1].bytes[i])
+            continue;
+        char name[64];
+        snprintf(name, sizeof(name), "asc-firmware@%lx", segments[i].phys);
+        u64 size = ALIGN_UP((u64)segments[i].size, SZ_16K);
+        int node = dt_get_or_add_reserved_mem(name, "apple,asc-mem", true, segments[i].phys, size);
+        if (node < 0)
+            return -1;
+        u32 phandle = fdt_get_phandle(dt, node);
+        for (u32 n = 0; n < 2; n++) {
+            if (maps[n].bytes[i] &&
+                dt_device_set_reserved_mem(node, name, phandles[n], segments[i].remap, size))
+                return -1;
+        }
+        for (u32 n = 0; n < 2; n++) {
+            if (maps[n].bytes[i] && dt_device_add_mem_region(aliases[n], phandle, NULL))
+                return -1;
+        }
+    }
+    int piodma = fdt_path_offset(dt, "disp0_piodma");
+    int dart = dt_get_iommu_node(piodma, 0);
+    if (dart < 0 || fdt_setprop_string(dt, dart, "status", "okay"))
+        return -1;
+    piodma = fdt_path_offset(dt, "disp0_piodma");
+    if (fdt_setprop_empty(dt, piodma, "apple,j713-inherited-mappings"))
+        return -1;
+    if (fdt_setprop_string(dt, piodma, "status", "okay"))
+        return -1;
+    printf("FDT: J713 DISP0 SID0/SID16 mappings preserved; PIODMA enabled\n");
+    int dcp = fdt_path_offset(dt, "dcp");
+    if (dcp >= 0 && fdt_getprop(dt, dcp, "apple,j713-native-scanout", NULL)) {
+        int display = fdt_path_offset(dt, "disp0");
+        if (display < 0 ||
+            (fdt_node_check_compatible(dt, display, "apple,t8132-display-diagnostics") &&
+             fdt_node_check_compatible(dt, display, "apple,t8132-display-subsystem")))
+            return -1;
+        if (fdt_setprop_empty(dt, display, "apple,j713-inherited-mappings") ||
+            fdt_setprop_string(dt, display, "status", "okay"))
+            return -1;
+        printf("FDT: J713 native scanout diagnostic enabled with preserved SID0 mappings\n");
+    }
+    return 0;
+}
+
+/* Publish the inherited J713 firmware mapping without starting a display driver. */
+static int dt_set_j713_dcp_handoff(void)
+{
+    int dcp_node = fdt_path_offset(dt, "dcp");
+    if (dcp_node < 0)
+        return 0; /* Older DT with simple-framebuffer only. */
+    if (chip_id != T8132 || fdt_node_check_compatible(dt, 0, "apple,j713") ||
+        fdt_node_check_compatible(dt, dcp_node, "apple,t8132-dcp"))
+        bail("FDT: unsupported native DCP handoff target\n");
+
+    int nub = adt_path_offset(adt, "/arm-io/dcp/iop-dcp-nub");
+    if (nub < 0)
+        bail("ADT: missing J713 DCP firmware metadata\n");
+
+    u32 len;
+    const struct adt_segment_ranges *segments = adt_getprop(adt, nub, "segment-ranges", &len);
+    if (!segments || !len || len % sizeof(*segments) || len / sizeof(*segments) > 32)
+        bail("ADT: invalid J713 DCP firmware segment list\n");
+    u32 count = len / sizeof(*segments);
+
+    /* Firmware carveouts are outside the OS-usable boot-args interval. */
+    int chosen = adt_path_offset(adt, "/chosen");
+    u64 dram_start, dram_size;
+    if (chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram_start) < 0 ||
+        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) < 0)
+        bail("ADT: missing J713 physical DRAM bounds\n");
+    u64 dram_end = dram_start + dram_size;
+    if (!dram_size || dram_end <= dram_start)
+        bail("ADT: invalid J713 DRAM bounds\n");
+
+    /* Validate the entire list before mutating the FDT. Use remap addresses:
+     * CPU-image offsets are not the addresses in the inherited DCP DART.
+     */
+    for (unsigned i = 0; i < len / sizeof(*segments); i++) {
+        u64 size = ALIGN_UP((u64)segments[i].size, SZ_16K);
+        if (!size || (segments[i].phys | segments[i].remap) & (SZ_16K - 1) ||
+            segments[i].phys < dram_start || segments[i].phys + size < segments[i].phys ||
+            segments[i].phys + size > dram_end || segments[i].remap + size < segments[i].remap)
+            bail("ADT: invalid J713 DCP firmware segment %u\n", i);
+    }
+
+    const char *uuid = adt_getprop(adt, nub, "uuid", &len);
+    if (!uuid || len != 37 || uuid[len - 1])
+        bail("ADT: invalid J713 DCP firmware UUID\n");
+    if (fdt_setprop_string(dt, dcp_node, "apple,firmware-uuid", uuid))
+        bail("FDT: cannot publish J713 DCP firmware UUID\n");
+
+    int ret = dt_set_dcp_firmware("dcp");
+    if (ret)
+        return ret;
+    ret = dt_reserve_asc_firmware("/arm-io/dcp/iop-dcp-nub", NULL, "dcp", true, 0);
+    if (ret)
+        return ret;
+
+    dcp_node = fdt_path_offset(dt, "dcp");
+    if (fdt_getprop(dt, dcp_node, "apple,j713-native-piodma", NULL)) {
+        if (strcmp(uuid, "81BAF476-679D-3CC0-8C6A-E6B6FA659D5E") ||
+            dt_set_j713_display_maps(segments, count, dram_start, dram_size))
+            printf("FDT: J713 PIODMA handoff unqualified; retaining disabled device\n");
+    }
+
+    printf("FDT: J713 DCP firmware mappings published; display device status unchanged\n");
+    return 0;
+}
+
 static int dt_set_display(void)
 {
     if (chip_id == T8140)
@@ -4308,6 +4481,12 @@ static int dt_set_display(void)
     /* Use old style disp0_piodma alias with underscore if it exists. */
     if (!!fdt_get_alias(dt, compat_piodma_alias))
         disp0_piodma_alias = compat_piodma_alias;
+
+    if (chip_id == T8132) {
+        if (dt_set_j713_dcp_handoff())
+            printf("FDT: J713 DCP handoff refused; keeping the boot framebuffer\n");
+        return 0;
+    }
 
     if (!fdt_node_check_compatible(dt, 0, "apple,t8103")) {
         ret = dt_carveout_reserved_regions("dcp", "disp0", disp0_piodma_alias,
