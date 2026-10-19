@@ -187,7 +187,7 @@ OBJECTS := \
 	memory.o memory_asm.o \
 	nvme.o \
 	payload.o \
-	pcie.o \
+	pcie.o pcie_fdt.o \
 	pmgr.o \
 	proxy.o \
 	ringbuffer.o \

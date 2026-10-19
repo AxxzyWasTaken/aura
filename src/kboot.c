@@ -5613,6 +5613,15 @@ int kboot_prepare_dt(void *fdt)
     return 0;
 }
 
+static int dt_disable_j713_pcie(void)
+{
+    /* prepare_dt packed the tree. Restore its already reserved spare capacity
+     * before adding status, then pack again for downstream source-size bounds. */
+    if (fdt_open_into(dt, dt, dt_bufsize) || pcie_disable_j713_fdt(dt) || fdt_pack(dt))
+        return -1;
+    return 0;
+}
+
 int kboot_boot(void *kernel)
 {
     int ret = mcc_enable_cache();
@@ -5627,7 +5636,20 @@ int kboot_boot(void *kernel)
         printf("kboot: normal USB init skipped on T8140\n");
     else
         usb_init();
-    ret = pcie_init();
+    int described = chip_id == T8132 ? pcie_prepare_fdt(dt) : 0;
+    bool j713 = chip_id == T8132 && !fdt_node_check_compatible(dt, 0, "apple,j713");
+    if (described < 0) {
+        if (!j713 || dt_disable_j713_pcie())
+            return -1;
+        /* Do not train an optional port whose rail could not be prepared. */
+        ret = 0;
+    } else {
+        ret = pcie_init();
+        if (chip_id == T8132 && ((ret && described) || pcie_handoff_fdt(dt) < 0)) {
+            if (!j713 || dt_disable_j713_pcie())
+                return -1;
+        }
+    }
     if (chip_id == T8140) {
         if (ret < 0) {
             printf("kboot: refusing T8140 handoff after partial PCIe setup\n");
