@@ -122,6 +122,10 @@ int main(void)
         assert(dt_enable_dcp_with_typec_routes("dcpext0") < 0);
         assert(dt == blob && !memcmp(before, blob, sizeof(blob)));
     }
+    /* The old enable path on other SoCs must not need scratch allocation. */
+    world(true); chip_id = 0x8103; fail_alloc = 1;
+    assert(!dt_enable_dcp_with_typec_routes("dcpext0"));
+    status("/soc/dcpext0", "okay"); routes_status("disabled");
     world(true);
     unsigned char before[sizeof(blob)]; memcpy(before, blob, sizeof(blob));
     assert(dt_enable_dcp_with_typec_routes("absent") < 0);

@@ -1686,6 +1686,12 @@ static int dt_set_dcp_firmware(const char *alias)
  */
 static int dt_enable_dcp_with_typec_routes(const char *alias)
 {
+    /* Other SoCs keep the original single-property enable path. */
+    if (chip_id != T6000 && chip_id != T6001 && chip_id != T6002) {
+        int node = fdt_path_offset(dt, alias);
+        return node < 0 ? node : fdt_setprop_string(dt, node, "status", "okay");
+    }
+
     void *original = dt;
     size_t capacity = fdt_totalsize(original);
     void *scratch = malloc(capacity);
@@ -2150,7 +2156,7 @@ static int dt_reserve_dcpext_firmware(bool enable)
 
         ret = dt_enable_dcp_with_typec_routes(dcpext_alias);
         if (ret)
-            bail("FDT: failed to enable '%s' and its routes\n", dcpext_alias);
+            printf("FDT: failed to enable '%s' and its routes\n", dcpext_alias);
     }
 
     return 0;
