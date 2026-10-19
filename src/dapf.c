@@ -191,8 +191,85 @@ struct entry dapf_entries[] = {
     {"/arm-io/dart-isp", 5, "isp"}, {"/arm-io/dart-isp0", 5, "isp"}, {NULL, -1, NULL},
 };
 
+static int dapf_init_j713(void *dt)
+{
+    int ret = 0;
+    int count = 0;
+    static const struct {
+        const char *path;
+        const char *consumer;
+        int index;
+    } entries[] = {
+        {"/arm-io/dart-aop", "/arm-io/aop", 1},
+        {"/arm-io/dart-mtp", "/arm-io/mtp", 1},
+        {"/arm-io/dart-pmp", "/arm-io/pmp", 1},
+        {"/arm-io/dart-isp", "/arm-io/isp", 5},
+        {"/arm-io/dart-isp0", "/arm-io/isp0", 5},
+        {NULL, NULL, -1},
+    };
+    const typeof(entries[0]) *entry = entries;
+    int chosen = dt ? fdt_path_offset(dt, "/chosen") : -1;
+    bool described =
+        chosen >= 0 && fdt_getprop(dt, chosen, "linux-enablement-mac,dapf-handoff", NULL);
+
+    if (!described) {
+        printf("dapf: No J713 consumer handoff requested; preserving firmware state\n");
+        return 0;
+    }
+
+    while (entry->path != NULL) {
+        if (adt_path_offset(adt, entry->path) < 0) {
+            entry++;
+            continue;
+        }
+
+        if (described) {
+            if (fdt_stringlist_search(dt, chosen, "linux-enablement-mac,dapf-handoff",
+                                      entry->consumer) < 0) {
+                printf("dapf: Skipping %s; consumer %s is not requested for handoff\n", entry->path,
+                       entry->consumer);
+                entry++;
+                continue;
+            }
+
+            if (fdt_stringlist_search(dt, chosen, "linux-enablement-mac,dapf-power-on-handoff",
+                                      entry->consumer) >= 0) {
+                if (pmgr_adt_power_enable(entry->consumer) < 0) {
+                    printf("dapf: Failed to power requested consumer %s\n", entry->consumer);
+                    ret = -1;
+                    entry++;
+                    continue;
+                }
+                printf("dapf: Preserving requested consumer %s in the active state\n",
+                       entry->consumer);
+            }
+
+            int powered = pmgr_adt_is_powered(entry->consumer);
+            if (powered <= 0) {
+                printf("dapf: Skipping %s; consumer %s is inactive or its state is unknown\n", entry->path,
+                       entry->consumer);
+                entry++;
+                continue;
+            }
+        }
+
+        if (dapf_init(entry->path, entry->index) < 0) {
+            ret = -1;
+        }
+        entry++;
+        count += 1;
+    }
+    return ret ? ret : count;
+}
+
 int dapf_init_fdt(const void *fdt)
 {
+    if (chip_id == T8132) {
+        if (!fdt || fdt_node_check_compatible(fdt, 0, "apple,j713"))
+            return 0; /* No other M4 board's power/DAPF contract is qualified. */
+        return dapf_init_j713((void *)fdt);
+    }
+
     int ret = 0;
     int count = 0;
     struct entry *entry = dapf_entries;
