@@ -403,14 +403,15 @@ bool nvme_init(void)
             goto out_reset;
         }
         /*
-         * The J700 ADT advertises only the first 64 KiB of this alias.
+         * The J700 and J713 ADTs advertise only the first 64 KiB of this alias.
          * Its linear queue registers live at +0x24908..+0x24910 in the
          * same non-secure alias. The public T8140 Linux binding describes
          * the full 0x30000 aperture. Admit only that measured SoC/layout;
          * retain the normal bounds and overlap checks for every other BAR.
          */
-        if (chip_id == T8140 && nvmmu_base == 0x38dcc0000 &&
-            nvme_base == 0x3cdcc0000 && nvme_size == 0x10000)
+        if (nvme_size == 0x10000 &&
+            ((chip_id == T8140 && nvmmu_base == 0x38dcc0000 && nvme_base == 0x3cdcc0000) ||
+             (chip_id == T8132 && nvmmu_base == 0x485cc0000 && nvme_base == 0x4c5cc0000)))
             nvme_size = 0x30000;
         if (nvmmu_size < NVMMU_TCB_STAT + sizeof(u32) ||
             nvme_size < NVME_DB_LINEAR_IOSQ + sizeof(u32) || nvmmu_base > UINT64_MAX - nvmmu_size ||
@@ -451,7 +452,9 @@ bool nvme_init(void)
     if (nvme_type == NVME_T8132) {
         bool running = asc_cpu_running(nvme_asc);
         nvme_log_entry_state(running);
-        adopting = nvme_adopt_live_session;
+        /* Older stage 1 shuts ANS down; newer stage 1 leaves a live session.
+         * Never replay RTKit's one-time handshake on the latter. */
+        adopting = nvme_adopt_live_session || (chip_id == T8132 && running);
         if (adopting) {
             u32 boot_status = read32(nvme_base + NVME_BOOT_STATUS);
             u32 csts = read32(nvme_base + NVME_CSTS);
