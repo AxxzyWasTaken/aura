@@ -1679,6 +1679,71 @@ static int dt_set_dcp_firmware(const char *alias)
     return 0;
 }
 
+/*
+ * The T600x loader owns the external DCP handoff. Publish its explicitly
+ * disabled Type-C routes and controller together, after firmware reservation.
+ * Keep other chips' route ownership (notably the T8122 kernel gate) intact.
+ */
+static int dt_enable_dcp_with_typec_routes(const char *alias)
+{
+    void *original = dt;
+    size_t capacity = fdt_totalsize(original);
+    void *scratch = malloc(capacity);
+    if (!scratch)
+        return -1;
+    memcpy(scratch, original, capacity);
+    dt = scratch;
+
+    int ret = 0;
+    int node = fdt_path_offset(dt, alias);
+    if (node < 0) {
+        ret = node;
+        goto out;
+    }
+
+    if (chip_id == T6000 || chip_id == T6001 || chip_id == T6002) {
+        int routes = fdt_subnode_offset(dt, node, "typec-routes");
+        if (routes < 0 && routes != -FDT_ERR_NOTFOUND) {
+            ret = routes;
+            goto out;
+        }
+        if (routes >= 0) {
+            int route;
+            fdt_for_each_subnode(route, dt, routes)
+            {
+                int len = 0;
+                const char *status = fdt_getprop(dt, route, "status", &len);
+                if (!status) {
+                    if (len == -FDT_ERR_NOTFOUND)
+                        continue;
+                    ret = len;
+                    goto out;
+                }
+                /* Do not turn a reserved, failed or malformed route on. */
+                if (len != sizeof("disabled") || memcmp(status, "disabled", len))
+                    continue;
+                ret = fdt_setprop_string(dt, route, "status", "okay");
+                if (ret)
+                    goto out;
+            }
+            if (route != -FDT_ERR_NOTFOUND) {
+                ret = route;
+                goto out;
+            }
+        }
+    }
+
+    /* Property growth may have moved the controller. Resolve it again. */
+    node = fdt_path_offset(dt, alias);
+    ret = node < 0 ? node : fdt_setprop_string(dt, node, "status", "okay");
+out:
+    dt = original;
+    if (!ret)
+        memcpy(original, scratch, capacity);
+    free(scratch);
+    return ret;
+}
+
 struct disp_mapping {
     char region_adt[24];
     char mem_fdt[24];
@@ -1749,8 +1814,10 @@ static int dt_add_reserved_regions(const char *dcp_alias, const char *disp_alias
         snprintf(node_name, sizeof(node_name), "%s@%lx", name, region[i].paddr);
         int mem_node =
             dt_get_or_add_reserved_mem(node_name, compat, true, region[i].paddr, region[i].size);
-        if (mem_node < 0)
+        if (mem_node < 0) {
+            ret = mem_node;
             goto err;
+        }
 
         uint32_t mem_phandle = fdt_get_phandle(dt, mem_node);
 
@@ -1806,9 +1873,9 @@ static int dt_add_reserved_regions(const char *dcp_alias, const char *disp_alias
         if (fdt_setprop_string(dt, dart_disp0, "status", "okay") < 0)
             bail_cleanup("FDT: failed to enable 'dart-disp0'\n");
     }
-    /* enable dcp* */
-    int dcp_node = fdt_path_offset(dt, dcp_alias);
-    if (dcp_node < 0 || fdt_setprop_string(dt, dcp_node, "status", "okay") < 0)
+    /* Enable the owner and its loader-controlled routes atomically. */
+    ret = dt_enable_dcp_with_typec_routes(dcp_alias);
+    if (ret)
         bail_cleanup("FDT: failed to enable '%s'\n", dcp_alias);
 
 err:
@@ -2081,10 +2148,9 @@ static int dt_reserve_dcpext_firmware(bool enable)
         if (ret)
             continue;
 
-        // refresh dcpext_node
-        dcpext_node = fdt_path_offset(dt, dcpext_alias);
-        if ((dcpext_node < 0) || (fdt_setprop_string(dt, dcpext_node, "status", "okay") < 0))
-            printf("FDT: failed to enable '%s'\n", dcpext_alias);
+        ret = dt_enable_dcp_with_typec_routes(dcpext_alias);
+        if (ret)
+            bail("FDT: failed to enable '%s' and its routes\n", dcpext_alias);
     }
 
     return 0;
