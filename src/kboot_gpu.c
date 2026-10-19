@@ -580,8 +580,13 @@ disable:
     return 0;
 }
 
+int dt_set_gpu_m4(void *dt);
+
 int dt_set_gpu(void *dt)
 {
+    if (chip_id == T8132)
+        return dt_set_gpu_m4(dt);
+
     if (chip_id == T8140)
         return dt_set_gpu_t8140(dt);
 
