@@ -189,8 +189,19 @@ static int pmgr_validate_parents(u16 id, u16 *ancestors, size_t depth)
     const struct pmgr_device *device;
     u16 parents[2];
 
-    if (depth >= PMGR_MAX_PARENT_DEPTH || pmgr_find_device(id, &device))
+    if (depth >= PMGR_MAX_PARENT_DEPTH)
         return -1;
+    if (pmgr_find_device(id, &device)) {
+        /*
+         * Apple's tables name parents they do not list: C0-USBCTL-V's parent 81 on
+         * base M1, and ISP_CPU_CORE0/1's parent 176 on base M3. As in upstream m1n1, a
+         * missing parent only fails a request that has to power it, not the whole table.
+         */
+        if (!depth)
+            return -1;
+        printf("pmgr: ignoring parent %u, which the ADT does not list\n", id);
+        return 0;
+    }
     for (size_t i = 0; i < depth; i++) {
         if (ancestors[i] == id)
             return -1;
