@@ -59,15 +59,29 @@ SECTIONS {
         *(.data.smp_shared)
         . = ALIGN(0x10000);
         _smp_shared_end = .;
-        *(.data)
+        *(EXCLUDE_FILE(*_48.o *_128.o *_256.o *font.o *font_retina.o) .data)
         *(.data.*)
         . = ALIGN(8);
         _got_start = .;
         *(.got)
         _got_end = .;
+        /*
+         * Pixel data last: the fonts and logos are only drawn, so they are what may lie where
+         * the DCP __OS_LOG buffers start, 0x120000 after the base stage 1 loaded this image at
+         * (start.S moves the image above that, but only after stage 1 placed it there). The
+         * fonts come first: they draw every console line, the logos once.
+         */
+        _file_vital_end = .;
+        *font.o(.data)
+        *font_retina.o(.data)
+        *_48.o(.data)
+        *_128.o(.data)
+        *_256.o(.data)
         . = ALIGN(0x10000);
         _file_end = .;
     } :data
+    ASSERT(_file_vital_end - _base <= 0x120000,
+           "Code and data reach the DCP log buffers after stage 1!")
     .bss : ALIGN(0x10000) {
         _bss_start = .;
         *(.bss)

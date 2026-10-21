@@ -15,6 +15,12 @@
 #include "utils.h"
 #include "xnuboot.h"
 
+/* start.S reads these fields before C runs */
+_Static_assert(__builtin_offsetof(struct boot_args, phys_base) == 16, "BOOTARGS_PHYS_BASE");
+_Static_assert(__builtin_offsetof(struct boot_args, mem_size) == 24, "BOOTARGS_MEM_SIZE");
+_Static_assert(__builtin_offsetof(struct boot_args, top_of_kernel_data) == 32,
+               "BOOTARGS_TOP_OF_KDATA");
+
 u64 boot_args_addr;
 struct boot_args cur_boot_args;
 void *adt;
@@ -217,6 +223,9 @@ void _start_c(void *boot_args, void *base)
     printf("\n");
 
     printf("boot_args at %p\n", boot_args);
+    if (relocated_from)
+        printf("aura moved itself from 0x%lx to %p, above the chainloaded image\n", relocated_from,
+               _base);
 
     dump_boot_args(&cur_boot_args);
     printf("\n");

@@ -75,7 +75,7 @@ u64 kboot_fb_base(void)
 
 void kboot_loaded_file_part(u64 *base, u64 *size)
 {
-    *base = (u64)_base;
+    *base = relocated_from ? relocated_from : (u64)_base;
     *size = (u64)_file_end - (u64)_base;
 }
 
@@ -4850,6 +4850,16 @@ int kboot_prepare_dt(void *fdt)
     }
     if (fdt_add_mem_rsv(dt, (u64)_base, image_end - (u64)_base))
         bail("FDT: couldn't add reservation for m1n1 and inherited high-water\n");
+
+    // start.S moved this image above the chainloaded one; cores with a locked
+    // RVBAR still reset into the forwarding vector at the old base.
+    if (relocated_from) {
+        extern u8 _vectors_start[];
+        u64 old_vectors = relocated_from + ((u64)_vectors_start - (u64)_base);
+
+        if (fdt_add_mem_rsv(dt, ALIGN_DOWN(old_vectors, SZ_16K), SZ_16K))
+            bail("FDT: couldn't add reservation for the old reset vector\n");
+    }
 
     if (chip_id == T8140) {
         u64 ro_start, ro_end;

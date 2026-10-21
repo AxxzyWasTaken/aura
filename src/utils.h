@@ -389,6 +389,9 @@ extern char _end[];
 extern char _payload_start[];
 extern char _payload_end[];
 
+/* The base stage 1 loaded this image at, if start.S moved it since (payload.c); 0 if not. */
+extern u64 relocated_from;
+
 /*
  * These functions are guaranteed to copy by reading from src and writing to dst
  * in <n>-bit units If size is not aligned, the remaining bytes are not copied
