@@ -182,6 +182,7 @@ OBJECTS := \
 	iova.o \
 	isp.o \
 	kboot.o kboot_atc.o \
+	kboot_display_handoff.o \
 	kboot_t6020_compat.o \
 	main.o boot_options.o \
 	mitigations.o \

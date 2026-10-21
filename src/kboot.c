@@ -53,8 +53,31 @@ static char *chosen_params[MAX_CHOSEN_PARAMS][2];
 static char *uboot_config[MAX_UBOOT_CONFIGS][2];
 
 extern const char *const m1n1_version;
+extern char _file_end[];
 
 int dt_set_gpu(void *dt);
+int dt_set_display_handoff(void *dt);
+
+u64 kboot_ram_base(void)
+{
+    return cur_boot_args.phys_base;
+}
+
+u64 kboot_ram_size(void)
+{
+    return cur_boot_args.mem_size;
+}
+
+u64 kboot_fb_base(void)
+{
+    return cur_boot_args.video.base;
+}
+
+void kboot_loaded_file_part(u64 *base, u64 *size)
+{
+    *base = (u64)_base;
+    *size = (u64)_file_end - (u64)_base;
+}
 
 #define DT_ALIGN 16384
 
@@ -3815,6 +3838,15 @@ static int dt_set_display(void)
                                            ARRAY_SIZE(disp_reserved_regions_t8142));
         if (ret)
             return ret;
+    } else if (!fdt_node_check_compatible(dt, 0, "apple,t8122")) {
+        /*
+         * Fail-soft handoff (kboot_display_handoff.c): it always returns 0, never uses the
+         * helpers above (they bail out of kboot or enable nodes) and never enables a node.
+         * It reserves the DCP's __OS_LOG buffer and does nothing else unless
+         * chosen.asahi,t8122-dcp=1. T6030 is not routed here yet: its handoff runs without the
+         * switch and is untested with aura.
+         */
+        return dt_set_display_handoff(dt);
     } else {
         printf("FDT: unknown compatible, skip display reserved-memory setup\n");
         return 0;
@@ -3858,6 +3890,9 @@ static bool skip_pmp_prop(const char *prop_name)
 
 static int dt_set_pmp(void)
 {
+    /* The M3 Air's PMP is the kernel display gate's (dt_set_pmp_t8122()). */
+    if (chip_id == T8122)
+        return 0;
     int pmp_node = fdt_path_offset(dt, "pmp");
     if (pmp_node < 0) {
         printf("FDT: pmp not found in devtree\n");
@@ -3896,6 +3931,139 @@ static int dt_set_pmp(void)
     }
     pmp_node = fdt_path_offset(dt, "pmp");
     fdt_setprop_string(dt, pmp_node, "status", "okay");
+    return 0;
+}
+
+/* Reads a u32 ADT property only if it is exactly four bytes long. */
+static int adt_get_u32_exact(int node, const char *name, u32 *val)
+{
+    u32 len = 0;
+    const void *p = adt_getprop(adt, node, name, &len);
+
+    if (!p || len != sizeof(*val))
+        return -1;
+    memcpy(val, p, sizeof(*val));
+    return 0;
+}
+
+/*
+ * Copies this Mac's PMP values from the ADT onto the FDT node @pmp_node, for dt_pass_pmp().
+ * Stricter than dt_set_pmp(): every value must be exactly a u32.
+ */
+static int dt_fill_pmp(int pmp_node)
+{
+    int chosen_anode = adt_path_offset(adt, "/chosen");
+    if (chosen_anode < 0)
+        bail("ADT: /chosen not found \n");
+    int pmp_iop_anode = adt_path_offset(adt, "/arm-io/pmp/iop-pmp-nub");
+    if (pmp_iop_anode < 0)
+        bail("ADT: /arm-io/pmp/iop-pmp-nub not found \n");
+
+    u32 board_id, dram_vendor_id, dram_capacity = 0xFFFFFFFF;
+    if (adt_get_u32_exact(chosen_anode, "board-id", &board_id))
+        bail("ADT: failed to get board id\n");
+    if (adt_get_u32_exact(chosen_anode, "dram-vendor-id", &dram_vendor_id))
+        bail("ADT: failed to get dram vendor id\n");
+    if (adt_getprop(adt, pmp_iop_anode, "dram-capacity", NULL) &&
+        adt_get_u32_exact(pmp_iop_anode, "dram-capacity", &dram_capacity))
+        bail("ADT: dram-capacity is not a u32\n");
+
+    if (fdt_setprop_u32(dt, pmp_node, "apple,board-id", board_id))
+        bail("FDT: failed to set board id\n");
+    if (fdt_setprop_u32(dt, pmp_node, "apple,dram-vendor-id", dram_vendor_id))
+        bail("FDT: failed to set dram vendor id\n");
+    if (dram_capacity != 0xFFFFFFFF &&
+        fdt_setprop_u32(dt, pmp_node, "apple,dram-capacity", dram_capacity))
+        bail("FDT: failed to set dram capacity\n");
+
+    ADT_FOREACH_PROPERTY(adt, pmp_iop_anode, prop)
+    {
+        if (skip_pmp_prop(prop->name))
+            continue;
+        char prop_name[128];
+        snprintf(prop_name, sizeof(prop_name), "apple,tunable-%s", prop->name);
+        if (fdt_setprop(dt, pmp_node, prop_name, prop->value, prop->size))
+            bail("FDT: failed to transfer pmp tunable\n");
+    }
+    return 0;
+}
+
+/*
+ * T8122: the kernel's display gate adds the PMP itself, halted until the display needs it, so
+ * the device tree has no pmp node for dt_set_pmp(). The gate needs this Mac's PMP values for it:
+ * copy them as dt_set_pmp() does, into /chosen/asahi,t8122-pmp, and leave the PMP alone. Only
+ * when the PMP and its DART are where the gate puts them. Fail-soft: without the node the gate
+ * keeps the display on the boot framebuffer. From m1n1-aurora, which also passes T6030's.
+ */
+struct pmp_values_soc {
+    const char *compat; /* SoC compatible of the FDT root */
+    const char *node;   /* the /chosen subnode */
+    const char *name;
+    u32 irqs[4]; /* /arm-io/pmp interrupts, in ADT order */
+    u64 dart_addr, dart_size;
+};
+
+static const struct pmp_values_soc pmp_values_t8122 = {
+    "apple,t8122", "asahi,t8122-pmp", "T8122", {622, 621, 624, 623}, 0x2d0300000, 0x4000,
+};
+
+static void dt_pass_pmp(const struct pmp_values_soc *soc)
+{
+    int dart_path[8];
+    const void *irqs;
+    u64 dart_addr = 0, dart_size = 0;
+    u32 len = 0;
+    int pmp_anode, chosen, node;
+    bool where;
+    char path[40];
+
+    if (fdt_node_check_compatible(dt, 0, soc->compat))
+        return;
+
+    chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen < 0)
+        return;
+    node = fdt_add_subnode(dt, chosen, soc->node);
+    if (node < 0) {
+        printf("FDT: %s PMP values not passed: %d\n", soc->name, node);
+        return;
+    }
+
+    pmp_anode = adt_path_offset(adt, "/arm-io/pmp");
+    irqs = pmp_anode < 0 ? NULL : adt_getprop(adt, pmp_anode, "interrupts", &len);
+    where = irqs && len == sizeof(soc->irqs) && !memcmp(irqs, soc->irqs, sizeof(soc->irqs)) &&
+            adt_path_offset_trace(adt, "/arm-io/dart-pmp", dart_path) >= 0 &&
+            !adt_get_reg(adt, dart_path, "reg", 0, &dart_addr, &dart_size) &&
+            dart_addr == soc->dart_addr && dart_size == soc->dart_size;
+    if (!where) {
+        /* An empty node: the kernel refuses the PMP rather than using built-in values. */
+        printf("FDT: %s PMP is not where the kernel expects it; no PMP values passed\n",
+               soc->name);
+        return;
+    }
+    snprintf(path, sizeof(path), "/chosen/%s", soc->node);
+    if (dt_fill_pmp(node)) {
+        node = fdt_path_offset(dt, path);
+        if (node >= 0)
+            fdt_del_node(dt, node);
+        printf("FDT: %s PMP values not passed\n", soc->name);
+        return;
+    }
+    printf("FDT: %s PMP values passed in %s\n", soc->name, path);
+}
+
+/* T8122: pass this Mac's PMP values on either M3 Air with chosen.asahi,t8122-dcp=1. */
+static int dt_set_pmp_t8122(void)
+{
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int len = 0;
+    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t8122-dcp", &len);
+
+    if (!opt || len != 2 || opt[0] != '1' || opt[1] != '\0' ||
+        (fdt_node_check_compatible(dt, 0, "apple,j613") &&
+         fdt_node_check_compatible(dt, 0, "apple,j615")))
+        return 0;
+    dt_pass_pmp(&pmp_values_t8122);
     return 0;
 }
 
@@ -4802,6 +4970,10 @@ int kboot_prepare_dt(void *fdt)
      */
     if (dt_set_memory())
         return -1;
+
+    /* Last, so that its values never take room the steps above need. */
+    if (chip_id == T8122)
+        dt_set_pmp_t8122();
 
     /* T8140 PCIe status is known only after pcie_init() in kboot_boot(). */
     if (chip_id != T8140 && fdt_pack(dt))

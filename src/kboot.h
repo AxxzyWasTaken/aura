@@ -26,6 +26,14 @@ int kboot_set_uboot(const char *name, const char *value);
 int kboot_prepare_dt(void *fdt);
 int kboot_boot(void *kernel);
 
+/* Boot-args RAM range and boot framebuffer base, for the kboot_* SoC helpers */
+u64 kboot_ram_base(void);
+u64 kboot_ram_size(void);
+u64 kboot_fb_base(void);
+
+/* Where this image's file part was loaded and runs: aura does not move itself. */
+void kboot_loaded_file_part(u64 *base, u64 *size);
+
 // from rust/usb4.rs
 u64 rust_usb4_router_uuid(void);
 
