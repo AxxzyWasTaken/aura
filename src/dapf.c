@@ -134,6 +134,85 @@ static int dapf_init_t8110(const char *path, u64 base, int node)
     }
 }
 
+enum dapf_instance_type {
+    DAPF_INSTANCE_DART = 0x44415254,
+    DAPF_INSTANCE_DAPF = 0x44415046,
+    DAPF_INSTANCE_GAPF = 0x47415046,
+};
+
+struct dapf_instance {
+    u32 type;
+    u32 instance;
+    char name[8];
+} PACKED;
+
+static_assert(sizeof(struct dapf_instance) == 16, "Invalid DAPF instance size");
+
+static int dapf_preserve_t8132(const char *path, int index, int node, int *dart_path)
+{
+    u32 length;
+    const struct dapf_instance *instances = adt_getprop(adt, node, "instance", &length);
+
+    if (!instances || !length || length % sizeof(*instances) || index < 0 ||
+        (u32)index >= length / sizeof(*instances)) {
+        printf("dapf: Invalid T8132 instance metadata for %s\n", path);
+        return -1;
+    }
+
+    bool has_dart = false, has_dapf = false;
+    u32 count = length / sizeof(*instances);
+    for (u32 i = 0; i < count; i++) {
+        switch (instances[i].type) {
+            case DAPF_INSTANCE_DART:
+                has_dart = true;
+                break;
+            case DAPF_INSTANCE_DAPF:
+                has_dapf = true;
+                break;
+            case DAPF_INSTANCE_GAPF:
+                break;
+            default:
+                printf("dapf: Unknown T8132 instance type for %s\n", path);
+                return -1;
+        }
+        for (u32 j = 0; j < i; j++) {
+            if (instances[i].type == instances[j].type &&
+                instances[i].instance == instances[j].instance) {
+                printf("dapf: Duplicate T8132 instance for %s\n", path);
+                return -1;
+            }
+        }
+        u64 base, size;
+        if (adt_get_reg(adt, dart_path, "reg", i, &base, &size) < 0 || !size ||
+            base + size < base ||
+            (instances[i].type != DAPF_INSTANCE_DART &&
+             ((base & 0x3fff) || size != 0x4000))) {
+            printf("dapf: Invalid T8132 instance resource for %s\n", path);
+            return -1;
+        }
+    }
+
+    if (!has_dart) {
+        printf("dapf: Missing T8132 DART instance for %s\n", path);
+        return -1;
+    }
+
+    if (!has_dapf && instances[index].type == DAPF_INSTANCE_GAPF) {
+        /* Native PMP has GAPF only; its DAPF property does not create an APF. */
+        printf("dapf: No T8132 DAPF instance for %s; preserving filter state\n", path);
+        return 0;
+    }
+
+    if (instances[index].type != DAPF_INSTANCE_DAPF) {
+        printf("dapf: Selected T8132 resource is not DAPF for %s\n", path);
+        return -1;
+    }
+
+    /* Do not admit the legacy writer, even for a genuine T8132 DAPF bank. */
+    printf("dapf: T8132 DAPF programming is unsupported for %s; preserving filter state\n", path);
+    return -1;
+}
+
 int dapf_init(const char *path, int index)
 {
     int ret = -1;
@@ -143,6 +222,9 @@ int dapf_init(const char *path, int index)
         printf("dapf: Error getting DAPF %s node.\n", path);
         return -1;
     }
+
+    if (chip_id == T8132)
+        return dapf_preserve_t8132(path, index, node, dart_path);
 
     u32 pwr;
     if (!adt_getprop(adt, node, "clock-gates", &pwr))
