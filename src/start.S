@@ -6,6 +6,11 @@
 #define UTRSTAT 0x010
 #define UTXH 0x020
 
+/* struct boot_args (xnuboot.h); startup.c checks these offsets */
+#define BOOTARGS_PHYS_BASE     16
+#define BOOTARGS_MEM_SIZE      24
+#define BOOTARGS_TOP_OF_KDATA  32
+
 .extern _start_c
 .extern _stack_bot
 .extern _v_sp0_sync
@@ -69,6 +74,92 @@ _vectors_start:
 _start:
     mov x19, x0
 
+    /*
+     * Run from above the image we were chainloaded in (from m1n1-aurora 8bd67a82). Stage 1
+     * copies this stage, its payload and the boot_args to its own base and sets
+     * top_of_kernel_data to the end of that image. Its own footprint ended where iBoot placed
+     * live buffers of its own (on T8122 and T6030 the DCP __OS_LOG buffers start at that base +
+     * 0x120000), so a stage whose .data, .bss and stacks reach past that line shares memory with
+     * a running coprocessor. Copy the file part of this image to top_of_kernel_data, before any
+     * stack or .bss is touched, and continue there. The payload stays where stage 1 put it
+     * (relocated_from records the old base), and the heap starts after the moved image. Cores
+     * whose RVBAR iBoot locked to the old base still reset there, so the old reset vector is
+     * then rewritten to forward them to the new one (kboot keeps that page reserved).
+     *
+     * Only an ESP stage 2 (stage2_relocates) on an M1, M2 or M3 (Apple CPU parts 0x20-0x4f),
+     * the Macs m1n1-aurora moves on. Stay put if top_of_kernel_data is not above us or the moved
+     * image would not fit in RAM.
+     */
+    adrp x1, stage2_relocates
+    ldr w1, [x1, :lo12:stage2_relocates]
+    cbz w1, 3f
+    mrs x1, midr_el1
+    ubfx x2, x1, #24, #8
+    cmp x2, #0x61
+    b.ne 3f
+    ubfx x2, x1, #4, #12
+    sub x2, x2, #0x20
+    cmp x2, #0x30
+    b.hs 3f
+    adrp x20, _base
+    ldr x21, [x19, #BOOTARGS_TOP_OF_KDATA]
+    mov x1, #0xffff
+    add x21, x21, x1
+    and x21, x21, #0xffffffffffff0000
+    cmp x21, x20
+    b.ls 3f
+    ldr x22, [x19, #BOOTARGS_PHYS_BASE]
+    ldr x23, [x19, #BOOTARGS_MEM_SIZE]
+    add x22, x22, x23
+    adrp x23, _end
+    sub x23, x23, x20
+    add x24, x21, x23
+    cmp x24, x22
+    b.hs 3f
+    adrp x25, _file_end
+    sub x25, x25, x20
+    mov x1, x20
+    mov x2, x21
+    mov x3, x25
+1:
+    ldp x4, x5, [x1], #16
+    stp x4, x5, [x2], #16
+    subs x3, x3, #16
+    b.ne 1b
+    str x24, [x19, #BOOTARGS_TOP_OF_KDATA]
+    adrp x1, relocated_from
+    add x1, x1, :lo12:relocated_from
+    sub x1, x1, x20
+    str x20, [x1, x21]
+    /* old _vectors_start: ldr x16, 1f; br x16; 1: .quad new _vectors_start */
+    adrp x1, _vectors_start
+    add x1, x1, :lo12:_vectors_start
+    sub x2, x1, x20
+    add x2, x2, x21
+    movz w3, #0x0050
+    movk w3, #0x5800, lsl #16
+    str w3, [x1]
+    movz w3, #0x0200
+    movk w3, #0xd61f, lsl #16
+    str w3, [x1, #4]
+    str x2, [x1, #8]
+    dc cvau, x1
+    mov x1, x21
+    add x2, x21, x25
+2:
+    dc cvau, x1
+    add x1, x1, #64
+    cmp x1, x2
+    b.lo 2b
+    dsb ish
+    ic ialluis
+    dsb ish
+    isb
+    adr x1, 3f
+    sub x1, x1, x20
+    add x1, x1, x21
+    br x1
+3:
     mov w0, 'm'
     bl debug_putc
 

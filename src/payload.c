@@ -286,9 +286,33 @@ void do_enable_tso(void)
     msr(ACTLR_EL1, actlr);
 }
 
+/*
+ * Set by start.S when this stage moved itself above the chainloaded image:
+ * the payload is still after the image at the old base. In .data, because
+ * start.S writes it before .bss is cleared.
+ */
+u64 relocated_from __attribute__((section(".data"))) = 0;
+
+/*
+ * Read by start.S before anything else runs: only an ESP stage 2 moves, and only on M1, M2 and
+ * M3 (start.S checks the CPU part), where a stage 1 chainloads it to stage 1's own base.
+ */
+#ifdef ESP_STAGE2
+const u32 stage2_relocates = 1;
+#else
+const u32 stage2_relocates = 0;
+#endif
+
+static void *payload_start(void)
+{
+    if (relocated_from)
+        return (void *)(relocated_from + (_payload_start - _base));
+    return _payload_start;
+}
+
 bool payload_logo(void **custom_128, void **custom_256)
 {
-    void *p = _payload_start;
+    void *p = payload_start();
 
     *custom_128 = NULL;
     *custom_256 = NULL;
@@ -322,7 +346,7 @@ int payload_run(void)
     }
 
     if (!payload_scanned) {
-        void *p = _payload_start;
+        void *p = payload_start();
         while (p)
             p = load_one_payload(p, 0);
         payload_scanned = true;
