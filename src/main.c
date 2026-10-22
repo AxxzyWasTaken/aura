@@ -318,6 +318,10 @@ next_stage:
     if (!next_stage.entry) {
         panic("Nothing to do!\n");
     }
+    if (smp_has_pending_calls()) {
+        next_stage.entry = NULL;
+        panic("Refusing next stage while secondary callbacks are pending\n");
+    }
 
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
 

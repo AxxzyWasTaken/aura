@@ -168,26 +168,27 @@ static bool asc_mailbox_empty(u32 control)
 }
 
 /*
- * A started coprocessor with nothing to do may stop in its idle loop until a
- * mailbox message arrives. The external DCP is handed over like that while no
- * display is attached.
+ * The internal DCP is handed over running. The external DCP is handed over
+ * only in the state Linux adopts: started, but stopped in its idle loop, as it
+ * is left while no display is attached. Every other state is refused.
  */
-static bool asc_inherited_cpu_live(u32 control, u32 status, bool allow_idle)
+static bool asc_inherited_cpu_state(u32 control, u32 status, enum asc_inherited_state state)
 {
     if (!(control & ASC_CPU_CONTROL_START))
         return false;
-    if (!(status & ASC_CPU_STATUS_STOPPED))
-        return true;
-    return allow_idle && (status & ASC_CPU_STATUS_IDLE);
+    if (state == ASC_INHERITED_IDLE)
+        return (status & ASC_CPU_STATUS_STOPPED) && (status & ASC_CPU_STATUS_IDLE);
+    return !(status & ASC_CPU_STATUS_STOPPED);
 }
 
-bool asc_validate_inherited_dcp(asc_dev_t *asc, const char *name, bool allow_idle)
+bool asc_validate_inherited_dcp(asc_dev_t *asc, const char *name, enum asc_inherited_state state)
 {
     u32 control = read32(asc->cpu_base + ASC_CPU_CONTROL);
     u32 status = read32(asc->cpu_base + ASC_CPU_STATUS);
     printf("asc: %s inherited CPU control=0x%x status=0x%x\n", name, control, status);
-    if (!asc_inherited_cpu_live(control, status, allow_idle)) {
-        printf("asc: %s inherited CPU is not running\n", name);
+    if (!asc_inherited_cpu_state(control, status, state)) {
+        printf("asc: %s inherited CPU is not %s\n", name,
+               state == ASC_INHERITED_IDLE ? "started and idle" : "running");
         return false;
     }
 
@@ -207,8 +208,8 @@ bool asc_validate_inherited_dcp(asc_dev_t *asc, const char *name, bool allow_idl
     control = read32(asc->cpu_base + ASC_CPU_CONTROL);
     status = read32(asc->cpu_base + ASC_CPU_STATUS);
     printf("asc: %s inherited CPU recheck control=0x%x status=0x%x\n", name, control, status);
-    if (!asc_inherited_cpu_live(control, status, allow_idle)) {
-        printf("asc: %s inherited CPU stopped during mailbox check\n", name);
+    if (!asc_inherited_cpu_state(control, status, state)) {
+        printf("asc: %s inherited CPU changed state during mailbox check\n", name);
         return false;
     }
     return true;
