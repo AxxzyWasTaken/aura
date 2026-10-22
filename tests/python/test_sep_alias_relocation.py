@@ -27,8 +27,14 @@ typedef uint64_t u64;
 typedef uint32_t u32;
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
 #define ADT_GETPROP_ARRAY(a, n, p, v) adt_get((n), (p), (v), sizeof(v))
+#define ADT_GETPROP(a, n, p, v)       adt_get((n), (p), (v), sizeof(*(v)))
+#define ARRAY_SIZE(a)                 (sizeof(a) / sizeof((a)[0]))
+#define T8140                         0x8140
 static unsigned char blob[16384];
 static void *dt = blob;
+static size_t dt_bufsize = sizeof(blob);
+static u32 chip_id;
+static u64 mem_size_actual;
 static void *adt;
 static int scenario, reservations;
 static unsigned char lpol[] = {1, 2, 3, 4}, ibot[] = {5, 6, 7};
@@ -129,10 +135,16 @@ int main(int argc, char **argv)
         assert(!fdt_getprop(dt, fdt_path_offset(dt, "/soc/sep@0"), "local-policy-manifest", NULL));
         return 0;
     }
-    if (scenario == 10 || scenario == 11) { assert(status < 0); return 0; }
     assert(status == 0);
 
     int len, sep = fdt_path_offset(dt, "/soc/sep@0");
+    /* A manifest that cannot be published is logged and left out. */
+    if (scenario == 10 || scenario == 11) {
+        bool lpol_present = fdt_getprop(dt, sep, "local-policy-manifest", NULL) != NULL;
+        bool ibot_present = fdt_getprop(dt, sep, "iboot-manifest", NULL) != NULL;
+        assert(lpol_present == (scenario == 11) && ibot_present == (scenario == 10));
+        return 0;
+    }
     const fdt32_t *region = fdt_getprop(dt, sep, "memory-region", &len);
     assert(region && len == 4 && fdt32_to_cpu(*region) == 0x42);
     const char *name = fdt_getprop(dt, sep, "memory-region-names", &len);

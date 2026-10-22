@@ -11,6 +11,7 @@
 #include "string.h"
 #include "types.h"
 #include "utils.h"
+#include "xnuboot.h"
 
 #define CPU_START_OFF_S5L8960X 0x30000
 #define CPU_START_OFF_S8000    0xd4000
@@ -70,6 +71,29 @@ static struct {
     u64 flag;
 } cpu_stop_state[MAX_CPUS];
 
+u64 smp_started_mask;
+u64 smp_start_fail_mask;
+
+static int t8152_cpu_index(u64 mpidr)
+{
+    u32 core = mpidr & 0xff;
+    u32 cluster = (mpidr >> 8) & 0xff;
+
+    if (cluster > 1 || core >= 6)
+        return -1;
+    return cluster * 6 + core;
+}
+
+int smp_secondary_prepare(void)
+{
+    int cpu = t8152_cpu_index(mrs(MPIDR_EL1));
+
+    if (cpu < 0 || !in_el2())
+        return -1;
+    msr(TPIDR_EL2, cpu);
+    return cpu;
+}
+
 // Used from start.S to find the correct stack after the first entry
 struct smp_reset_stack {
     u64 mpidr;
@@ -84,11 +108,103 @@ extern u8 _vectors_start[0];
 extern u8 _stack_bot[0];
 int boot_cpu_idx SMP_SHARED = -1;
 u64 boot_cpu_mpidr SMP_SHARED = 0;
+static u64 installed_relay SMP_SHARED;
+
+static bool smp_old_vector_owned(u64 locked)
+{
+    u64 ro_start, ro_end;
+    u64 inherited_top = cur_boot_args.top_of_kernel_data;
+    u64 image_start = (u64)_base;
+    u64 image_end = (u64)_end;
+
+    if (memory_fw_ro_range(&ro_start, &ro_end) != 1 || !cur_boot_args.mem_size ||
+        cur_boot_args.phys_base > UINT64_MAX - cur_boot_args.mem_size ||
+        locked < cur_boot_args.phys_base ||
+        locked >= cur_boot_args.phys_base + cur_boot_args.mem_size || locked >= ro_start ||
+        locked >= inherited_top || (locked >= image_start && locked < image_end))
+        return false;
+
+    /* A retired m1n1 image has the same four vector slot tags and bare tail. */
+    u64 limit = min(ro_start, inherited_top);
+    limit = min(limit, locked + min((u64)16 * SZ_1M, UINT64_MAX - locked));
+    if (image_start > locked)
+        limit = min(limit, image_start);
+    if (limit - locked < 0x200 + sizeof("STACKBOT") - 1)
+        return false;
+    for (u64 off = 0; off <= 0x180; off += 0x80) {
+        if (read32(locked + off) != read32((u64)_vectors_start + off))
+            return false;
+    }
+    for (u64 p = locked + 0x200; p <= limit - (sizeof("STACKBOT") - 1); p += 8) {
+        if (!memcmp((const void *)p, "STACKBOT", sizeof("STACKBOT") - 1))
+            return true;
+    }
+    return false;
+}
+
+extern u64 relocated_from;
+
+/* Where a core whose RVBAR is locked to the pre-move base enters (start.S) */
+static u64 old_vectors_start(void)
+{
+    return relocated_from ? relocated_from + ((u64)_vectors_start - (u64)_base) : 0;
+}
+
+static int smp_prepare_rvbar(const struct cpu_info *cpu)
+{
+    u64 rvbar = read64(cpu->impl_reg);
+    u64 locked = rvbar & RVBAR_ADDR;
+    u64 target = (u64)_vectors_start;
+
+    if (locked == target || cpu_features->apple_sysregs_unlocked)
+        return 0;
+    /* A stage that moved above the chainloaded image keeps entry at its old base. */
+    if (relocated_from && locked == old_vectors_start())
+        return 0;
+    if (chip_id != T8140 || !(rvbar & RVBAR_LOCK)) {
+        printf("SMP: RVBAR 0x%lx differs from vector 0x%lx; refusing start\n", locked, target);
+        return -1;
+    }
+
+    int64_t distance = (int64_t)target - (int64_t)locked;
+    if ((distance & 3) || distance < -0x8000000 || distance > 0x7fffffc)
+        return -1;
+
+    u32 branch = 0x14000000 | ((distance / 4) & 0x03ffffff);
+    if (installed_relay == locked)
+        return read32(locked) == branch ? 0 : -1;
+    if (!smp_old_vector_owned(locked)) {
+        printf("SMP: RVBAR 0x%lx is not a verified retired image vector\n", locked);
+        return -1;
+    }
+    u64 page = ALIGN_DOWN(locked, get_page_size());
+    if (mmu_active())
+        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RW);
+    write32(locked, branch);
+    dc_cvac_range((void *)locked, sizeof(branch));
+    sysop("dsb sy");
+    ic_ivau_range((void *)locked, sizeof(branch));
+    sysop("dsb sy");
+    sysop("isb");
+    if (mmu_active())
+        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RX);
+
+    if (read32(locked) != branch) {
+        printf("SMP: RVBAR relay read-back failed at 0x%lx\n", locked);
+        return -1;
+    }
+    installed_relay = locked;
+    printf("SMP: installed RVBAR relay at 0x%lx -> 0x%lx (0x%x)\n", locked, target, branch);
+    return 0;
+}
 
 void smp_secondary_entry(void)
 {
     u64 mpidr = mrs(MPIDR_EL1) & 0xFFFFFF;
-    int index = target_cpu;
+    int index = chip_id == T8152 ? smp_id() : target_cpu;
+
+    if (chip_id == T8152)
+        mmu_init_secondary_local();
 
     // target_cpu identifies us during the initial start handshake, but may
     // be stale on an RVBAR re-entry after deep wfi
@@ -110,7 +226,8 @@ void smp_secondary_entry(void)
     else
         msr(TPIDR_EL1, index);
 
-    printf("  Index: %d (table: %p)\n\n", index, me);
+    if (chip_id != T8142 && chip_id != T8152)
+        printf("  Index: %d (table: %p)\n\n", index, me);
 
     me->mpidr = mpidr;
 
@@ -118,7 +235,7 @@ void smp_secondary_entry(void)
     me->flag++;
     sysop("dmb sy");
     u64 target;
-    if (!cpu_features->fast_ipi)
+    if (chip_id != T8152 && !cpu_features->fast_ipi)
         aic_write(AIC_IPI_MASK_SET, AIC_IPI_SELF); // we only use the "other" IPI
 
     while (1) {
@@ -155,12 +272,48 @@ void smp_secondary_prep_el3(void)
     return;
 }
 
-extern u64 relocated_from;
-
-/* Where a core whose RVBAR is locked to the pre-move base enters (start.S) */
-static u64 old_vectors_start(void)
+static u32 cpu_start_bit(int index, const struct cpu_info *cpu)
 {
-    return relocated_from ? relocated_from + ((u64)_vectors_start - (u64)_base) : 0;
+    /* T8142 has six E cores followed by four P cores, not four-core banks. */
+    if (chip_id == T8142)
+        return BIT(index);
+
+    return BIT(4 * cpu->cluster + cpu->core);
+}
+
+static bool t8142_prepare_reset_vector(u64 rvbar)
+{
+    u64 vector = rvbar & RVBAR_ADDR;
+
+    if (vector == (u64)_vectors_start)
+        return true;
+
+    /*
+     * Resident images can lock RVBAR at the load base or old header padding.
+     * The Mach-O header has already been consumed; reset needs executable
+     * code here. Only patch this image's header, never live code or arbitrary
+     * firmware memory. The relay disappears on the next reboot.
+     */
+    if ((vector & 0x3fff) || vector < (u64)_base || vector >= (u64)_vectors_start) {
+        printf("Unsupported T8142 reset vector 0x%lx\n", vector);
+        return false;
+    }
+
+    u32 branch = 0x14000000 | (((u64)_vectors_start - vector) >> 2);
+    if (read32(vector) == branch)
+        return true;
+
+    if (vector == (u64)_base && read32(vector) != 0xfeedfacf)
+        return false;
+
+    mmu_add_mapping(vector, vector, 0x4000, MAIR_IDX_NORMAL, PERM_RWX);
+    write32(vector, branch);
+    dc_cvac_range((void *)vector, sizeof(branch));
+    ic_ivau_range((void *)vector, sizeof(branch));
+    sysop("dsb sy");
+    sysop("isb");
+    mmu_add_mapping(vector, vector, 0x4000, MAIR_IDX_NORMAL, PERM_RX_EL0);
+    return read32(vector) == branch;
 }
 
 static int smp_start_cpu(int index, const struct cpu_info *cpu)
@@ -176,11 +329,11 @@ static int smp_start_cpu(int index, const struct cpu_info *cpu)
     if (spin_table[index].flag)
         return 0;
 
-    if (!cpu_features->apple_sysregs_unlocked &&
-        (read64(cpu->impl_reg) & RVBAR_ADDR) != (u64)_vectors_start &&
-        (read64(cpu->impl_reg) & RVBAR_ADDR) != old_vectors_start()) {
-        printf("Failed! \n    RVBAR (=0x%lx) is locked and differs from entry point (=0x%lx)\n",
-               read64(cpu->impl_reg) & RVBAR_ADDR, (u64)_vectors_start);
+    if (chip_id == T8142) {
+        if (!t8142_prepare_reset_vector(read64(cpu->impl_reg)))
+            return -1;
+    } else if (smp_prepare_rvbar(cpu)) {
+        return -1;
     }
 
     printf("Starting CPU %d (%d:%d:%d)... ", index, cpu->die, cpu->cluster, cpu->core);
@@ -205,7 +358,7 @@ static int smp_start_cpu(int index, const struct cpu_info *cpu)
 
     // Some kind of system level startup/status bit
     // Without this, IRQs don't work
-    write32(start_base + 0x4, 1 << (4 * cpu->cluster + cpu->core));
+    write32(start_base + 0x4, cpu_start_bit(index, cpu));
 
     // Actually start the core
     write32(start_base + 0x8 + 4 * cpu->cluster, 1 << cpu->core);
@@ -217,10 +370,11 @@ static int smp_start_cpu(int index, const struct cpu_info *cpu)
         udelay(1000);
     }
 
-    if (i >= 100)
+    if (i >= 100) {
         printf("Failed!\n");
-    else
+    } else {
         printf("  Started.\n");
+    }
 
     _reset_stack = dummy_stack + DUMMY_STACK_SIZE;
     _reset_stack_el1 = dummy_stack_el1 + DUMMY_STACK_SIZE;
@@ -252,7 +406,7 @@ static int smp_stop_cpu(int index, const struct cpu_info *cpu, bool deep_sleep)
         cpu_stop_state[index].pending = true;
 
         // Request CPU stop before the CPU enters its sleep routine.
-        write32(start_base + 0x0, (1U << (4 * cpu->cluster + cpu->core)));
+        write32(start_base + 0x0, cpu_start_bit(index, cpu));
         int ret = smp_call1(index, cpu_sleep, deep_sleep);
         if (ret && ret != SMP_TIMEOUT) {
             cpu_stop_state[index].pending = false;
@@ -305,8 +459,70 @@ static int smp_stop_cpu(int index, const struct cpu_info *cpu, bool deep_sleep)
     return 0;
 }
 
+static int smp_init_t8152(void)
+{
+    if (smp_initialized)
+        return 0;
+
+    int path[8];
+    int pmgr = adt_path_offset_trace(adt, "/arm-io/pmgr-child", path);
+    int cpus = adt_path_offset(adt, "/cpus");
+    if (!in_el2() || board_id != 0x24 || !adt_is_compatible(adt, 0, "J873gAP") ||
+        pmgr < 0 || cpus < 0 || !adt_is_compatible(adt, pmgr, "pmgr2,t8152"))
+        return -1;
+
+    u32 len;
+    const u16 *maps = adt_getprop(adt, pmgr, "reg-maps", &len);
+    if (!maps || len % 4)
+        return -1;
+    int reg_index = -1;
+    for (u32 i = 0; i < len / 2; i += 2) {
+        if (maps[i + 1] != 0x128)
+            continue;
+        if (reg_index >= 0)
+            return -1;
+        reg_index = maps[i];
+    }
+    u64 base, size;
+    if (reg_index < 0 || adt_get_reg(adt, path, "reg", reg_index, &base, &size) ||
+        size < 0x4010 || base != 0x300730000ULL)
+        return -1;
+
+    u64 present = 0;
+    int node = cpus;
+    ADT_FOREACH_CHILD(adt, node) {
+        u32 id, reg;
+        u64 impl[2];
+        if (ADT_GETPROP(adt, node, "cpu-id", &id) != sizeof(id) || id >= 12 ||
+            (present & BIT(id)) || ADT_GETPROP(adt, node, "reg", &reg) != sizeof(reg) ||
+            ADT_GETPROP_ARRAY(adt, node, "cpu-impl-reg", impl) != sizeof(impl) ||
+            t8152_cpu_index(reg) != (int)id || impl[1] < 8 || (impl[0] & 7))
+            return -1;
+        present |= BIT(id);
+        cpu_nodes[id] = node;
+        cpu_info[id] = (struct cpu_info){true, 0, (reg >> 8) & 0xff, reg & 0xff, impl[0]};
+    }
+    int boot_cpu = t8152_cpu_index(mrs(MPIDR_EL1));
+    if (present != 0xfff || boot_cpu < 0)
+        return -1;
+
+    boot_cpu_idx = boot_cpu;
+    boot_cpu_mpidr = mrs(MPIDR_EL1);
+    msr(TPIDR_EL2, boot_cpu_idx);
+    spin_table[boot_cpu_idx].mpidr = boot_cpu_mpidr & 0xffffff;
+    spin_table[boot_cpu_idx].flag = 1;
+    cpu_start_base = base + 0x4000;
+    wfe_mode = true;
+    smp_initialized = true;
+    printf("SMP: T8152, 12 CPUs, boot CPU %d, WFE/SEV dispatch\n", boot_cpu_idx);
+    return 0;
+}
+
 int smp_init(void)
 {
+    if (chip_id == T8152)
+        return smp_init_t8152();
+
     if (smp_initialized)
         return 0;
 
@@ -364,7 +580,6 @@ int smp_init(void)
         case T8132:
         case T8140:
         case T8142:
-        case T8152:
             cpu_start_off = CPU_START_OFF_T8112;
             break;
         case T6020:
@@ -405,34 +620,33 @@ int smp_init(void)
         cpu_nodes[cpu_id] = node;
     }
 
-    /* The boot cpu id never changes once set */
-    if (boot_cpu_idx == -1) {
-        /* Figure out which CPU we are on by seeing which CPU is running */
-
-        /* This seems silly but it's what XNU does */
-        for (int i = 0; i < MAX_CPUS; i++) {
-            int cpu_node = cpu_nodes[i];
-            if (!cpu_node)
-                continue;
-            const char *state = adt_getprop(adt, cpu_node, "state", NULL);
-            if (!state)
-                continue;
-            if (strcmp(state, "running") == 0) {
-                boot_cpu_idx = i;
-                boot_cpu_mpidr = mrs(MPIDR_EL1);
-                if (in_el2())
-                    msr(TPIDR_EL2, boot_cpu_idx);
-                else
-                    msr(TPIDR_EL1, boot_cpu_idx);
-                break;
+    int running_cpu = -1;
+    for (int i = 0; i < MAX_CPUS; i++) {
+        int cpu_node = cpu_nodes[i];
+        if (!cpu_node)
+            continue;
+        const char *state = adt_getprop(adt, cpu_node, "state", NULL);
+        if (state && !strcmp(state, "running")) {
+            if (running_cpu >= 0) {
+                printf("SMP: multiple running CPUs in ADT\n");
+                return -1;
             }
+            running_cpu = i;
         }
     }
-
-    if (boot_cpu_idx == -1) {
-        printf(
-            "Could not find currently running CPU in cpu table, can't start other processors!\n");
+    if (running_cpu < 0) {
+        printf("SMP: no running CPU in ADT\n");
         return -1;
+    }
+    if (boot_cpu_idx >= 0 && boot_cpu_idx != running_cpu)
+        return -1;
+    if (boot_cpu_idx == -1) {
+        boot_cpu_idx = running_cpu;
+        boot_cpu_mpidr = mrs(MPIDR_EL1);
+        if (in_el2())
+            msr(TPIDR_EL2, boot_cpu_idx);
+        else
+            msr(TPIDR_EL1, boot_cpu_idx);
     }
 
     spin_table[boot_cpu_idx].mpidr = mrs(MPIDR_EL1) & 0xFFFFFF;
@@ -466,7 +680,18 @@ int smp_init(void)
         cpu_info[i].cluster = FIELD_GET(CPU_REG_CLUSTER, reg);
         cpu_info[i].die = FIELD_GET(CPU_REG_DIE, reg);
         cpu_info[i].impl_reg = cpu_impl_reg[0];
+
+        /* Publish a permanent stack before the first reset, including late entries. */
+        if (chip_id == T8142 && i != boot_cpu_idx) {
+            /* ADT reg omits Aff2, which is 1 on the M5 performance cluster. */
+            smp_reset_stacks[i].mpidr = (reg & 0xFFFFFF) | (cpu_info[i].cluster ? BIT(16) : 0);
+            smp_reset_stacks[i].stack = (u64)secondary_stacks[i] + SECONDARY_STACK_SIZE;
+        }
     }
+
+    if (chip_id == T8142)
+        wfe_mode = true;
+    sysop("dsb sy");
 
     cpu_start_base = pmgr_reg + cpu_start_off;
     smp_initialized = true;
@@ -474,21 +699,83 @@ int smp_init(void)
     return 0;
 }
 
+static void smp_start_t8152(void)
+{
+    if (!smp_initialized || smp_start_fail_mask)
+        return;
+
+    extern u8 _smp_shared_start[], _smp_shared_end[];
+    dc_cvac_range((void *)_base, _rodata_end - (char *)_base);
+    dc_cvac_range(&chip_id, sizeof(chip_id));
+    dc_cvac_range(&cpu_features, sizeof(cpu_features));
+    dc_cvac_range(_smp_shared_start, _smp_shared_end - _smp_shared_start);
+    mmu_publish_secondary();
+
+    for (int i = 0; i < 12; i++) {
+        if (i == boot_cpu_idx || spin_table[i].flag)
+            continue;
+        const struct cpu_info *cpu = &cpu_info[i];
+        u64 rvbar = read64(cpu->impl_reg);
+        if ((rvbar & RVBAR_LOCK) && (rvbar & RVBAR_ADDR) != (u64)_vectors_start) {
+            smp_start_fail_mask |= BIT(i);
+            break;
+        }
+        dc_civac_range(secondary_stacks[i], SECONDARY_STACK_SIZE);
+        if (!(rvbar & RVBAR_LOCK))
+            write64(cpu->impl_reg, (u64)_vectors_start);
+        sysop("dsb sy");
+        /* T8152ACC setCoreOnline/wakeCore preserve other released cores. */
+        set32(cpu_start_base + 4, BIT(i));
+        set32(cpu_start_base + 8 + 4 * cpu->cluster, BIT(cpu->core));
+        sysop("dsb sy");
+        sysop("sev");
+        unsigned int waited;
+        for (waited = 0; waited < 1000; waited++) {
+            sysop("dmb sy");
+            if (spin_table[i].flag)
+                break;
+            udelay(1000);
+        }
+        if (waited == 1000) {
+            smp_start_fail_mask |= BIT(i);
+            break;
+        }
+        smp_started_mask |= BIT(i);
+    }
+    printf("SMP: T8152 started 0x%lx failed 0x%lx\n", smp_started_mask, smp_start_fail_mask);
+}
+
 int smp_start_secondaries(void)
 {
+    if (chip_id == T8152) {
+        smp_start_t8152();
+        return smp_start_fail_mask ? -1 : 0;
+    }
     printf("Starting secondary CPUs...\n");
 
     if (!smp_initialized)
         return -1;
 
-    int ret = 0;
+    if (cpu_features->unsafe_wfi)
+        smp_set_wfe_mode(true);
+
+    bool failed = false;
     for (int i = 0; i < MAX_CPUS; i++) {
         struct cpu_info *cpu = &cpu_info[i];
 
-        if (!cpu->valid)
+        if (!cpu->valid) {
+            if (chip_id == T8140 && cpu_nodes[i]) {
+                printf("SMP: ADT CPU %d has no valid implementation register\n", i);
+                failed = true;
+            }
             continue;
+        }
 
         if (i == boot_cpu_idx) {
+            if (chip_id != T8142 && smp_prepare_rvbar(cpu)) {
+                printf("SMP: boot CPU RVBAR check failed\n");
+                return -1;
+            }
             // Check if already locked
             if (FIELD_GET(RVBAR_LOCK, read64(cpu->impl_reg)))
                 continue;
@@ -501,13 +788,18 @@ int smp_start_secondaries(void)
         }
 
         if (smp_start_cpu(i, cpu))
-            ret = -1;
+            failed = true;
     }
-    return ret;
+
+    return failed ? -1 : 0;
 }
 
 int smp_stop_secondaries(bool deep_sleep)
 {
+    if (chip_id == T8152) {
+        printf("SMP: T8152 power-off is not supported; reset the target\n");
+        return -1;
+    }
     printf("Stopping secondary CPUs...\n");
 
     if (!smp_initialized)
@@ -530,6 +822,11 @@ int smp_stop_secondaries(bool deep_sleep)
 
 void smp_send_ipi(int cpu)
 {
+    if (chip_id == T8152) {
+        sysop("dsb sy");
+        sysop("sev");
+        return;
+    }
     if (cpu >= MAX_CPUS)
         return;
 
@@ -602,6 +899,20 @@ int smp_wait(int cpu, u64 *retval)
 
 void smp_set_wfe_mode(bool new_mode)
 {
+    if (cpu_features->unsafe_wfi && !new_mode) {
+        printf("SMP: this CPU family requires WFE mode\n");
+        return;
+    }
+    if (chip_id == T8152 && !new_mode)
+        return;
+    /* T8142 secondaries remain in the architectural WFE/SEV dispatch loop. */
+    if (chip_id == T8142) {
+        wfe_mode = true;
+        sysop("dsb sy");
+        sysop("sev");
+        return;
+    }
+
     wfe_mode = new_mode;
     sysop("dsb sy");
 
@@ -614,7 +925,7 @@ void smp_set_wfe_mode(bool new_mode)
 
 bool smp_is_alive(int cpu)
 {
-    if (cpu >= MAX_CPUS)
+    if (cpu < 0 || cpu >= MAX_CPUS)
         return false;
 
     return spin_table[cpu].flag;
@@ -622,7 +933,7 @@ bool smp_is_alive(int cpu)
 
 uint64_t smp_get_mpidr(int cpu)
 {
-    if (cpu >= MAX_CPUS)
+    if (cpu < 0 || cpu >= MAX_CPUS)
         return 0;
 
     return spin_table[cpu].mpidr;
@@ -630,10 +941,10 @@ uint64_t smp_get_mpidr(int cpu)
 
 u64 smp_get_release_addr(int cpu)
 {
-    struct spin_table *target = &spin_table[cpu];
-
-    if (cpu >= MAX_CPUS)
+    if (cpu < 0 || cpu >= MAX_CPUS)
         return 0;
+
+    struct spin_table *target = &spin_table[cpu];
 
     target->args[0] = 0;
     target->args[1] = 0;

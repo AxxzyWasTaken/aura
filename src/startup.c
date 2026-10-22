@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h"
+
 #include "adt.h"
+#include "boot_options.h"
 #include "chickens.h"
 #include "dockchannel_uart.h"
 #include "exception.h"
@@ -182,6 +185,13 @@ void _start_c(void *boot_args, void *base)
     memset64(_bss_start, 0, _bss_end - _bss_start);
     boot_args_addr = (u64)boot_args;
     memcpy(&cur_boot_args, boot_args, sizeof(cur_boot_args));
+    size_t command_capacity = cur_boot_args.revision == 1   ? CMDLINE_LENGTH_RV1
+                              : cur_boot_args.revision == 2 ? CMDLINE_LENGTH_RV2
+                                                            : CMDLINE_LENGTH_RV3;
+    boot_options_init(cur_boot_args.rv3.cmdline, command_capacity);
+#ifdef ESP_STAGE2
+    boot_options_set_stage1(false);
+#endif
 
     adt =
         (void *)(((u64)cur_boot_args.devtree) - cur_boot_args.virt_base + cur_boot_args.phys_base);
@@ -236,15 +246,28 @@ void _start_c(void *boot_args, void *base)
 /* Secondary SMP core boot */
 void _cpu_reset_c(void *stack)
 {
-    if (!is_boot_cpu())
-        uart_puts("RVBAR entry on secondary CPU");
-    else
-        uart_puts("RVBAR entry on primary CPU");
+    if (chip_id == T8152 && !is_boot_cpu()) {
+        if (smp_secondary_prepare() < 0)
+            while (1)
+                sysop("wfe");
+        init_cpu();
+        exception_initialize();
+        smp_secondary_entry();
+        return;
+    }
+    bool quiet = chip_id == T8142 && !is_boot_cpu();
+    if (!quiet) {
+        if (!is_boot_cpu())
+            uart_puts("RVBAR entry on secondary CPU");
+        else
+            uart_puts("RVBAR entry on primary CPU");
 
-    printf("\n  Stack base: %p\n", stack);
-    printf("  MPIDR: 0x%lx\n", mrs(MPIDR_EL1));
+        printf("\n  Stack base: %p\n", stack);
+        printf("  MPIDR: 0x%lx\n", mrs(MPIDR_EL1));
+    }
     init_cpu();
-    printf("  Running in EL%lu\n\n", mrs(CurrentEL) >> 2);
+    if (!quiet)
+        printf("  Running in EL%lu\n\n", mrs(CurrentEL) >> 2);
 
     exception_initialize();
 

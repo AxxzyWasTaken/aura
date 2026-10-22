@@ -7,6 +7,7 @@
 
 #include "adt.h"
 #include "aic.h"
+#include "boot_options.h"
 #include "cpufreq.h"
 #include "display.h"
 #include "exception.h"
@@ -22,11 +23,14 @@
 #include "pmgr.h"
 #include "sep.h"
 #include "smp.h"
+#include "stage1_config.h"
+#include "stage1_proxy.h"
 #include "string.h"
 #include "tps6598x.h"
 #include "uart.h"
 #include "uartproxy.h"
 #include "usb.h"
+#include "usb_cdc.h"
 #include "utils.h"
 #include "wdt.h"
 #include "stage1_config.h"
@@ -73,8 +77,30 @@ void get_device_info(void)
 void run_actions(void)
 {
     bool usb_up = false;
+    enum stage1_proxy_result window_result = STAGE1_PROXY_TIMEOUT;
+    enum stage1_payload_action payload_action;
+
+#ifndef J613_ESP_STAGE1
+    /* J613 Stage 1 runs its own USB window after the board checks below. */
+    u32 window_ms = stage1_config_window_ms();
+    if (window_ms && !m1n1_proxy_enabled()) {
+        window_result = uartproxy_wait_stage1(window_ms);
+        if (window_result == STAGE1_PROXY_CDC || window_result == STAGE1_PROXY_KIS) {
+            printf("Stage 1: host request received\n");
+            fb_set_active(true);
+            uartproxy_run_presynced();
+            while (!next_stage.entry)
+                uartproxy_run(NULL);
+            return;
+        }
+        printf("Stage 1: proxy window ended\n");
+    }
+#endif
 
 #ifdef J613_ESP_STAGE1
+    /* The board and configuration checks fall back before any payload is checked. */
+    payload_action =
+        stage1_proxy_payload_action(window_result, false, usb_cdc_ready(), !usb_cdc_owns_carrier());
     const char *target = adt_getprop(adt, 0, "target-type", NULL);
     /* Stage 1 only chainloads; stage 2 applies each board's hardware gates. */
     bool board = target && (!strcmp(target, "J613") || !strcmp(target, "J615"));
@@ -125,7 +151,7 @@ void run_actions(void)
         printf("Boot policy: sip0 = %ld\n", lp_sip0);
     }
 
-    if (!cur_boot_args.video.display && lp_sip0 == 127) {
+    if (chip_id != T8140 && !cur_boot_args.video.display && lp_sip0 == 127) {
         printf("Bringing up USB for early debug...\n");
 
         usb_init();
@@ -159,9 +185,15 @@ void run_actions(void)
 #endif
 #endif
 
-    printf("Checking for payloads...\n");
+    if (m1n1_proxy_enabled())
+        printf("m1n1-proxy: stage 1 payload chainload disabled\n");
+    else
+        printf("Checking for payloads...\n");
 
-    if (payload_run() == 0) {
+    bool payload_valid = !m1n1_proxy_enabled() && payload_run() == 0;
+    payload_action = stage1_proxy_payload_action(window_result, payload_valid, usb_cdc_ready(),
+                                                 !usb_cdc_owns_carrier());
+    if (payload_action == STAGE1_PAYLOAD_NATIVE) {
         printf("Valid payload found\n");
         return;
     }
@@ -176,12 +208,15 @@ proxy_fallback:
     printf("\nJ613 Stage 1: could not start Linux from the EFI partition.\n"
            "  Needs: MacBook Air M3 (13\" J613; 15\" J615 experimental), this volume's\n"
            "  macOS exactly 26.6.2,\n"
-           "  and the stage-2 file named in this stage 1 (fill_stage1_config.py --check).\n"
+           "  and the stage-2 file named in this stage 1 (fill_j613_stage1_config.py).\n"
            "  Hold the power button to shut down, then hold it again to choose another system.\n");
 #endif
 
+    if (payload_action == STAGE1_PAYLOAD_HALT)
+        panic("Stage 1: no safe proxy carrier after CDC failure\n");
+
 #ifndef BRINGUP
-    if (!usb_up) {
+    if (!usb_up && !m1n1_debug_enabled()) {
         usb_init();
         usb_iodev_init();
     }
@@ -189,6 +224,35 @@ proxy_fallback:
 
     printf("Running proxy...\n");
 
+    uartproxy_run(NULL);
+}
+
+static void j873g_run_proxy(void)
+{
+    u32 model_len = 0, target_len = 0;
+    const char *model = adt_getprop(adt, 0, "model", &model_len);
+    const char *target = adt_getprop(adt, 0, "target-type", &target_len);
+
+    if (board_id != 0x24 || !model || model_len != sizeof("Mac18,5") ||
+        memcmp(model, "Mac18,5", sizeof("Mac18,5")) || !target ||
+        target_len != sizeof("J873g") || memcmp(target, "J873g", sizeof("J873g")))
+        panic("Unsupported T8152 board\n");
+
+    /* Adopt firmware power and USB state. Only the qualified display route
+     * may be initialized here; secondary CPUs remain parked for the proxy. */
+    printf("J873g: KIS bring-up with native SMP\n");
+    mmu_init();
+    wdt_disable();
+    if (smp_init() < 0)
+        panic("Unsupported T8152 CPU topology\n");
+#ifdef USE_FB
+    if (display_init() < 0)
+        printf("display: initialization failed, continuing with firmware framebuffer\n");
+    fb_init(false);
+    fb_display_logo();
+    fb_set_active(true);
+#endif
+    printf("Initialization complete. Running proxy...\n");
     uartproxy_run(NULL);
 }
 
@@ -204,19 +268,29 @@ void m1n1_main(void)
 
     heapblock_init();
 
+    if (chip_id == T8152) {
+        j873g_run_proxy();
+        goto next_stage;
+    }
+
 #ifndef BRINGUP
     if (supports_gxf())
         gxf_init();
-    mcc_init();
+    if (mcc_init() && chip_id == T8140)
+        panic("T8140 MCC initialization failed\n");
     mmu_init();
     aic_init();
     smp_init();
 #endif
     wdt_disable();
 #ifndef BRINGUP
-    pmgr_init();
+    if (pmgr_init() && chip_id == T8140)
+        panic("T8140 PMGR initialization failed\n");
 #ifdef USE_DEBUG_USB
     tps6598x_enable_debugusb();
+#else
+    if (m1n1_debug_enabled())
+        tps6598x_enable_debugusb();
 #endif
 #ifdef USE_FB
     display_init();
@@ -240,17 +314,30 @@ void m1n1_main(void)
 
     run_actions();
 
+next_stage:
     if (!next_stage.entry) {
         panic("Nothing to do!\n");
     }
 
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
 
-    nvme_shutdown();
+    if (chip_id != T8152 && !nvme_shutdown()) {
+        printf("NVMe handoff failed; returning to proxy\n");
+        uartproxy_run(NULL);
+        panic("NVMe handoff failed\n");
+    }
+    usb_cdc_cleanup();
     exception_shutdown();
 #ifndef BRINGUP
-    usb_iodev_shutdown();
-    display_shutdown(DCP_SLEEP_IF_EXTERNAL);
+    if (chip_id != T8152) {
+        usb_iodev_shutdown();
+        /* Its firmware may still use memory the next stage will reuse. */
+        if (display_shutdown(DCP_SLEEP_IF_EXTERNAL) < 0) {
+            printf("Display handoff failed; returning to proxy\n");
+            uartproxy_run(NULL);
+            panic("Display handoff failed\n");
+        }
+    }
 #ifdef USE_FB
     fb_shutdown(next_stage.restore_logo);
 #endif

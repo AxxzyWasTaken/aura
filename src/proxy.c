@@ -17,6 +17,7 @@
 #include "mcc.h"
 #include "memory.h"
 #include "nvme.h"
+#include "payload.h"
 #include "pcie.h"
 #include "pmgr.h"
 #include "smp.h"
@@ -26,6 +27,7 @@
 #include "uart.h"
 #include "uartproxy.h"
 #include "usb.h"
+#include "usb_cdc.h"
 #include "utils.h"
 #include "xnuboot.h"
 
@@ -34,6 +36,8 @@
 
 void *rust_read_gigalocker(size_t *);
 void rust_free_gigalocker(void *, size_t);
+
+_Static_assert(sizeof(struct midr_part_features) == 20, "proxy CPU features ABI changed");
 
 int proxy_process(ProxyRequest *request, ProxyReply *reply)
 {
@@ -281,6 +285,8 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_IC_IVAU:
             ic_ivau_range((void *)request->args[0], request->args[1]);
+            sysop("dsb sy");
+            sysop("isb");
             break;
         case P_DC_IVAC:
             dc_ivac_range((void *)request->args[0], request->args[1]);
@@ -299,6 +305,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_DC_CVAC:
             dc_cvac_range((void *)request->args[0], request->args[1]);
+            sysop("dsb sy");
             break;
         case P_DC_CVAU:
             dc_cvau_range((void *)request->args[0], request->args[1]);
@@ -430,6 +437,11 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_KBOOT_SET_UBOOT:
             reply->retval = kboot_set_uboot((void *)request->args[0], (void *)request->args[1]);
             break;
+        case P_KBOOT_BOOT_STORAGE:
+            if (payload_boot_storage((const char *)request->args[0]) == 0)
+                return 1;
+            reply->status = S_ERROR;
+            break;
 
         case P_PMGR_POWER_ENABLE:
             reply->retval = pmgr_power_enable(request->args[0]);
@@ -470,6 +482,15 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
 
         case P_USB_IODEV_VUART_SETUP:
             usb_iodev_vuart_setup(request->args[0]);
+            break;
+
+        case P_CDC_SCHEDULE:
+            if (request->args[0] > 15000 || request->args[1] || request->args[2] > 7 ||
+                usb_cdc_schedule(request->args[0], request->args[1], request->args[2]))
+                reply->status = S_ERROR;
+            break;
+        case P_CDC_STATUS:
+            reply->retval = usb_cdc_status();
             break;
 
         case P_TUNABLES_APPLY_GLOBAL:
@@ -595,17 +616,18 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
 
         case P_PCIE_INIT:
-            pcie_init();
+            reply->retval = pcie_init();
             break;
         case P_PCIE_SHUTDOWN:
-            pcie_shutdown();
+            reply->retval = pcie_shutdown();
             break;
 
         case P_NVME_INIT:
             reply->retval = nvme_init();
             break;
         case P_NVME_SHUTDOWN:
-            nvme_shutdown();
+            if (!nvme_shutdown())
+                reply->status = S_ERROR;
             break;
         case P_NVME_READ:
             reply->retval = nvme_read(request->args[0], request->args[1], (void *)request->args[2]);
@@ -625,7 +647,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             reply->retval = display_configure((char *)request->args[0]);
             break;
         case P_DISPLAY_SHUTDOWN:
-            display_shutdown(request->args[0]);
+            reply->retval = display_shutdown(request->args[0]);
             break;
         case P_DISPLAY_START_DCP:
             display_start_dcp();
@@ -638,7 +660,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             reply->retval = dapf_init_all();
             break;
         case P_DAPF_INIT:
-            reply->retval = dapf_init((const char *)request->args[0], 1);
+            reply->retval = dapf_init((const char *)request->args[0], request->args[1]);
             break;
 
         case P_CPUFREQ_INIT:

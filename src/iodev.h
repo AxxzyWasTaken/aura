@@ -30,6 +30,8 @@ struct iodev_ops {
     bool (*can_write)(void *opaque);
     ssize_t (*read)(void *opaque, void *buf, size_t length);
     ssize_t (*write)(void *opaque, const void *buf, size_t length);
+    ssize_t (*write_nonblocking)(void *opaque, const void *buf, size_t length);
+    ssize_t (*write_atomic)(void *opaque, const void *buf, size_t length);
     ssize_t (*queue)(void *opaque, const void *buf, size_t length);
     void (*flush)(void *opaque);
     void (*handle_events)(void *opaque);
@@ -50,6 +52,8 @@ ssize_t iodev_can_read(iodev_id_t id);
 bool iodev_can_write(iodev_id_t id);
 ssize_t iodev_read(iodev_id_t id, void *buf, size_t length);
 ssize_t iodev_write(iodev_id_t id, const void *buf, size_t length);
+ssize_t iodev_write_nonblocking(iodev_id_t id, const void *buf, size_t length);
+ssize_t iodev_write_atomic(iodev_id_t id, const void *buf, size_t length);
 ssize_t iodev_queue(iodev_id_t id, const void *buf, size_t length);
 void iodev_flush(iodev_id_t id);
 void iodev_handle_events(iodev_id_t id);
@@ -57,6 +61,7 @@ void iodev_lock(iodev_id_t id);
 void iodev_unlock(iodev_id_t id);
 
 void iodev_console_write(const void *buf, size_t length);
+void iodev_console_rewind(iodev_id_t id);
 void iodev_console_kick(void);
 void iodev_console_flush(void);
 
