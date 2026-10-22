@@ -148,7 +148,7 @@ static int smp_prepare_rvbar(const struct cpu_info *cpu)
     u64 locked = rvbar & RVBAR_ADDR;
     u64 target = (u64)_vectors_start;
 
-    if (locked == target || (!(rvbar & RVBAR_LOCK) && cpu_features->apple_sysregs_unlocked))
+    if (locked == target || cpu_features->apple_sysregs_unlocked)
         return 0;
     /* start.S moved this image and left a forwarder to target at the old reset vector. */
     if (relocated_from && locked == relocated_from + (target - (u64)_base))
