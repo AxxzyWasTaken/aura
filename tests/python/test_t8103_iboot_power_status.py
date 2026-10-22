@@ -63,7 +63,6 @@ def unit():
         function(disp, "u64 display_mode_fb_size("),
         function(disp, "static void display_choose_timing_mode("),
         function(disp, "static void display_choose_color_mode("),
-        function(disp, "static bool display_t6030_hands_off("),
         function(disp, "int display_parse_mode("),
         function(disp, "int display_configure("),
     ))
