@@ -60,6 +60,20 @@
  * nodes stay "disabled": only a kernel that sees apple,t8122-handoff may enable them, and a T8122
  * kernel device tree without display nodes is normal. No T8122 PMP is handed off here.
  *
+ * T6031 (M3 Max, J514C/J516C only; nothing at all on another board or chip, so not on a T6034):
+ * the T8122 handoff with T6031 values, armed only by the boot.bin config line
+ * chosen.asahi,t6031-dcp=1, as on T6030 and T8122, until it has run on a Max. The kernel decides
+ * whether to take the display over (its display path is off by default and enabled per boot on
+ * its command line), so the handoff must be harmless when ignored: the nodes stay disabled and
+ * only the marker and the memory description are added. On every boot, armed or not, the __OS_LOG
+ * buffers of dcp and dcpext0..3, taken from the ADT, are reserved. Armed, the DCP, DART and display
+ * power state are read and checked as on T8122, against the T6031 addresses (the display block sits
+ * at 0x3_8400_0000), and only with every check passing is dart-dcp locked and the handoff published
+ * with marker apple,t6031-handoff. The DCP image is not pinned here: apple,firmware-uuid is the
+ * running image's ADT uuid, and the kernel's board record decides whether it knows that image. No
+ * ADT description is logged (the ADT reaches Linux whole, and the log ring is 16K); the DART stream
+ * registers are.
+ *
  * Fail-soft: dt_set_display_handoff() always returns 0; a failed check is logged and changes
  * nothing. Transactional: DT edits are made on a scratch copy that replaces the DT only if every
  * step succeeded. The __OS_LOG reservations and the armed handoff are separate transactions.
@@ -205,7 +219,10 @@ struct dcp_soc {
     bool adt_psreg;     /* the display power state is what /arm-io/dcp's ADT clock-gates name */
     bool fw25;          /* exact J613 25G83 profile */
     bool ext;           /* T6030 dcpextN memory and dispextN DART handoffs */
-    const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only */
+    bool board_gate;    /* nothing at all unless chip_id is .chip and the root is one of .boards */
+    bool any_uuid;      /* no image pinned: the running image's ADT uuid is published */
+    bool log_streams;   /* log the DART stream registers, without the ADT description */
+    const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only (unless any_uuid) */
     u32 os_fw;          /* enum fw_version the kernel's DCP interface is written for */
     const char *os_fw_name;
     /* Nonzero: the ADT must say the same. Zero: taken from the ADT. */
@@ -312,7 +329,40 @@ static bool dcp25_selected(void *dt)
     return profile && len == 4 && fdt32_ld(profile) == 1;
 }
 
-static const struct dcp_soc *const dcp_socs[] = {&dcp_soc_t6030, &dcp_soc_t8122};
+/*
+ * T6031 (M3 Max J514C/J516C). The display block is T6030's moved to 0x3_8400_0000: dcp, dart-dcp
+ * and dart-disp0 are checked against these addresses, both DARTs' DVA window against T6030's.
+ * pmgr_disp_cpu is ps_disp_cpu of t6031-pmgr.dtsi; the display power state itself is read from
+ * the PMGR devices /arm-io/dcp's ADT clock-gates name. Segments come from the ADT, as on T8122.
+ */
+static const char *const dcp_boards_t6031[] = {"apple,j514c", "apple,j516c", NULL};
+
+static const struct dcp_soc dcp_soc_t6031 = {
+    .name = "T6031",
+    .chip = T6031,
+    .compat = "apple,t6031",
+    .boards = dcp_boards_t6031,
+    .boards_desc = "J514C/J516C",
+    .dcp_compat = "apple,t6031-dcp",
+    .disp_compat = "apple,t6031-display-subsystem",
+    .marker = "apple,t6031-handoff",
+    .optin = "asahi,t6031-dcp",
+    .oslog_always = true,
+    .adt_psreg = true,
+    .board_gate = true,
+    .any_uuid = true,
+    .log_streams = true,
+    .os_fw = V14_7,
+    .os_fw_name = "14.7",
+    .coproc = 0x386c00000UL,
+    .dart_dcp = 0x38530c000UL,
+    .dart_disp = 0x385304000UL,
+    .vm_base = DCP6_DART_VM_BASE,
+    .vm_size = DCP6_DART_VM_SIZE,
+    .pmgr_disp_cpu = 0x2922802a0UL,
+};
+
+static const struct dcp_soc *const dcp_socs[] = {&dcp_soc_t6030, &dcp_soc_t8122, &dcp_soc_t6031};
 
 struct dcp6_seg {
     u64 phys;
@@ -358,6 +408,7 @@ static struct {
     bool segs_ok;     /* iop-dcp-nub segments parsed and checked */
     struct dcp6_seg segs[DCP6_SEGS_MAX];
     struct dcp6_sid sid[3]; /* dcp SID 5, display SID 0, piodma SID 4 */
+    char uuid[40];          /* the DCP image the handoff publishes, once checked */
 } dcp6;
 
 /* ---- small helpers ---- */
@@ -444,6 +495,20 @@ static bool dcp6_seg_name_is(const char *names, u32 len, int idx, const char *wa
     size_t n = strlen(want);
     return i + n <= len && !memcmp(names + i, want, n) &&
            (i + n == len || names[i + n] == ';' || names[i + n] == 0);
+}
+
+/* An ADT uuid string: 8-4-4-4-12 hexadecimal digits and its NUL, exactly */
+static bool dcp6_is_uuid(const char *s, u32 len)
+{
+    if (!s || len != 37 || s[36])
+        return false;
+    for (int i = 0; i < 36; i++) {
+        char c = s[i];
+        bool hex = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
+        if ((i == 8 || i == 13 || i == 18 || i == 23) ? c != '-' : !hex)
+            return false;
+    }
+    return true;
 }
 
 /* DART address of a segment's remap: the 36-bit DVA */
@@ -1335,7 +1400,7 @@ static void dcp6_check_hw(void)
     dlog("CPU_CONTROL 0x%x (%s) STATUS 0x%x; PROTECT dart-dcp 0x%x dart-disp0 0x%x\n", ctl,
          dcp6.dcp_running ? "running" : "NOT running", status, prot_dcp, prot_disp);
 
-    if (soc->describe) {
+    if (soc->describe || soc->log_streams) {
         dcp6_describe_streams("dart-dcp", dcp6.dart_dcp);
         dcp6_describe_streams("dart-disp0", dcp6.dart_disp);
     }
@@ -1348,7 +1413,7 @@ static void dcp6_check_hw(void)
         dlog("DCP not running, leaving dart-dcp unlocked\n");
         return;
     }
-    if (!soc->uuid) {
+    if (!soc->uuid && !soc->any_uuid) {
         dlog("dry run: no %s DCP firmware image is pinned, leaving dart-dcp unlocked\n", soc->name);
         return;
     }
@@ -1984,11 +2049,17 @@ static int dcp6_check_adt(void)
     int nub = adt_path_offset(adt, DCP6_NUB);
     u32 len = 0, preloaded, running;
     const char *uuid = nub < 0 ? NULL : adt_getprop(adt, nub, "uuid", &len);
-    if (!soc->uuid)
+    if (!soc->uuid && !soc->any_uuid)
         bail("no %s DCP firmware image is pinned (the ADT names %.40s)\n", soc->name,
              uuid && len ? uuid : "none");
-    if (!uuid || len != strlen(soc->uuid) + 1 || memcmp(uuid, soc->uuid, len))
+    if (soc->any_uuid) {
+        if (!dcp6_is_uuid(uuid, len))
+            bail("the dcp firmware image has no well-formed ADT uuid\n");
+        dlog("dcp firmware image %s, not pinned here: the kernel's board record decides\n", uuid);
+    } else if (!uuid || len != strlen(soc->uuid) + 1 || memcmp(uuid, soc->uuid, len)) {
         bail("dcp firmware is not image %s\n", soc->uuid);
+    }
+    memcpy(dcp6.uuid, uuid, len);
     if (dcp6_adt_u32(nub, "pre-loaded", &preloaded) || preloaded != 1 ||
         dcp6_adt_u32(nub, "running", &running) || running != 1)
         bail("iBoot did not leave the dcp firmware loaded and running\n");
@@ -2148,7 +2219,7 @@ static int dcp6_publish(void *dt, const struct dcp6_dt *n)
         return -1;
 
     int dcp = fdt_path_offset(dt, n->dcp);
-    if (dcp < 0 || fdt_setprop_string(dt, dcp, "apple,firmware-uuid", dcp6.soc->uuid))
+    if (dcp < 0 || fdt_setprop_string(dt, dcp, "apple,firmware-uuid", dcp6.uuid))
         return -1;
     dcp = fdt_path_offset(dt, n->dcp);
     if (dcp < 0 || firmware_set_fdt(dt, dcp, "apple,firmware-version", &os_firmware))
@@ -2219,7 +2290,7 @@ static __attribute__((noinline)) void dcp6_handoff(void *dt)
     if (dcp6_commit(dt, scratch))
         return;
     dlog("handoff published (firmware %s, %s); display nodes left disabled, marker %s set\n",
-         dcp6.soc->uuid, os_firmware.string, dcp6.soc->marker);
+         dcp6.uuid, os_firmware.string, dcp6.soc->marker);
 }
 
 /*
@@ -2672,6 +2743,11 @@ int dt_set_display_handoff(void *dt)
 
     if (dcp6.soc->chip == T8122 && dcp25_selected(dt))
         dcp6.soc = &dcp_soc_j613_25g83;
+
+    if (dcp6.soc->board_gate && (chip_id != dcp6.soc->chip || !dcp6_board_ok(dt))) {
+        dlog("not a %s (chip 0x%x): nothing done\n", dcp6.soc->boards_desc, chip_id);
+        return 0;
+    }
 
     bool armed = dcp6_armed(dt);
     if (!dcp6.soc->always && !armed) {

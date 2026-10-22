@@ -527,6 +527,114 @@ static void world_j613(const struct opts *o)
     poke32(DART_DISP0 + 0x1400 + 4 * 4, ttbr_of(p4.lo));
 }
 
+/*
+ * ---- the T6030 (J516S) world, for comparing two trees' handoff output ----
+ *
+ * The J613 world with T6030's fixed eight-segment layout and region numbers, the dcp, dcpext0
+ * and dcpext1 __OS_LOG buffers, the T6030 DCP image and the display CPU power state read directly
+ * at 0x350710000. The t6030-* scenarios only run the handoff and keep its device tree and log;
+ * tests/run-t6031-unchanged.sh checks that another tree gives the same bytes.
+ */
+static const struct seg segs6[8] = {
+    {TB + 0x280000000ULL, 0, TB + 0x40000000, 0x10000, 1},
+    {TB + 0x280010000ULL, 0x10000, TB + 0x80000000, 0x8000, 0},
+    {TB + 0x24a4000ULL, 0x18000, TB + 0x24a4000ULL, 0x20000, 0xa},
+    {TB + 0x280020000ULL, ~0ULL, TB + 0x968000, 0x40000, 2},
+    {TB + 0x280060000ULL, ~0ULL, TB + 0x1990000, 0x4000, 2},
+    {TB + 0x280064000ULL, ~0ULL, TB + 0x1994000, 0xc000, 2},
+    {TB + 0x280100000ULL, ~0ULL, TB + 0x1a54000, 0x100000, 2},
+    {TB + 0x280200000ULL, ~0ULL, TB + 0x1b60000, 0x4000, 2},
+};
+static const int region_ids6[8] = {49, 50, -1, 57, 94, 95, 14, 157};
+
+static void world_t6030(const struct opts *o)
+{
+    chip_id = T6030;
+    ram_base = TB + 0x800000;
+    ram_size = 0x200000000ULL - 0x800000;
+    prop_u64("/chosen", "dram-base", TB);
+    prop_u64("/chosen", "dram-size", 0x300000000ULL);
+    mcc_carveout_count = 0;
+
+    prop_set("/arm-io/dcp/iop-dcp-nub", "segment-ranges", segs6, sizeof(segs6));
+    prop_str("/arm-io/dcp/iop-dcp-nub", "segment-names",
+             "__TEXT;__DATA;__OS_LOG;unknown;unknown;unknown;unknown;unknown");
+    prop_str("/arm-io/dcp/iop-dcp-nub", "uuid",
+             o->wrong_uuid ? "11111111-2222-3333-4444-555555555555"
+                           : "DDF38191-93B3-324A-BC8F-643006F5AC82");
+    prop_u32("/arm-io/dcp/iop-dcp-nub", "pre-loaded", 1);
+    prop_u32("/arm-io/dcp/iop-dcp-nub", "running", 1);
+    for (int i = 0; i < 2; i++) {
+        /* dcpext0 and dcpext1: text, data, __OS_LOG and a heap segment */
+        char path[64];
+        struct seg ext[4] = {
+            segs6[0],
+            {TB + 0x281000000ULL + i * 0x100000ULL, 0x10000, TB + 0x80000000, 0x8000, 0},
+            {TB + 0x24c4000ULL + i * 0x20000ULL, 0x18000, TB + 0x24c4000ULL + i * 0x20000ULL,
+             0x20000, 0xa},
+            {TB + 0x281800000ULL + i * 0x100000ULL, ~0ULL, TB + 0xc0000000, 0x40000, 2},
+        };
+        snprintf(path, sizeof(path), "/arm-io/dcpext%d/iop-dcpext%d-nub", i, i);
+        prop_set(path, "segment-ranges", ext, sizeof(ext));
+        prop_str(path, "segment-names", "__TEXT;__DATA;__OS_LOG;unknown");
+    }
+    for (int i = 0; i < 8; i++) {
+        if (region_ids6[i] < 0)
+            continue;
+        char p[32];
+        snprintf(p, sizeof(p), "region-id-%d", region_ids6[i]);
+        prop_pair("/chosen/carveout-memory-map", p, segs6[i].phys,
+                  ALIGN_UP((u64)segs6[i].size, SZ_16K));
+    }
+    reg_add("/vram", segs6[6].phys, segs6[6].size);
+    fb_base = segs6[6].phys + 0x4000;
+
+    reg_add("/arm-io/dcp", DCP_COPROC, 0x6c000);
+    prop_str("/arm-io/dart-dcp", "compatible", "dart,t8110");
+    reg_add("/arm-io/dart-dcp", DART_DCP, 0x4000);
+    prop_u64("/arm-io/dart-dcp", "vm-base", TB);
+    prop_u64("/arm-io/dart-dcp", "vm-size", 0x1000000000ULL);
+    prop_pair("/arm-io/dart-dcp", "pt-region-5", TB + 0x2f0000000ULL, TB + 0x2f0020000ULL);
+    prop_str("/arm-io/dart-disp0", "compatible", "dart,t8110");
+    reg_add("/arm-io/dart-disp0", DART_DISP0, 0x4000);
+    prop_u64("/arm-io/dart-disp0", "vm-base", TB);
+    prop_u64("/arm-io/dart-disp0", "vm-size", 0x1000000000ULL);
+    prop_pair("/arm-io/dart-disp0", "pt-region-0", TB + 0x2f0100000ULL, TB + 0x2f0110000ULL);
+    prop_pair("/arm-io/dart-disp0", "pt-region-4", TB + 0x2f0200000ULL, TB + 0x2f0210000ULL);
+
+    region_add(0x350700000ULL, 0x14000);
+    poke32(0x350710000ULL, o->power_off ? 0x0 : 0xff);
+    region_add(DCP_COPROC, 0x4000);
+    poke32(DCP_COPROC + 0x44, o->not_running ? 0 : 0x10);
+    poke32(DCP_COPROC + 0x48, 0x3000ac);
+    region_add(DART_DCP, 0x4000);
+    region_add(DART_DISP0, 0x4000);
+    poke32(DART_DCP + 0x200, 0x1e0);
+    poke32(DART_DISP0 + 0x200, 0x1e1);
+
+    struct pt p5, p0, p4;
+    pt_init(&p5, TB + 0x2f0000000ULL, 0x20000);
+    pt_init(&p0, TB + 0x2f0100000ULL, 0x10000);
+    pt_init(&p4, TB + 0x2f0200000ULL, 0x10000);
+    for (int i = 0; i < 8; i++) {
+        u64 size = ALIGN_UP((u64)segs6[i].size, SZ_16K);
+        if (i != SEG_OSLOG)
+            pt_map(&p5, segs6[i].remap - TB, segs6[i].phys, size);
+        if (SID0_SEGS & (1u << i))
+            pt_map(&p0, segs6[i].remap - TB, segs6[i].phys, size);
+        if (SID4_SEGS & (1u << i))
+            pt_map(&p4, segs6[i].remap - TB, segs6[i].phys, size);
+    }
+    if (o->stray_map)
+        pt_map(&p0, 0x5000000, TB + 0x10000000, 0x4000);
+    poke32(DART_DCP + 0x1000 + 4 * 5, 1);
+    poke32(DART_DCP + 0x1400 + 4 * 5, ttbr_of(p5.lo));
+    poke32(DART_DISP0 + 0x1000, 1);
+    poke32(DART_DISP0 + 0x1400, ttbr_of(p0.lo));
+    poke32(DART_DISP0 + 0x1000 + 4 * 4, 1);
+    poke32(DART_DISP0 + 0x1400 + 4 * 4, ttbr_of(p4.lo));
+}
+
 /* ---- checks ---- */
 
 static int failures;
@@ -869,7 +977,11 @@ int main(int argc, char **argv)
         return 2;
     }
     const char *sc = argv[2];
-    fw25 = getenv("J613_25G83") != NULL;
+    /* t6030-<scenario>: the same scenario in the T6030 world, run and kept, not checked */
+    bool t6030 = !strncmp(sc, "t6030-", 6);
+    if (t6030)
+        sc += 6;
+    fw25 = !t6030 && getenv("J613_25G83") != NULL;
     struct opts o = {0};
     bool publish = true;
     if (!strcmp(sc, "unarmed")) {
@@ -907,7 +1019,10 @@ int main(int argc, char **argv)
     if (fdt_open_into(in, dt, fdt_totalsize(in) + 128 * 1024))
         return 2;
 
-    world_j613(&o);
+    if (t6030)
+        world_t6030(&o);
+    else
+        world_j613(&o);
     if (fw25) {
         os_firmware = (struct fw_version_info){V26_6_2, "26.6.2", {26, 6, 2}, 3, "mBoot-18000.161.10"};
         int dcp = fdt_path_offset(dt, "dcp");
@@ -926,7 +1041,8 @@ int main(int argc, char **argv)
             fdt_delprop(dt, fdt_path_offset(dt, "dcp"), "apple,j613-25g83-profile");
     }
     if (o.armed)
-        fdt_setprop_string(dt, fdt_path_offset(dt, "/chosen"), "asahi,t8122-dcp", "1");
+        fdt_setprop_string(dt, fdt_path_offset(dt, "/chosen"),
+                           t6030 ? "asahi,t6030-dcp" : "asahi,t8122-dcp", "1");
 
     printf("== %s\n", sc);
     fflush(stdout);
@@ -944,10 +1060,12 @@ int main(int argc, char **argv)
     fflush(stdout);
     check(ret == 0, "dt_set_display_handoff() returns 0");
     check(exc_count == 0, "no MMIO access faulted");
-    if (!o.armed)
+    if (!o.armed && !t6030)
         check(mmio_writes == 0, "unarmed: no MMIO write");
 
-    if (publish) {
+    if (t6030) {
+        /* Compared with another tree's output by tests/run-t6031-unchanged.sh */
+    } else if (publish) {
         contract_check(dt);
         if (fw25) {
             int len, chosen = fdt_path_offset(dt, "/chosen");
@@ -958,8 +1076,7 @@ int main(int argc, char **argv)
             check(!fdt_getprop(dt, fdt_path_offset(dt, "dcp"), "apple,t8122-handoff", NULL),
                   "25G83 never publishes 14.x marker");
         }
-    }
-    else
+    } else
         refusal_check(dt);
     if (!strcmp(sc, "contract-selftest"))
         contract_selftest(dt);

@@ -40,6 +40,20 @@ static inline u8 read8(u64 addr)
     return host_read8(addr);
 }
 
+void host_write32(u64 addr, u32 val);
+
+static inline void write32(u64 addr, u32 val)
+{
+    host_write32(addr, val);
+}
+
+static inline u32 mask32(u64 addr, u32 clear, u32 set)
+{
+    u32 val = (read32(addr) & ~clear) | set;
+    write32(addr, val);
+    return val;
+}
+
 #define sysop(op) host_sysop(op)
 
 static inline size_t get_page_size(void)

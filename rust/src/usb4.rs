@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 
 use crate::adt::{ADTNode, AdtError};
-// use crate::println;
 use sha1_smol::Sha1;
 
 const PLATFORM_UUID_SALT: [u8; 16] = [

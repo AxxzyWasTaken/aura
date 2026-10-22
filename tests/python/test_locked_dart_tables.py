@@ -51,7 +51,7 @@ static u32 read32(unsigned address) {
  return (++ttbr_reads==2 && changed_ttbr)?ttbr^4:ttbr;
 }
 ''' + bodies + r'''
-static const u64 base=0x100000000;
+static u64 base;
 static u64 *root;
 static struct params params={1};
 static dart_dev_t dart;
@@ -65,9 +65,40 @@ static void setup(void){
 }
 static int collect(size_t capacity){return dart_collect_locked_tables(&dart,base,4*SZ_16K,pages,capacity,&count);}
 static void refuse(void){assert(collect(4)==-1 && count==0);}
+/* A portable address hint never overwrites an existing mapping. Refuse a
+ * different returned address because the synthetic DART encodes this base. */
+static void *map_exact_no_clobber(void *address, size_t length)
+{
+ void *mapped=mmap(address,length,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+ if(mapped!=MAP_FAILED && mapped!=address){
+  assert(munmap(mapped,length)==0);
+  return MAP_FAILED;
+ }
+ return mapped;
+}
 int main(void){
- root=mmap((void *)base,4*SZ_16K,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
- assert(root==(void *)base);
+ /* Mach-O may already occupy 4 GiB. Search bounded, representable page
+  * addresses without replacing any mapping. Keep the first candidate busy
+  * when possible, so Linux also exercises the occupied-address fallback. */
+ const u64 first=0x100000000;
+ u64 *guard=map_exact_no_clobber((void *)first,4*SZ_16K);
+ if(guard!=MAP_FAILED)guard[0]=0x1234abcd;
+ root=MAP_FAILED;
+ for(unsigned int i=0;i<64;i++){
+  base=first+(u64)i*0x10000000;
+  root=map_exact_no_clobber((void *)base,4*SZ_16K);
+  if(root!=MAP_FAILED)break;
+ }
+ assert(root!=MAP_FAILED && root==(void *)base);
+ if(guard!=MAP_FAILED){
+  assert(guard[0]==0x1234abcd);
+  assert(base!=first);
+  assert(munmap(guard,4*SZ_16K)==0);
+ }
+ /* An occupied hint must be refused without overwriting the original page. */
+ root[0]=0x5a5aa5a5;
+ assert(map_exact_no_clobber(root,4*SZ_16K)==MAP_FAILED);
+ assert(root[0]==0x5a5aa5a5);
  setup();root[0]=entry(base+SZ_16K);root[2047]=entry(base+2*SZ_16K);root[9]=root[0];
  assert(collect(3)==0 && count==3 && pages[0]==base && pages[1]==base+SZ_16K && pages[2]==base+2*SZ_16K);
  setup();root[0]=entry(base+SZ_16K);assert(collect(1)==-1 && count==0);

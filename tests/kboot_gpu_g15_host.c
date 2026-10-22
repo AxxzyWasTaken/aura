@@ -120,6 +120,35 @@ int pmgr_adt_power_is_off(const char *path)
     return pmgr_off;
 }
 
+/*
+ * The T6031 code (kboot_gpu_t6031.c, kboot_t6031.c) links in with kboot_gpu.c from trees that have
+ * it. No T6030 or T8122 scenario reaches it: a register write or PMGR lookup here fails the run.
+ */
+void host_write32(u64 addr, u32 val)
+{
+    trace("write32 0x%lx = 0x%x UNEXPECTED\n", addr, val);
+    unguarded_faults++;
+}
+int pmgr_adt_gate(const char *path, const char *prop, u32 index, struct pmgr_gate *gate)
+{
+    (void)prop, (void)index, (void)gate;
+    trace("pmgr gate %s UNEXPECTED\n", path);
+    unguarded_faults++;
+    return -1;
+}
+int pmgr_device_gate(u8 die, u16 id, struct pmgr_gate *gate)
+{
+    (void)die, (void)id, (void)gate;
+    unguarded_faults++;
+    return -1;
+}
+int pmgr_set_mode(uintptr_t addr, u8 target_mode)
+{
+    (void)addr, (void)target_mode;
+    unguarded_faults++;
+    return -1;
+}
+
 /* ---------- synthetic ADT ---------- */
 
 struct hprop {

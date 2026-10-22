@@ -882,6 +882,10 @@ int smp_wait_timed(int cpu, u64 *retval, u32 timeout_ms)
     while (target->target) {
         sysop("dmb sy");
         if (ticks_to_msecs(get_ticks() - started) >= timeout_ms) {
+            /* A call that completed by the deadline is complete. */
+            sysop("dmb sy");
+            if (!target->target)
+                break;
             printf("SMP: CPU %d call did not complete\n", cpu);
             return SMP_TIMEOUT;
         }
@@ -895,6 +899,34 @@ int smp_wait(int cpu, u64 *retval)
 {
     u64 ignored;
     return smp_wait_timed(cpu, retval ? retval : &ignored, 300000);
+}
+
+int smp_call_sync0(int cpu, void *func)
+{
+    /*
+     * These setup callbacks contain no device waits. Give slow completion a conservative
+     * margin after the ACK window, without inheriting the general wait's five-minute bound.
+     */
+    const u32 join_ms = 5000;
+    u64 ignored;
+    int dispatched = smp_call4(cpu, func, 0, 0, 0, 0);
+    /* A busy slot can still contain an older callback, so join it too. */
+    int joined = smp_wait_timed(cpu, &ignored, join_ms);
+    if (joined)
+        return joined;
+    /* A missed ACK is harmless only after observing actual completion. */
+    return dispatched == SMP_TIMEOUT ? 0 : dispatched;
+}
+
+bool smp_has_pending_calls(void)
+{
+    sysop("dmb sy");
+    for (int cpu = 0; cpu < MAX_CPUS; cpu++) {
+        if (spin_table[cpu].target)
+            return true;
+    }
+    sysop("dmb sy");
+    return false;
 }
 
 void smp_set_wfe_mode(bool new_mode)
