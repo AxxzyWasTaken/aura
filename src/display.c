@@ -271,6 +271,11 @@ int display_start_dcp(void)
     if (iboot)
         return 0;
 
+    if (dcp_left_running()) {
+        printf("display: a DCP did not stop; not starting it again\n");
+        return -1;
+    }
+
 #ifdef NO_DISPLAY
     printf("display: NO_DISPLAY!\n");
     return 0;
@@ -757,18 +762,20 @@ int display_init(void)
     }
 }
 
-void display_shutdown(dcp_shutdown_mode mode)
+int display_shutdown(dcp_shutdown_mode mode)
 {
     /* Linux owns the live J700 controllers. Keep the inherited ASC session
      * and scanout intact at both the Stage 1 and Linux boundaries. */
     if (chip_id == T8140)
-        return;
+        return 0;
 
     /* We have no DCP, so just exit */
     if (!has_dcp)
-        return;
+        return 0;
 
     if (iboot) {
+        /* An endpoint that does not stop stays registered, so dcp_shutdown()
+         * retries it with the rest and reports the DCP as still running. */
         dcp_ib_shutdown(iboot);
         switch (mode) {
             case DCP_QUIESCED:
@@ -789,4 +796,7 @@ void display_shutdown(dcp_shutdown_mode mode)
         }
         iboot = NULL;
     }
+
+    /* A DCP that did not stop at any point may still use its buffers. */
+    return dcp_left_running() ? -1 : 0;
 }

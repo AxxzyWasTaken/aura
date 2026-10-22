@@ -999,8 +999,12 @@ int afk_epic_shutdown_ep(afk_epic_ep_t *epic)
 
     while (epic->started) {
         int ret = afk_epic_poll(epic->afk, epic->ep, true);
-        if (ret < 0)
-            break;
+        if (ret < 0) {
+            /* A timeout does not show that the firmware stopped using the
+             * rings: keep them, and the endpoint, for the caller to refuse. */
+            printf("EPIC: endpoint 0x%x did not stop; keeping its buffers\n", epic->ep);
+            return -1;
+        }
     }
 
     rtkit_free_buffer(epic->afk->rtk, &epic->buf);
@@ -1232,10 +1236,15 @@ afk_epic_t *afk_epic_init(rtkit_dev_t *rtkit)
 
 int afk_epic_shutdown(afk_epic_t *afk)
 {
+    int ret = 0;
 
     for (int i = 0; i < 0x10; i++)
-        if (afk->endpoint[i])
-            afk_epic_shutdown_ep(afk->endpoint[i]);
+        if (afk->endpoint[i] && afk_epic_shutdown_ep(afk->endpoint[i]) < 0)
+            ret = -1;
+
+    /* An endpoint that did not stop still refers to the context. */
+    if (ret < 0)
+        return ret;
 
     free(afk);
 
