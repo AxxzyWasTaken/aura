@@ -537,8 +537,8 @@ static int dt_set_memory(void)
             if (!reg)
                 continue;
 
-            u64 resv_start = fdt64_to_cpu(reg[0]);
-            u64 resv_len = fdt64_to_cpu(reg[1]);
+            u64 resv_start = fdt64_ld(&reg[0]);
+            u64 resv_len = fdt64_ld(&reg[1]);
             u64 resv_end = resv_start + resv_len;
 
             if (resv_start < dram_min) {
