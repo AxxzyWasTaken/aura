@@ -118,7 +118,7 @@ typedef uint8_t u8;
 #define SZ_16K 16384
 static int reads;
 static u32 read32(uintptr_t address) { reads++; return 0; }
-''' + macros + function + r'''
+''' + macros + '\n' + function + r'''
 static int visit(u64 iova, u64 physical, void *context) { assert(0); return -1; }
 int main(void)
 {
