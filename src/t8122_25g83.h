@@ -3,6 +3,7 @@
 #define T8122_25G83_H
 
 #include <stdbool.h>
+
 #include "libfdt/libfdt.h"
 
 /* J615 display and GPU handoffs require their own explicit switch. */
@@ -18,8 +19,7 @@ static inline bool t8122_25g83_board(const void *dt)
     if (j613)
         return true;
     int chosen = fdt_path_offset(dt, "/chosen"), len = 0;
-    const char *optin =
-        chosen < 0 ? NULL : fdt_getprop(dt, chosen, T8122_25G83_J615_OPT_IN, &len);
+    const char *optin = chosen < 0 ? NULL : fdt_getprop(dt, chosen, T8122_25G83_J615_OPT_IN, &len);
     return optin && len == 2 && optin[0] == '1' && !optin[1];
 }
 

@@ -4037,8 +4037,7 @@ static void dt_pass_pmp(const struct pmp_values_soc *soc)
             dart_addr == soc->dart_addr && dart_size == soc->dart_size;
     if (!where) {
         /* An empty node: the kernel refuses the PMP rather than using built-in values. */
-        printf("FDT: %s PMP is not where the kernel expects it; no PMP values passed\n",
-               soc->name);
+        printf("FDT: %s PMP is not where the kernel expects it; no PMP values passed\n", soc->name);
         return;
     }
     snprintf(path, sizeof(path), "/chosen/%s", soc->node);

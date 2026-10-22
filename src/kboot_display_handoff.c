@@ -307,8 +307,8 @@ static const struct dcp_soc dcp_soc_j613_25g83 = {
 static bool dcp25_selected(void *dt)
 {
     int node = fdt_path_offset(dt, "dcp"), len;
-    const fdt32_t *profile = node < 0 ? NULL :
-        fdt_getprop(dt, node, "apple,j613-25g83-profile", &len);
+    const fdt32_t *profile =
+        node < 0 ? NULL : fdt_getprop(dt, node, "apple,j613-25g83-profile", &len);
     return profile && len == 4 && fdt32_ld(profile) == 1;
 }
 
@@ -669,8 +669,8 @@ static int dcp6_get_oslog(const char *owner, const char *nub_path, u64 *phys, u6
     u64 dram_base, dram_size;
     if (dcp6_dram(&dram_base, &dram_size))
         return -1;
-    if (!*phys || !*size || *size > DCP6_OSLOG_MAX || (*phys & (SZ_16K - 1)) ||
-        *phys < dram_base || *phys + *size > dram_base + dram_size)
+    if (!*phys || !*size || *size > DCP6_OSLOG_MAX || (*phys & (SZ_16K - 1)) || *phys < dram_base ||
+        *phys + *size > dram_base + dram_size)
         bail("%s: bad __OS_LOG 0x%lx+0x%lx\n", owner, *phys, *size);
     return 0;
 }
@@ -733,7 +733,8 @@ static __attribute__((noinline)) void dcp6_reserve_oslogs(void *dt)
 
         bool bad = false;
         for (int j = 0; j < i; j++)
-            if (logs[j].add && dcp6_overlaps(logs[i].phys, logs[i].size, logs[j].phys, logs[j].size)) {
+            if (logs[j].add &&
+                dcp6_overlaps(logs[i].phys, logs[i].size, logs[j].phys, logs[j].size)) {
                 dlog("%s: __OS_LOG overlaps %s's\n", dcp6.nubs[i], dcp6.nubs[j]);
                 bad = true;
             }
@@ -1725,7 +1726,8 @@ static int dcp6_walk(struct dcp6_sid *s, const char *adt_dart, int vm, u64 base)
     if (dcp6_dram(&dram_base, &dram_size))
         return -1;
     if (pt_hi <= pt_lo || pt_hi - pt_lo > DART_PT_MAX_SIZE || ((pt_lo | pt_hi) & (SZ_16K - 1)) ||
-        pt_lo < dram_base || pt_hi > dram_base + dram_size || !(pt_hi <= ram_min || pt_lo >= ram_max))
+        pt_lo < dram_base || pt_hi > dram_base + dram_size ||
+        !(pt_hi <= ram_min || pt_lo >= ram_max))
         bail("%s: bad %s 0x%lx..0x%lx\n", s->what, prop, pt_lo, pt_hi);
     if (dcp6_carveout_conflict(pt_lo, pt_hi - pt_lo, prop))
         return -1;
@@ -1901,8 +1903,9 @@ static int dcp6_check_dt(void *dt, struct dcp6_dt *n)
     if (!dcp6_board_ok(dt))
         bail("not a %s device tree\n", soc->boards_desc);
     if (soc->fw25 && !t8122_25g83_board(dt))
-        bail("J615 25G83 is experimental: no display handoff without chosen."
-             T8122_25G83_J615_OPT_IN "=1\n");
+        bail(
+            "J615 25G83 is experimental: no display handoff without chosen." T8122_25G83_J615_OPT_IN
+            "=1\n");
 
     char p1[sizeof(n->piodma)], p2[sizeof(n->piodma)];
     int dcp = dcp6_alias_path(dt, "dcp", n->dcp, sizeof(n->dcp));
@@ -1966,7 +1969,10 @@ static int dcp6_check_dt(void *dt, struct dcp6_dt *n)
     for (int i = 0; i < 3; i++)
         for (size_t j = 0; j < ARRAY_SIZE(new_props); j++)
             if (fdt_getprop(dt, nodes[i], new_props[j], NULL))
-                bail("%s already has %s\n", i == 0 ? "dcp" : i == 1 ? "display" : "piodma",
+                bail("%s already has %s\n",
+                     i == 0   ? "dcp"
+                     : i == 1 ? "display"
+                              : "piodma",
                      new_props[j]);
     return 0;
 }
@@ -2077,8 +2083,9 @@ static int dcp25_publish_clock(void *dt)
     fdt32_t cells[] = {cpu_to_fdt32(1), cpu_to_fdt32(345), cpu_to_fdt32(416),
                        cpu_to_fdt32(freq[345 - 256]), cpu_to_fdt32(freq[416 - 256])};
     int chosen = fdt_path_offset(dt, "/chosen");
-    return chosen < 0 ? -1 : fdt_setprop(dt, chosen, "apple,j613-25g83-display-clock-adt",
-                                      cells, sizeof(cells));
+    return chosen < 0 ? -1
+                      : fdt_setprop(dt, chosen, "apple,j613-25g83-display-clock-adt", cells,
+                                    sizeof(cells));
 }
 
 /* Write the whole handoff into `dt` (a scratch copy). Any failure leaves it half-written. */
@@ -2177,7 +2184,8 @@ static int dcp6_check_resv(void *dt)
         snprintf(name, sizeof(name), "%s@%lx", dcp6.defs[i].node, s->phys);
         int node = dcp6_find_resv(dt, name, s->phys, s->size);
         if (i == dcp6.seg_oslog) {
-            if (node < 0 || !fdt_get_phandle(dt, node) || !fdt_getprop(dt, node, DCP6_OSLOG_PROP, NULL))
+            if (node < 0 || !fdt_get_phandle(dt, node) ||
+                !fdt_getprop(dt, node, DCP6_OSLOG_PROP, NULL))
                 bail("dcp __OS_LOG is not reserved as /reserved-memory/%s\n", name);
         } else if (node != -FDT_ERR_NOTFOUND) {
             bail("/reserved-memory/%s already exists\n", name);
