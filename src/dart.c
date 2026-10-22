@@ -581,12 +581,12 @@ dart_dev_t *dart_init_fdt_locked(void *dt, u32 phandle, int device)
 
 static bool dart_table_in_dram(u64 page, u64 base, u64 size)
 {
-    return page && !(page & (SZ_16K - 1)) && size >= SZ_16K &&
-           base <= UINT64_MAX - size && page >= base && page - base <= size - SZ_16K;
+    return page && !(page & (SZ_16K - 1)) && size >= SZ_16K && base <= UINT64_MAX - size &&
+           page >= base && page - base <= size - SZ_16K;
 }
 
-int dart_collect_locked_tables(dart_dev_t *dart, u64 dram_base, u64 dram_size,
-                               u64 *pages, size_t capacity, size_t *count)
+int dart_collect_locked_tables(dart_dev_t *dart, u64 dram_base, u64 dram_size, u64 *pages,
+                               size_t capacity, size_t *count)
 {
     const u64 address_mask = GENMASK(37, 10);
     u64 entries[SZ_16K / sizeof(u64)];
@@ -594,16 +594,14 @@ int dart_collect_locked_tables(dart_dev_t *dart, u64 dram_base, u64 dram_size,
     if (!count)
         return -1;
     *count = 0;
-    if (!dart || dart->type != DART_T8110 || !dart->locked || !dart->keep ||
-        !pages || !capacity || dart->params->ttbr_count != 1 ||
+    if (!dart || dart->type != DART_T8110 || !dart->locked || !dart->keep || !pages || !capacity ||
+        dart->params->ttbr_count != 1 ||
         !dart_table_in_dram((u64)dart->l1[0], dram_base, dram_size))
         return -1;
     u32 tcr = read32(DART_TCR(dart));
     u32 ttbr = read32(DART_TTBR(dart, 0));
-    if (tcr != DART_T8110_TCR_TRANSLATE_ENABLE ||
-        !(ttbr & DART_T8110_TTBR_VALID) ||
-        (FIELD_GET(DART_T8110_TTBR_ADDR, ttbr) << DART_T8110_TTBR_SHIFT) !=
-            (u64)dart->l1[0])
+    if (tcr != DART_T8110_TCR_TRANSLATE_ENABLE || !(ttbr & DART_T8110_TTBR_VALID) ||
+        (FIELD_GET(DART_T8110_TTBR_ADDR, ttbr) << DART_T8110_TTBR_SHIFT) != (u64)dart->l1[0])
         return -1;
 
     /* Read table descriptors only after the complete root page is in DRAM. */

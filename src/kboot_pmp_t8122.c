@@ -51,11 +51,11 @@
  * never replaced.
  */
 
-#define FACTS_PMP     "asahi,t8122-pmp-facts"
-#define FACTS_CLOCK   "asahi,t8122-clock-facts"
-#define VALUES_NODE   "asahi,t8122-pmp"
-#define FACTS_SCHEMA  1
-#define LOG           "PMP: T8122: "
+#define FACTS_PMP    "asahi,t8122-pmp-facts"
+#define FACTS_CLOCK  "asahi,t8122-clock-facts"
+#define VALUES_NODE  "asahi,t8122-pmp"
+#define FACTS_SCHEMA 1
+#define LOG          "PMP: T8122: "
 
 #define MAX_PROPERTY_BYTES 32768u
 #define MAX_CLOCK_BYTES    65536u
@@ -195,8 +195,7 @@ static void prop_name(const struct adt_property *prop, char *name)
 }
 
 /* Copies one ADT property as adt,<name>, within the node's byte limit */
-static void facts_copy(struct facts *f, const char *sub, const struct adt_property *prop,
-                       u32 limit)
+static void facts_copy(struct facts *f, const char *sub, const struct adt_property *prop, u32 limit)
 {
     char name[sizeof(prop->name) + 1], fname[sizeof(name) + 4];
 
@@ -350,8 +349,9 @@ static bool pmp_power(struct facts *f, int pmp)
     bool all_on = true;
 
     if (!adt_getprop(adt, pmp, "clock-gates", &len) || !len || len % 4 || len / 4 > MAX_GATES) {
-        facts_skip(f, "power: /arm-io/pmp clock-gates absent, malformed or over %d entries (%u "
-                      "bytes); SRAM and PTD not read",
+        facts_skip(f,
+                   "power: /arm-io/pmp clock-gates absent, malformed or over %d entries (%u "
+                   "bytes); SRAM and PTD not read",
                    MAX_GATES, len);
         return false;
     }
@@ -360,8 +360,9 @@ static bool pmp_power(struct facts *f, int pmp)
         struct pmgr_gate g;
         if (pmgr_adt_gate("/arm-io/pmp", "clock-gates", i, &g) < 0 || !g.found || g.virt ||
             !g.psreg) {
-            facts_skip(f, "power: /arm-io/pmp clock-gates[%u] has no PMGR power state register; "
-                          "SRAM and PTD not read",
+            facts_skip(f,
+                       "power: /arm-io/pmp clock-gates[%u] has no PMGR power state register; "
+                       "SRAM and PTD not read",
                        i);
             return false;
         }
@@ -538,8 +539,7 @@ static void pmp_sram(struct facts *f, int *pmp_path, int nub)
     facts_u32(f, NULL, "sram-uuid-matches-adt", match);
     char text[37];
     uuid_text(uuid, text);
-    printf(LOG "SRAM image UUID %s, %s the iop-pmp-nub uuid\n", text,
-           match ? "equal to" : "NOT");
+    printf(LOG "SRAM image UUID %s, %s the iop-pmp-nub uuid\n", text, match ? "equal to" : "NOT");
 
     facts_u32(f, NULL, "bootargs-offset", off);
     facts_u32(f, NULL, "bootargs-size", sz);

@@ -22,59 +22,122 @@
  * Build in a private FDT copy and publish only on success, including strings.
  * Failure is non-fatal to kboot. A pre-existing export is never overwritten.
  */
-#define EXPORT_NAME "asahi,t8122-gpu-diagnostics"
-#define EXPORT_PATH "/chosen/" EXPORT_NAME
+#define EXPORT_NAME        "asahi,t8122-gpu-diagnostics"
+#define EXPORT_PATH        "/chosen/" EXPORT_NAME
 #define MAX_PROPERTY_BYTES 32768u
-#define MAX_TOTAL_BYTES 49152u
+#define MAX_TOTAL_BYTES    49152u
 
 static const char *const nodes[] = {
     "arm-io", "sgx", "gfx-asc", "pmgr", "mapper-gfx-asc", "gfx-nub", "chosen", "root",
 };
 static const char *const paths[] = {
-    "/arm-io", "/arm-io/sgx", "/arm-io/gfx-asc", "/arm-io/pmgr",
-    "/arm-io/mapper-gfx-asc", "/arm-io/gfx-asc/iop-gfx-nub", "/chosen", "/",
+    "/arm-io",
+    "/arm-io/sgx",
+    "/arm-io/gfx-asc",
+    "/arm-io/pmgr",
+    "/arm-io/mapper-gfx-asc",
+    "/arm-io/gfx-asc/iop-gfx-nub",
+    "/chosen",
+    "/",
 };
 
 /* Only named hardware-description fields, never arbitrary node contents. */
 static const char *const properties[] = {
-    "compatible", "chip-revision", "#address-cells", "#size-cells", "ranges",
-    "reg", "interrupts", "interrupts-valid", "device", "devices", "ps-regs", "clock-gates",
-    "AAPL,phandle", "iommu-parent", "gpu-num-perf-states", "gpu-perf-base-pstate",
+    "compatible",
+    "chip-revision",
+    "#address-cells",
+    "#size-cells",
+    "ranges",
+    "reg",
+    "interrupts",
+    "interrupts-valid",
+    "device",
+    "devices",
+    "ps-regs",
+    "clock-gates",
+    "AAPL,phandle",
+    "iommu-parent",
+    "gpu-num-perf-states",
+    "gpu-perf-base-pstate",
     "gptbat-ready",
-    "power-gates", "perf-state-count", "perf-state-table-count", "perf-states",
-    "perf-states-sram", "gpu-core-count", "gpu-core-mask", "gpu-count",
-    "gpu-num-mgpus", "gpu-num-cores", "gpu-num-frags",
-    "gfx-handoff-base", "gfx-handoff-size", "gfx-shared-region-base",
-    "gfx-shared-region-size", "gfx-shared-l2-region-base",
-    "gfx-shared-l2-region-size", "gpu-region-base", "gpu-region-size",
+    "power-gates",
+    "perf-state-count",
+    "perf-state-table-count",
+    "perf-states",
+    "perf-states-sram",
+    "gpu-core-count",
+    "gpu-core-mask",
+    "gpu-count",
+    "gpu-num-mgpus",
+    "gpu-num-cores",
+    "gpu-num-frags",
+    "gfx-handoff-base",
+    "gfx-handoff-size",
+    "gfx-shared-region-base",
+    "gfx-shared-region-size",
+    "gfx-shared-l2-region-base",
+    "gfx-shared-l2-region-size",
+    "gpu-region-base",
+    "gpu-region-size",
 };
 
 /* Additive revision 2 fields. No wildcard property or firmware-memory copying. */
 static const char *const segment_properties[] = {
-    "segment-names", "segment-ranges", "pre-loaded",
+    "segment-names",
+    "segment-ranges",
+    "pre-loaded",
 };
 static const char *const dram_properties[] = {"dram-base", "dram-size"};
 static const char *const root_properties[] = {"#address-cells", "#size-cells"};
 static const char *const tuning_properties[] = {
-    "gpu-fast-die0-sensor-mask", "gpu-fast-die0-alarm-threshold", "gpu-fast-die0-target",
-    "gpu-fast-die0-integral-gain", "gpu-fast-die0-proportional-gain", "gpu-sochot-temp",
-    "gpu-se-tgt", "gpu-se-engagement-criteria", "gpu-se-inactive-threshold",
-    "gpu-se-reset-criteria", "gpu-se-filter-time-constant", "gpu-se-filter-time-constant-1",
-    "gpu-se-ki", "gpu-se-ki-1", "gpu-se-kp", "gpu-se-kp-1",
-    "gpu-avg-power-filter-tc-ms", "gpu-avg-power-ki-only", "gpu-avg-power-kp",
-    "gpu-avg-power-min-duty-cycle", "gpu-avg-power-target-filter-tc",
-    "gpu-idleoff-standby-timer", "gpu-idleoff-min_conf",
-    "gpu-perf-boost-ce-step", "gpu-perf-boost-min-util", "gpu-perf-filter-drop-threshold",
-    "gpu-perf-filter-time-constant", "gpu-perf-filter-time-constant2",
-    "gpu-perf-integral-gain", "gpu-perf-integral-gain2", "gpu-perf-integral-min-clamp",
-    "gpu-perf-proportional-gain", "gpu-perf-proportional-gain2", "gpu-perf-tgt-utilization",
-    "gpu-power-sample-period", "gpu-ppm-filter-time-constant-ms", "gpu-ppm-ki", "gpu-ppm-kp",
-    "gpu-pwr-filter-time-constant", "gpu-pwr-integral-gain", "gpu-pwr-integral-min-clamp",
-    "gpu-pwr-min-duty-cycle", "gpu-pwr-proportional-gain", "gpu-pwr-sample-period-aic-clks",
+    "gpu-fast-die0-sensor-mask",
+    "gpu-fast-die0-alarm-threshold",
+    "gpu-fast-die0-target",
+    "gpu-fast-die0-integral-gain",
+    "gpu-fast-die0-proportional-gain",
+    "gpu-sochot-temp",
+    "gpu-se-tgt",
+    "gpu-se-engagement-criteria",
+    "gpu-se-inactive-threshold",
+    "gpu-se-reset-criteria",
+    "gpu-se-filter-time-constant",
+    "gpu-se-filter-time-constant-1",
+    "gpu-se-ki",
+    "gpu-se-ki-1",
+    "gpu-se-kp",
+    "gpu-se-kp-1",
+    "gpu-avg-power-filter-tc-ms",
+    "gpu-avg-power-ki-only",
+    "gpu-avg-power-kp",
+    "gpu-avg-power-min-duty-cycle",
+    "gpu-avg-power-target-filter-tc",
+    "gpu-idleoff-standby-timer",
+    "gpu-idleoff-min_conf",
+    "gpu-perf-boost-ce-step",
+    "gpu-perf-boost-min-util",
+    "gpu-perf-filter-drop-threshold",
+    "gpu-perf-filter-time-constant",
+    "gpu-perf-filter-time-constant2",
+    "gpu-perf-integral-gain",
+    "gpu-perf-integral-gain2",
+    "gpu-perf-integral-min-clamp",
+    "gpu-perf-proportional-gain",
+    "gpu-perf-proportional-gain2",
+    "gpu-perf-tgt-utilization",
+    "gpu-power-sample-period",
+    "gpu-ppm-filter-time-constant-ms",
+    "gpu-ppm-ki",
+    "gpu-ppm-kp",
+    "gpu-pwr-filter-time-constant",
+    "gpu-pwr-integral-gain",
+    "gpu-pwr-integral-min-clamp",
+    "gpu-pwr-min-duty-cycle",
+    "gpu-pwr-proportional-gain",
+    "gpu-pwr-sample-period-aic-clks",
 };
 
-static int copy_properties(void *dt, int child, int in, const char *const *props,
-                           size_t count, u32 *total)
+static int copy_properties(void *dt, int child, int in, const char *const *props, size_t count,
+                           u32 *total)
 {
     for (size_t j = 0; j < count; j++) {
         u32 size = 0;
@@ -94,7 +157,7 @@ static int copy_properties(void *dt, int child, int in, const char *const *props
     }
     return 0;
 }
-#define COPY_PROPS(props) \
+#define COPY_PROPS(props)                                                                          \
     copy_properties(dt, child, in, props, sizeof(props) / sizeof((props)[0]), &total)
 
 static int export_metadata(void *dt, int chosen)
@@ -159,8 +222,7 @@ int dt_gpu_t8122_diagnostics(void *dt)
 {
     int chosen = fdt_path_offset(dt, "/chosen");
     int len = 0;
-    const char *opt = chosen < 0 ? NULL :
-        fdt_getprop(dt, chosen, "asahi,t8122-gpu-diag", &len);
+    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t8122-gpu-diag", &len);
     if (!opt || len != 2 || opt[0] != '1' || opt[1] != '\0')
         return 0;
     if (fdt_path_offset(dt, EXPORT_PATH) >= 0)

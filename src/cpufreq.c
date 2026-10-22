@@ -642,7 +642,6 @@ failed:
     return -1;
 }
 
-
 /*
  * iBoot hands T8140 over with the P cluster at P1 (744 MHz), where inflating a
  * 45 MB kernel Image takes ~2.3 s. cpufreq_init() leaves T8140 alone, so raise
@@ -661,8 +660,7 @@ void cpufreq_payload_boost(bool enable)
         return;
 
     if (enable)
-        t8140_inherited_pstate =
-            pstate_reg_to_pstate(read64(t8140_pcluster.base + CLUSTER_PSTATE));
+        t8140_inherited_pstate = pstate_reg_to_pstate(read64(t8140_pcluster.base + CLUSTER_PSTATE));
 
     u32 pstate = enable ? T8140_PAYLOAD_BOOST_PSTATE : t8140_inherited_pstate;
     if (set_pstate(&t8140_pcluster, pstate))

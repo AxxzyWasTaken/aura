@@ -402,8 +402,7 @@ bool firmware_gfx_image_info(struct gfx_fw_image_info *out)
     if (!seg || len != 2 * sizeof(*seg))
         return false;
     const char *names = adt_getprop(adt, node, "segment-names", &len);
-    if (!names || len < sizeof("__TEXT;") - 1 ||
-        memcmp(names, "__TEXT;", sizeof("__TEXT;") - 1))
+    if (!names || len < sizeof("__TEXT;") - 1 || memcmp(names, "__TEXT;", sizeof("__TEXT;") - 1))
         return false;
 
     u64 phys = seg[0].phys;
@@ -438,8 +437,7 @@ bool firmware_gfx_rtkit_version(char out[GFX_FW_VERSION_MAX])
         return false;
     u32 len = 0;
     const struct adt_segment_ranges *seg = adt_getprop(adt, node, "segment-ranges", &len);
-    if (!seg || len != 2 * sizeof(*seg) ||
-        seg[0].phys + image.rtkit_version_offset < seg[0].phys)
+    if (!seg || len != 2 * sizeof(*seg) || seg[0].phys + image.rtkit_version_offset < seg[0].phys)
         return false;
     u64 addr = seg[0].phys + image.rtkit_version_offset;
     if (!gfx_fw_range_is_dram(addr, GFX_FW_VERSION_MAX) ||

@@ -7,8 +7,13 @@
 #include "string.h"
 #include "t8122_25g83.h"
 #include "utils.h"
+
 #include "libfdt/libfdt.h"
-#define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
+#define bail(...)                                                                                  \
+    do {                                                                                           \
+        printf(__VA_ARGS__);                                                                       \
+        return -1;                                                                                 \
+    } while (0)
 
 /*
  * T8122 (M3) GPU firmware handoff.
@@ -286,8 +291,8 @@ static u32 t8122_gpu_reserve(void *dt, const char *name, bool asc_mem, u64 base,
         return 0;
 
     u32 phandle = fdt_get_phandle(dt, node);
-    if (!phandle && (fdt_generate_phandle(dt, &phandle) ||
-                     fdt_setprop_u32(dt, node, "phandle", phandle)))
+    if (!phandle &&
+        (fdt_generate_phandle(dt, &phandle) || fdt_setprop_u32(dt, node, "phandle", phandle)))
         return 0;
     return phandle;
 }
@@ -391,22 +396,21 @@ static int t8122_gpu_publish(void *dt, void *arg)
 
     int chosen = fdt_path_offset(dt, "/chosen"), len;
     int dcp = fdt_path_offset(dt, "dcp");
-    const fdt32_t *profile = dcp < 0 ? NULL :
-        fdt_getprop(dt, dcp, "apple,j613-25g83-profile", &len);
+    const fdt32_t *profile =
+        dcp < 0 ? NULL : fdt_getprop(dt, dcp, "apple,j613-25g83-profile", &len);
     if (!profile || len != 4 || fdt32_ld(profile) != 1)
         return -1;
     const fdt32_t *compat = fdt_getprop(dt, dcp, "apple,firmware-compat", &len);
-    if (!compat || len != 12 || fdt32_ld(compat) != 26 ||
-        fdt32_ld(compat + 1) != 6 || fdt32_ld(compat + 2) != 2)
+    if (!compat || len != 12 || fdt32_ld(compat) != 26 || fdt32_ld(compat + 1) != 6 ||
+        fdt32_ld(compat + 2) != 2)
         return -1;
-    const char *intent = chosen < 0 ? NULL :
-        fdt_getprop(dt, chosen, "asahi,t8122-gpu", &len);
+    const char *intent = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t8122-gpu", &len);
     bool board = t8122_25g83_board(dt);
     bool enable = board && os_firmware.version == V26_6_2 && intent && len == 2 &&
                   intent[0] == '1' && intent[1] == 0;
     if (!board && !fdt_node_check_compatible(dt, 0, "apple,j615"))
-        printf("FDT: GPU: J615 25G83 is experimental: no handoff without chosen."
-               T8122_25G83_J615_OPT_IN "=1\n");
+        printf("FDT: GPU: J615 25G83 is experimental: no handoff without "
+               "chosen." T8122_25G83_J615_OPT_IN "=1\n");
     if (os_firmware.version != V26_6_2 || !board)
         return -1;
     if (fdt_node_check_compatible(dt, 0, "apple,j615") == 0)

@@ -8,7 +8,6 @@
 #include "assert.h"
 #include "boot_storage.h"
 #include "chainload.h"
-#include "stage1_config.h"
 #include "cpufreq.h"
 #include "display.h"
 #include "firmware.h"
@@ -16,12 +15,12 @@
 #include "kboot.h"
 #include "mitigations.h"
 #include "nvme.h"
+#include "payload_profile.h"
 #include "smp.h"
 #include "stage1_config.h"
 #include "utils.h"
 
 #include "libfdt/libfdt.h"
-#include "payload_profile.h"
 #include "minilzlib/minlzma.h"
 #include "tinf/tinf.h"
 

@@ -778,8 +778,7 @@ static int afkv2_command(afk_epic_ep_t *epic, int channel, u16 type, void *txbuf
         }
         /* Firmware supplies its own token/timestamp in responses. Correlate
          * by interface, subtype and command ID, as the firmware's V2 interface does. */
-        if (hdr->interface == channel && msg->category == AFKV2_RESPONSE &&
-            msg->type == type) {
+        if (hdr->interface == channel && msg->category == AFKV2_RESPONSE && msg->type == type) {
             ret = afkv2_copy_response(epic, payload, size, packet.cmd.id, rxbuf, rxsize);
             afk_epic_rx_ack(epic);
             return ret;

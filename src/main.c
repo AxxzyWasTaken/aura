@@ -33,7 +33,6 @@
 #include "usb_cdc.h"
 #include "utils.h"
 #include "wdt.h"
-#include "stage1_config.h"
 #include "xnuboot.h"
 
 struct vector_args next_stage;
@@ -106,7 +105,8 @@ void run_actions(void)
     bool board = target && (!strcmp(target, "J613") || !strcmp(target, "J615"));
     bool j613 = chip_id == T8122 && board && os_firmware.version == V26_6_2;
     if (!j613) {
-        printf("J613 Stage 1: board/25G83 guard rejected (needs J613 or J615, 26.6.2); proxy only\n");
+        printf(
+            "J613 Stage 1: board/25G83 guard rejected (needs J613 or J615, 26.6.2); proxy only\n");
         goto proxy_fallback;
     }
     if (!strcmp(target, "J615"))

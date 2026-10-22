@@ -5,11 +5,11 @@
 #include "firmware.h"
 #include "string.h"
 
-#define GFX_FW_HDR_OFFSET 0x4200
-#define GFX_FW_HDR_BRANCH 0x14000011
-#define GFX_FW_HDR_MAGIC  0x64697575
-#define GFX_FW_HDR_VER    5
-#define GFX_FW_HDR_SIZE   0x38
+#define GFX_FW_HDR_OFFSET  0x4200
+#define GFX_FW_HDR_BRANCH  0x14000011
+#define GFX_FW_HDR_MAGIC   0x64697575
+#define GFX_FW_HDR_VER     5
+#define GFX_FW_HDR_SIZE    0x38
 #define GFX_FW_VERSION_MAX 64
 
 static inline int gfx_fw_hex_digit(char ch)
@@ -42,8 +42,8 @@ static inline bool gfx_fw_parse_image_info(const u32 hdr[GFX_FW_HDR_SIZE / 4], u
                                            struct gfx_fw_image_info *out)
 {
     if (!hdr || !out || hdr[0] != GFX_FW_HDR_BRANCH || hdr[1] != GFX_FW_HDR_MAGIC ||
-        hdr[2] != GFX_FW_HDR_VER || !hdr[13] || hdr[13] > segment_size ||
-        hdr[11] > hdr[13] || hdr[12] > hdr[13] - hdr[11])
+        hdr[2] != GFX_FW_HDR_VER || !hdr[13] || hdr[13] > segment_size || hdr[11] > hdr[13] ||
+        hdr[12] > hdr[13] - hdr[11])
         return false;
 
     struct gfx_fw_image_info found = {

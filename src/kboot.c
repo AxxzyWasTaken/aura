@@ -434,8 +434,8 @@ static int dt_set_chosen(void)
                     const u8 *b = prop;
                     snprintf(uuid_str, sizeof(uuid_str),
                              "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-                             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                             b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+                             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10],
+                             b[11], b[12], b[13], b[14], b[15]);
                     if (fdt_setprop(dt, node, "apfs-preboot-uuid", uuid_str, sizeof(uuid_str)) < 0)
                         printf("FDT: warning: couldn't set apfs-preboot-uuid\n");
                     else
@@ -460,8 +460,8 @@ static int dt_set_chosen(void)
      * state, causing the SEP firmware to refuse subsequent biometric commands.
      * M1 SoCs (T8103, T600x) rely on cold boot and do not have this restriction.
      */
-    bool sep_warm_active = (chip_id != T8103 && chip_id != T6000 &&
-                            chip_id != T6001 && chip_id != T6002);
+    bool sep_warm_active =
+        (chip_id != T8103 && chip_id != T6000 && chip_id != T6001 && chip_id != T6002);
 
     if (sep_warm_active) {
         printf("SEP: Preserving iBoot warm registration; seeding RNG from ADT\n");
@@ -1753,7 +1753,8 @@ static int dt_disable_pcie_mappers(int parent)
 static int dt_disable_t8140_piodma(void)
 {
     static const char *const compatibles[] = {
-        "apple,t8140-piodma-diagnostic", "apple,t8140-pcie-piodma",
+        "apple,t8140-piodma-diagnostic",
+        "apple,t8140-pcie-piodma",
     };
     for (size_t i = 0; i < ARRAY_SIZE(compatibles); i++) {
         int node = -1;
@@ -1930,12 +1931,10 @@ static int dt_device_set_reserved_mem_from_dart(int node, dart_dev_t *dart, cons
         int owner = fdt_node_offset_by_phandle(dt, phandle);
         int iommu = owner < 0 ? owner : dt_get_iommu_node(owner, 0);
         int len = 0;
-        const fdt64_t *range =
-            iommu < 0 ? NULL : fdt_getprop(dt, iommu, "apple,dma-range", &len);
+        const fdt64_t *range = iommu < 0 ? NULL : fdt_getprop(dt, iommu, "apple,dma-range", &len);
         if (range && len == 16) {
             u64 base = fdt64_ld(&range[0]), span = fdt64_ld(&range[1]);
-            if (span && !(span & (span - 1)) && base >= span && !(base & (span - 1)) &&
-                iova < span)
+            if (span && !(span & (span - 1)) && base >= span && !(base & (span - 1)) && iova < span)
                 iova |= base;
         }
     }
@@ -3055,8 +3054,8 @@ static int dt_t8140_reserve_tables(const char *alias, const struct dt_t8140_dram
             goto out;
         if (dt_t8140_external_dart(ext, fdt32_to_cpu(iommus[i])) != external)
             continue;
-        dart_dev_t *dart = dart_init_fdt_locked(dt, fdt32_to_cpu(iommus[i]),
-                                               fdt32_to_cpu(iommus[i + 1]));
+        dart_dev_t *dart =
+            dart_init_fdt_locked(dt, fdt32_to_cpu(iommus[i]), fdt32_to_cpu(iommus[i + 1]));
         size_t count;
         if (!dart)
             goto out;
@@ -3093,8 +3092,8 @@ static int dt_t8140_reserve_tables(const char *alias, const struct dt_t8140_dram
                 if (fdt64_ld(&reg[1]) > size)
                     size = fdt64_ld(&reg[1]);
             }
-            int region = dt_get_or_add_reserved_mem(name, "apple,firmware-dart-tables", false,
-                                                    base, size);
+            int region =
+                dt_get_or_add_reserved_mem(name, "apple,firmware-dart-tables", false, base, size);
             if (region < 0 || fdt_getprop(dt, region, "no-map", NULL)) {
                 ret = -1;
                 goto out;
@@ -4305,7 +4304,8 @@ static int dt_set_display_t8140(void)
     if (fdt_setprop_u32(dt, node, "asahi,external-display-preflight", ext_ready ? 0x100 : ext_step))
         printf("FDT: external preflight observation unavailable\n");
     free(saved);
-    printf("FDT: T8140 DCP enabled with validated framebuffer, firmware and live inherited RTKit session%s;"
+    printf("FDT: T8140 DCP enabled with validated framebuffer, firmware and live inherited RTKit "
+           "session%s;"
            " /chosen/apple,dcp-rtkit-live=1\n",
            ext_ready ? " (dcpext enabled)" : "");
     return 0;
@@ -4377,7 +4377,8 @@ static bool dt_display_phys_reserved(u64 phys, u64 size)
     int parent = fdt_path_offset(dt, "/reserved-memory");
     int node;
 
-    fdt_for_each_subnode(node, dt, parent) {
+    fdt_for_each_subnode(node, dt, parent)
+    {
         int len;
         const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
         if (!reg || len != 16 || !fdt_getprop(dt, node, "no-map", NULL))
@@ -4408,8 +4409,7 @@ static int dt_reserve_m5_display_segments(void)
 
     if (owner < 0)
         return 0;
-    if (nub < 0 || chosen < 0 ||
-        ADT_GETPROP(adt, chosen, "dram-base", &dram) != sizeof(dram) ||
+    if (nub < 0 || chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram) != sizeof(dram) ||
         ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size))
         bail("ADT: missing M5 display firmware memory bounds\n");
     segments = adt_getprop(adt, nub, "segment-ranges", &len);
@@ -4426,21 +4426,19 @@ static int dt_reserve_m5_display_segments(void)
         u64 size = ALIGN_UP((u64)segments[i].size, SZ_16K);
         total += size;
         if (!size || (start & (SZ_16K - 1)) || start < (1ULL << 40) ||
-            start - (1ULL << 40) >= (1ULL << 36) ||
-            size > (1ULL << 36) - (start - (1ULL << 40)) || total > 128 * SZ_1M)
+            start - (1ULL << 40) >= (1ULL << 36) || size > (1ULL << 36) - (start - (1ULL << 40)) ||
+            total > 128 * SZ_1M)
             bail_cleanup("ADT: unsupported M5 display firmware segment\n");
         for (u64 offset = 0; offset < size;) {
             u64 iova = start + offset;
             u64 phys = (u64)dart_translate(dart, iova);
-            if (phys < dram || phys - dram > dram_size - SZ_16K ||
-                (phys & (SZ_16K - 1)))
+            if (phys < dram || phys - dram > dram_size - SZ_16K || (phys & (SZ_16K - 1)))
                 bail_cleanup("DART: invalid M5 display firmware page\n");
             bool reserved = dt_display_phys_reserved(phys, SZ_16K);
             u64 count = SZ_16K;
             while (offset + count < size) {
                 u64 next = (u64)dart_translate(dart, iova + count);
-                if (next != phys + count || next < dram ||
-                    next - dram > dram_size - SZ_16K ||
+                if (next != phys + count || next < dram || next - dram > dram_size - SZ_16K ||
                     dt_display_phys_reserved(next, SZ_16K) != reserved)
                     break;
                 count += SZ_16K;
@@ -5117,8 +5115,8 @@ static int dt_set_display(void)
         return ret;
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t8142")) {
         ret = dt_carveout_reserved_regions("dcp", "disp0", "disp0_piodma",
-                                          disp_reserved_regions_t8142,
-                                          ARRAY_SIZE(disp_reserved_regions_t8142));
+                                           disp_reserved_regions_t8142,
+                                           ARRAY_SIZE(disp_reserved_regions_t8142));
         if (ret)
             return ret;
     } else {
@@ -5277,7 +5275,7 @@ struct pmp_values_soc {
     const char *compat; /* SoC compatible of the FDT root */
     const char *node;   /* the /chosen subnode */
     const char *name;
-    u32 irqs[4];        /* /arm-io/pmp interrupts, in ADT order */
+    u32 irqs[4]; /* /arm-io/pmp interrupts, in ADT order */
     u64 dart_addr, dart_size;
 };
 
@@ -5320,8 +5318,7 @@ static void dt_pass_pmp(const struct pmp_values_soc *soc)
             dart_addr == soc->dart_addr && dart_size == soc->dart_size;
     if (!where) {
         /* An empty node: the kernel refuses the PMP rather than using built-in values. */
-        printf("FDT: %s PMP is not where the kernel expects it; no PMP values passed\n",
-               soc->name);
+        printf("FDT: %s PMP is not where the kernel expects it; no PMP values passed\n", soc->name);
         return;
     }
     snprintf(path, sizeof(path), "/chosen/%s", soc->node);
