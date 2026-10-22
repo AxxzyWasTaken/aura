@@ -228,8 +228,8 @@ static int g15_csafr_sram(const struct g15_aux aux[2], u32 floor, u32 *out)
     assert(0);
     return -1;
 }
-static int g15_probed_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *counts,
-                         u32 *clusters, u32 *cores, float *leak)
+static int g15_probed_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *counts, u32 *clusters,
+                         u32 *cores, float *leak)
 {
     assert(0);
     return -1;

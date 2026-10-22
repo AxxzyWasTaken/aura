@@ -94,8 +94,8 @@ void dt_t6031_fw_uuids(void *dt)
 }
 
 #define FACTS_NODE     "asahi,t6031-facts"
-#define FACTS_CLOCKS   4  /* disp0 clock ids kept */
-#define FACTS_MCC_REGS 16 /* /arm-io/mcc reg entries kept */
+#define FACTS_CLOCKS   4   /* disp0 clock ids kept */
+#define FACTS_MCC_REGS 16  /* /arm-io/mcc reg entries kept */
 #define CLOCK_ID_BASE  256 /* clock ids from 256 index /arm-io clock-frequencies */
 
 /* disp0's clock ids and the frequency of each in /arm-io clock-frequencies (0: not there) */

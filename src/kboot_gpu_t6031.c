@@ -22,7 +22,7 @@
 #define CLOSURE_DEPTH  8
 
 /* The 14.8.3 GPU firmware family: its RTKit, and the iBoot of the 14.8.3 stub that loads it */
-#define G15_RTKIT_14_8_3 "RTKit-2419.140.12.release"
+#define G15_RTKIT_14_8_3  "RTKit-2419.140.12.release"
 #define STUB_IBOOT_14_8_3 "iBoot-10151.140.19.700.2"
 
 static int guard_begin(void)

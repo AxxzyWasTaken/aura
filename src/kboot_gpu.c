@@ -6,14 +6,14 @@
  */
 
 #include "kboot.h"
-#include "kboot_gpu_t6031.h"
-#include "kboot_gpu_t8122_power.h"
-#include "kboot_t6031.h"
 #include "adt.h"
 #include "assert.h"
 #include "exception.h"
 #include "firmware.h"
 #include "gfx_fw_image_info.h"
+#include "kboot_gpu_t6031.h"
+#include "kboot_gpu_t8122_power.h"
+#include "kboot_t6031.h"
 #include "malloc.h"
 #include "math.h"
 #include "mcc.h"
@@ -2088,7 +2088,8 @@ static const struct g15_soc g15_soc_t6031 = {
     .calc_power = calc_power_t6031_standin,
 };
 
-/* This boot's T6031 firmware family (NULL: not admitted) and powered identity, set before the setup */
+/* This boot's T6031 firmware family (NULL: not admitted) and powered identity, set before the setup
+ */
 static const struct fw_version_info *g15_t6031_fw;
 static struct t8122_powered_identity g15_t6031_id;
 
@@ -2282,9 +2283,8 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
 
     /* Optional: the firmware segment description. Without it the GPU is still set up. */
     struct g15_fw_seg fw_segs[G15_FW_SEGS];
-    bool have_fw_segs = !g15_get_fw_segs_nub(dt, gpu, regions, fw_segs,
-                                             soc->fw_nub ? soc->fw_nub
-                                                         : "/arm-io/gfx-asc/iop-gfx-nub");
+    bool have_fw_segs = !g15_get_fw_segs_nub(
+        dt, gpu, regions, fw_segs, soc->fw_nub ? soc->fw_nub : "/arm-io/gfx-asc/iop-gfx-nub");
     if (have_fw_segs)
         printf("ADT: GPU: firmware text 0x%lx+0x%lx VA 0x%lx, data 0x%lx+0x%lx VA 0x%lx\n",
                fw_segs[0].phys, fw_segs[0].size, fw_segs[0].va, fw_segs[1].phys, fw_segs[1].size,
@@ -2313,7 +2313,8 @@ static int dt_set_gpu_g15_inner(void *dt, const struct g15_soc *soc, bool armed)
     if (gpu < 0)
         return -1;
 
-    /* 3. Hardware: power on, GPU ID, core masks, leakage fuse (reads guarded); T6031: the probe's */
+    /* 3. Hardware: power on, GPU ID, core masks, leakage fuse (reads guarded); T6031: the probe's
+     */
     u32 core_count[G15_ARRAY_CLUSTERS], clusters, enabled_cores;
     float leak;
     if (soc->probed) {
@@ -2442,7 +2443,8 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
      * checks run and are logged, then the gpu node is left disabled. T6031 also
      * requires an explicit opt-in before its powered identity probe.
      */
-    bool armed = soc->armed_default ? !t6031_switched_off(dt, soc->optin) : g15_optin(dt, soc->optin);
+    bool armed =
+        soc->armed_default ? !t6031_switched_off(dt, soc->optin) : g15_optin(dt, soc->optin);
 
     g15_powered = false;
     int ret = dt_set_gpu_g15_inner(dt, soc, armed);

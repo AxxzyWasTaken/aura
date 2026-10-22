@@ -8,10 +8,6 @@
 #include <stdint.h>
 
 #include "kboot.h"
-#include "kboot_display_facts.h"
-#include "kboot_gpu_t8122.h"
-#include "kboot_pmp_t8122.h"
-#include "kboot_t6031.h"
 #include "adt.h"
 #include "assert.h"
 #include "clk.h"
@@ -23,6 +19,10 @@
 #include "iodev.h"
 #include "isp.h"
 #include "kboot_atc.h"
+#include "kboot_display_facts.h"
+#include "kboot_gpu_t8122.h"
+#include "kboot_pmp_t8122.h"
+#include "kboot_t6031.h"
 #include "malloc.h"
 #include "mcc.h"
 #include "memory.h"
@@ -2090,8 +2090,8 @@ static int dt_reserve_t8122_dcpext_one(unsigned int n)
     u64 dram_base = 0, dram_size = 0;
     if (!segments || !len || len % sizeof(*segments) || len / sizeof(*segments) > 64 ||
         chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram_base) != sizeof(dram_base) ||
-        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size) ||
-        !dram_size || dram_base > UINT64_MAX - dram_size)
+        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size) || !dram_size ||
+        dram_base > UINT64_MAX - dram_size)
         return -1;
     for (u32 i = 0; i < len / sizeof(*segments); i++) {
         u64 size = ALIGN_UP((u64)segments[i].size, SZ_16K);
@@ -2574,8 +2574,8 @@ static int dt_t6030_dcpext_validate(unsigned int n, const char *nub_path, char *
     int chosen = adt_path_offset(adt, "/chosen");
     u64 dram_base = 0, dram_size = 0;
     if (chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram_base) != sizeof(dram_base) ||
-        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size) ||
-        !dram_size || dram_base > UINT64_MAX - dram_size)
+        ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size) || !dram_size ||
+        dram_base > UINT64_MAX - dram_size)
         bail("ADT: J514S DCPEXT%u: no DRAM bounds\n", n);
 
     for (unsigned int i = 0; i < T6030_DCPEXT_SEGMENTS; i++) {
@@ -2602,8 +2602,8 @@ static int dt_t6030_dcpext_validate(unsigned int n, const char *nub_path, char *
         }
 
         if (seg.unk != t6030_dcpext_seg_flags[i] || seg.remap != remap || !seg.size ||
-            (seg.phys & (SZ_16K - 1)) || seg.phys < dram_base ||
-            size > dram_size || seg.phys - dram_base > dram_size - size)
+            (seg.phys & (SZ_16K - 1)) || seg.phys < dram_base || size > dram_size ||
+            seg.phys - dram_base > dram_size - size)
             bail("ADT: J514S DCPEXT%u: unexpected segment %u: PA 0x%lx remap 0x%lx size 0x%x "
                  "flags 0x%x\n",
                  n, i, seg.phys, seg.remap, seg.size, seg.unk);
@@ -2629,9 +2629,8 @@ static int dt_t6030_dcpext_validate(unsigned int n, const char *nub_path, char *
 
         snprintf(prop, sizeof(prop), "region-id-%u", t6030_dcpext_table_regions[n][i]);
         if (cmap < 0 || ADT_GETPROP_ARRAY(adt, cmap, prop, region) != sizeof(region) ||
-            !region[1] || (region[0] | region[1]) & (SZ_16K - 1) ||
-            region[0] < dram_base || region[1] > dram_size ||
-            region[0] - dram_base > dram_size - region[1])
+            !region[1] || (region[0] | region[1]) & (SZ_16K - 1) || region[0] < dram_base ||
+            region[1] > dram_size || region[0] - dram_base > dram_size - region[1])
             bail("ADT: J514S DCPEXT%u: no DART table storage %s\n", n, prop);
     }
 
@@ -2738,8 +2737,7 @@ static int dt_set_t6030_dcpext(unsigned int n)
         printf("FDT: J514S DCPEXT%u already enabled; leaving it alone\n", n);
         return 0;
     }
-    if (status && (status_len != sizeof("disabled") ||
-                   memcmp(status, "disabled", status_len)))
+    if (status && (status_len != sizeof("disabled") || memcmp(status, "disabled", status_len)))
         return -1;
     if (!status && status_len != -FDT_ERR_NOTFOUND)
         return status_len;

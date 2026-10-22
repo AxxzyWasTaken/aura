@@ -1076,8 +1076,7 @@ int main(int argc, char **argv)
             check(!fdt_getprop(dt, fdt_path_offset(dt, "dcp"), "apple,t8122-handoff", NULL),
                   "25G83 never publishes 14.x marker");
         }
-    }
-    else
+    } else
         refusal_check(dt);
     if (!strcmp(sc, "contract-selftest"))
         contract_selftest(dt);

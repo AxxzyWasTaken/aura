@@ -117,9 +117,9 @@ int32_t rust_fill_gpu_initdata(struct initdata_inputs *a, void *b, void *c, void
 
 /* ---------- the simulated bus ---------- */
 
-#define PS_GFX 0x408e80110UL /* GFX's power state register, from the J516C ADT's PMGR table */
-#define PS_AFR 0x408e80100UL
-#define PS_GPX 0x408e80000UL
+#define PS_GFX      0x408e80110UL /* GFX's power state register, from the J516C ADT's PMGR table */
+#define PS_AFR      0x408e80100UL
+#define PS_GPX      0x408e80000UL
 #define PS_DISP_SYS 0x292280200UL
 #define PS_DISP_FE  0x292280298UL
 #define PS_DISP_CPU 0x2922802a0UL
@@ -383,7 +383,8 @@ struct opts {
     bool stray_map, dcp_stopped, display_off, gpu_fault;
 };
 
-/* Display power off as kboot finds it: set after pmgr_init(), which powers parents of active devices */
+/* Display power off as kboot finds it: set after pmgr_init(), which powers parents of active
+ * devices */
 static bool display_off_after_init;
 
 static void world(const struct opts *o)
@@ -561,7 +562,8 @@ static void check_oslogs(const void *dt, bool want)
         for (int k = 0; k < n; k++) {
             if (s[k].unk != 0xa)
                 continue;
-            snprintf(name, sizeof(name), "/reserved-memory/dcp-oslog@%lx", (unsigned long)s[k].phys);
+            snprintf(name, sizeof(name), "/reserved-memory/dcp-oslog@%lx",
+                     (unsigned long)s[k].phys);
             int len;
             const fdt64_t *reg = prop(dt, name, "reg", &len);
             found += reg && len == 16 && fdt64_ld(reg) == s[k].phys &&
@@ -570,7 +572,8 @@ static void check_oslogs(const void *dt, bool want)
         }
     }
     if (want)
-        check(found == 5, "the five dcp/dcpext0-3 __OS_LOG buffers are reserved no-map (%d)", found);
+        check(found == 5, "the five dcp/dcpext0-3 __OS_LOG buffers are reserved no-map (%d)",
+              found);
     else
         check(found == 0, "no __OS_LOG reservation (%d)", found);
 }
@@ -608,7 +611,8 @@ static void check_display_published(const void *dt)
     int names = fdt_stringlist_count(dt, node_at(dt, DCP), "memory-region-names");
     check(names == 8, "display: dcp has the 8 dcp segments as memory regions (%d)", names);
     check(fdt_stringlist_count(dt, node_at(dt, DISP), "memory-region-names") == 2 &&
-              fdt_stringlist_search(dt, node_at(dt, DISP), "memory-region-names", "framebuffer") >= 0,
+              fdt_stringlist_search(dt, node_at(dt, DISP), "memory-region-names", "framebuffer") >=
+                  0,
           "display: display-subsystem has the stream 0 segments, the framebuffer among them");
     check(fdt_stringlist_count(dt, node_at(dt, PIODMA), "memory-region-names") == 1,
           "display: piodma has the stream 4 segment");
@@ -636,7 +640,8 @@ static void check_gpu_published(const void *dt)
     bool fw_ok = true;
     for (int i = 0; i < 3; i++) {
         const fdt32_t *v = prop(dt, GPU, fw[i], &len);
-        fw_ok &= v && len == 12 && fdt32_ld(v) == 14 && fdt32_ld(v + 1) == 8 && fdt32_ld(v + 2) == 3;
+        fw_ok &=
+            v && len == 12 && fdt32_ld(v) == 14 && fdt32_ld(v + 1) == 8 && fdt32_ld(v + 2) == 3;
     }
     check(fw_ok, "gpu: apple,firmware-version/-abi/-compat are 14.8.3");
 
@@ -701,9 +706,11 @@ static void check_gpu_published(const void *dt)
         leak_ok &= fdt32_ld(core + i) == sb;
     const fdt32_t *sram = prop(dt, GPU, "apple,sram-leak-coef", &len);
     leak_ok &= sram && len == 16 && !fdt32_ld(sram) && !fdt32_ld(sram + 3);
-    leak_ok &= u32_is(dt, GPU, "apple,cs-leak-coef", zb) && u32_is(dt, GPU, "apple,afr-leak-coef", zb);
+    leak_ok &=
+        u32_is(dt, GPU, "apple,cs-leak-coef", zb) && u32_is(dt, GPU, "apple,afr-leak-coef", zb);
     const char *standins = prop(dt, GPU, "asahi,t6031-gpu-standin", &len);
-    check(leak_ok && standins && fdt_stringlist_count(dt, node_at(dt, GPU), "asahi,t6031-gpu-standin") == 5,
+    check(leak_ok && standins &&
+              fdt_stringlist_count(dt, node_at(dt, GPU), "asahi,t6031-gpu-standin") == 5,
           "gpu: stand-in leakage 6412 x 4 clusters, 0 for SRAM, CS and AFR, all listed in "
           "asahi,t6031-gpu-standin");
 
@@ -865,8 +872,8 @@ static void dump_published(const void *dt)
         snprintf(p, sizeof(p), "/reserved-memory/%s", fdt_get_name(dt, child, NULL));
         dump_node(dt, p);
     }
-    static const char *const nodes[] = {DCP, DISP, GPU, AGXMBOX, "/opp-table-gpu",
-                                        "/opp-table-gpu-cs", "/opp-table-gpu-afr"};
+    static const char *const nodes[] = {
+        DCP, DISP, GPU, AGXMBOX, "/opp-table-gpu", "/opp-table-gpu-cs", "/opp-table-gpu-afr"};
     for (size_t i = 0; i < ARRAY_SIZE(nodes); i++)
         dump_node(dt, nodes[i]);
     printf("== register writes\n");
@@ -1000,11 +1007,13 @@ static void sc_t6034(void *dt)
     assert(pmgr_init() == 0);
     memcpy(snap, regs, sizeof(regs));
     nsnap = nregs;
-    /* kboot.c sends no apple,t6034 tree to the handoff; it is called here to show it does nothing */
+    /* kboot.c sends no apple,t6034 tree to the handoff; it is called here to show it does nothing
+     */
     boot(dt);
     check(!memcmp(before, dt, fdt_totalsize(before)), "T6034: the device tree is unchanged");
     check(!nwrites && !gpu_reads, "T6034: no register written, no GPU register read");
-    check(log_has("ADT: GPU: unsupported chip!"), "T6034: the GPU setup says unsupported, as before");
+    check(log_has("ADT: GPU: unsupported chip!"),
+          "T6034: the GPU setup says unsupported, as before");
 }
 
 static void sc_other_board(void *dt)
@@ -1163,7 +1172,8 @@ static void sc_no_facts(void *dt)
     run(dt);
     int len;
     const fdt32_t *clk = prop(dt, CHOSEN "/asahi,t6031-facts", "disp0-clock-frequencies", &len);
-    check(clk && len == 8 && !fdt32_ld(clk) && !prop(dt, CHOSEN "/asahi,t6031-facts", "mcc-reg", NULL),
+    check(clk && len == 8 && !fdt32_ld(clk) &&
+              !prop(dt, CHOSEN "/asahi,t6031-facts", "mcc-reg", NULL),
           "facts without clock-frequencies or mcc: the clock ids with rate 0, no mcc-reg");
     check_display_published(dt);
 }
@@ -1189,7 +1199,8 @@ static void sc_small_dt(void *dt)
     run(small);
     check(!marked(small, DCP) || (marked(small, DISP) && marked(small, PIODMA)),
           "small device tree: no partial display handoff");
-    check(strcmp(status_of(small, GPU), "okay") || u32_is(small, GPU, "apple,m3-handoff-version", 1),
+    check(strcmp(status_of(small, GPU), "okay") ||
+              u32_is(small, GPU, "apple,m3-handoff-version", 1),
           "small device tree: no partial GPU handoff");
     expect_power_restored();
 }
