@@ -1,15 +1,16 @@
 # J700 Stage 1 and Stage 2 release recipe
 
 The release uses a single source commit and two remote build outputs. Build
-both images in the KIS carrier flavour with the linked Aurora Silicon logo.
+both images with the linked Aurora Silicon logo; the USB carrier is selected
+at runtime.
 The `LOGO=` Makefile option appends a payload and must not be used for the
 installed Stage 1.
 
 ```sh
 BB=<remote-build-script>
 WT=<CLEAN_M1N1_WORKTREE>
-$BB m1n1 "$WT" <release>-stage1 RELEASE=1 CHAINLOADING=1 T8140_KIS_PROXY=1 BUILTIN_LOGO=aurora
-$BB m1n1 "$WT" <release>-stage2 RELEASE=1 CHAINLOADING=1 T8140_KIS_PROXY=1 BUILTIN_LOGO=aurora
+$BB m1n1 "$WT" <release>-stage1 RELEASE=1 CHAINLOADING=1 BUILTIN_LOGO=aurora
+$BB m1n1 "$WT" <release>-stage2 RELEASE=1 CHAINLOADING=1 ESP_STAGE2=1 BUILTIN_LOGO=aurora
 python3 tools/package_j700.py \
   --stage1-out <build-output>/<release>-stage1 \
   --stage2-out <build-output>/<release>-stage2 \
@@ -17,9 +18,10 @@ python3 tools/package_j700.py \
 ```
 
 The packaging tool requires identical source commits and tags, clean build
-inputs, `RELEASE`, `CHAINLOADING`, `T8140_KIS_PROXY`, `USE_DEBUG_USB` and
-`BUILTIN_LOGO=aurora`, no `LOGO=` build variable, one Stage 1 config marker, and
-`STACKBOT` as each image's final eight bytes. It ships each binary with the raw
+inputs, `RELEASE`, `CHAINLOADING` and `BUILTIN_LOGO=aurora` with no `LOGO=`
+build variable, `ESP_STAGE2` in the Stage 2 build only, exactly one Stage 1
+config marker in Stage 1 and none in Stage 2, and `STACKBOT` as each image's
+final eight bytes. It ships each binary with the raw
 ELF from the same build output folder, source/build metadata, licences,
 `fatfs/PROVENANCE.md` with the pinned revision and local changes, and
 `SHA256SUMS`. The Aurora Silicon logo terms are in
@@ -48,11 +50,10 @@ block is ignored by m1n1, which falls back to the proxy.
 
 ## Compose the ESP Stage 2
 
-For a persistent ESP Stage 2, build a separate
-flavour with `RELEASE=1 CHAINLOADING=1 J700_ESP_STAGE2=1 BUILTIN_LOGO=aurora`.
-`CHAINLOADING=1` supplies the `boot=` storage loader; `J700_ESP_STAGE2=1`
-omits the Stage 1 config and ESP chainload marker. Keep the KIS Stage 2 above
-for tethered tests and the release package.
+The persistent ESP Stage 2 is the release Stage 2 above, built with
+`RELEASE=1 CHAINLOADING=1 ESP_STAGE2=1 BUILTIN_LOGO=aurora`.
+`CHAINLOADING=1` supplies the `boot=` storage loader; `ESP_STAGE2=1`
+omits the Stage 1 config and ESP chainload marker.
 
 `aurora/stage2.bin` on the ESP is the complete m1n1 Stage 2 image followed by
 newline-terminated variables. For the three-file Linux route, append the
