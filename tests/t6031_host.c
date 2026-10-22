@@ -900,6 +900,7 @@ static void *load_dt(int room)
     static u8 dt[1 << 21];
     assert(!fdt_open_into(dt_in, dt, fdt_totalsize(dt_in) + room));
     assert(!fdt_setprop_string(dt, fdt_path_offset(dt, CHOSEN), "asahi,t6031-gpu", "1"));
+    assert(!fdt_setprop_string(dt, fdt_path_offset(dt, CHOSEN), "asahi,t6031-dcp", "1"));
     return dt;
 }
 
@@ -1029,19 +1030,30 @@ static void sc_other_board(void *dt)
     check(!nwrites && !gpu_reads, "another T6031 board: no register written or GPU register read");
 }
 
-static void sc_dcp_off(void *dt)
+/* Only chosen.asahi,t6031-dcp=1 arms the display handoff; __OS_LOG is reserved regardless */
+static void sc_dcp_not_armed(void *dt)
 {
-    world(&(struct opts){0});
-    chosen_set(dt, "asahi,t6031-dcp", "0");
-    run(dt);
-    check_oslogs(dt, true);
-    check_display_refused(dt);
-    check(!count_writes(DCP_COPROC, DCP_COPROC + 0x100000) &&
-              log_has("switched off (chosen.asahi,t6031-dcp=0)"),
-          "dcp switched off: logged, nothing written to the display blocks");
-    check_identity(dt, T8122_ID_PASS, true);
-    check_gpu_published(dt);
-    expect_power_restored();
+    static u8 armed[1 << 21];
+    memcpy(armed, dt, fdt_totalsize(dt));
+    static const char *const values[] = {NULL, "0", "", "10", "yes"};
+    for (size_t i = 0; i < ARRAY_SIZE(values); i++) {
+        memcpy(dt, armed, fdt_totalsize(armed));
+        if (values[i])
+            chosen_set(dt, "asahi,t6031-dcp", values[i]);
+        else
+            assert(!fdt_delprop(dt, node_at(dt, CHOSEN), "asahi,t6031-dcp"));
+        world(&(struct opts){0});
+        run(dt);
+        check_oslogs(dt, true);
+        check_display_refused(dt);
+        check(!count_writes(DCP_COPROC, DCP_COPROC + 0x100000) &&
+                  log_has("not armed (no chosen.asahi,t6031-dcp=1)"),
+              "dcp not armed (%s): logged, nothing written to the display blocks",
+              values[i] ? values[i] : "absent");
+        check_identity(dt, T8122_ID_PASS, true);
+        check_gpu_published(dt);
+        expect_power_restored();
+    }
 }
 
 static void sc_gpu_off(void *dt)
@@ -1213,7 +1225,7 @@ static const struct {
     {"publish-dump", sc_publish_dump},
     {"t6034", sc_t6034},
     {"other-board", sc_other_board},
-    {"dcp-off", sc_dcp_off},
+    {"dcp-not-armed", sc_dcp_not_armed},
     {"gpu-off", sc_gpu_off},
     {"identity-fault", sc_identity_fault},
     {"identity-mismatch", sc_identity_mismatch},

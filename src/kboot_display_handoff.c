@@ -61,17 +61,18 @@
  * kernel device tree without display nodes is normal. No T8122 PMP is handed off here.
  *
  * T6031 (M3 Max, J514C/J516C only; nothing at all on another board or chip, so not on a T6034):
- * the T8122 handoff with T6031 values, armed on every boot unless the boot.bin config line
- * chosen.asahi,t6031-dcp=0 switches it off. The kernel decides whether to take the display over
- * (its display path is off by default and enabled per boot on its command line), so the handoff
- * must be harmless when ignored: the nodes stay disabled and only the marker and the memory
- * description are added. On every boot the __OS_LOG buffers of dcp and dcpext0..3, taken from
- * the ADT, are reserved. Armed, the DCP, DART and display power state are read and checked as on
- * T8122, against the T6031 addresses (the display block sits at 0x3_8400_0000), and only with every
- * check passing is dart-dcp locked and the handoff published with marker apple,t6031-handoff. The
- * DCP image is not pinned here: apple,firmware-uuid is the running image's ADT uuid, and the
- * kernel's board record decides whether it knows that image. No ADT description is logged (the
- * ADT reaches Linux whole, and the log ring is 16K); the DART stream registers are.
+ * the T8122 handoff with T6031 values, armed only by the boot.bin config line
+ * chosen.asahi,t6031-dcp=1, as on T6030 and T8122, until it has run on a Max. The kernel decides
+ * whether to take the display over (its display path is off by default and enabled per boot on
+ * its command line), so the handoff must be harmless when ignored: the nodes stay disabled and
+ * only the marker and the memory description are added. On every boot, armed or not, the __OS_LOG
+ * buffers of dcp and dcpext0..3, taken from the ADT, are reserved. Armed, the DCP, DART and display
+ * power state are read and checked as on T8122, against the T6031 addresses (the display block sits
+ * at 0x3_8400_0000), and only with every check passing is dart-dcp locked and the handoff published
+ * with marker apple,t6031-handoff. The DCP image is not pinned here: apple,firmware-uuid is the
+ * running image's ADT uuid, and the kernel's board record decides whether it knows that image. No
+ * ADT description is logged (the ADT reaches Linux whole, and the log ring is 16K); the DART stream
+ * registers are.
  *
  * Fail-soft: dt_set_display_handoff() always returns 0; a failed check is logged and changes
  * nothing. Transactional: DT edits are made on a scratch copy that replaces the DT only if every
@@ -219,7 +220,6 @@ struct dcp_soc {
     bool fw25;          /* exact J613 25G83 profile */
     bool ext;           /* T6030 dcpextN memory and dispextN DART handoffs */
     bool board_gate;    /* nothing at all unless chip_id is .chip and the root is one of .boards */
-    bool armed_default; /* armed unless the boot.bin config line chosen.<optin>=0 */
     bool any_uuid;      /* no image pinned: the running image's ADT uuid is published */
     bool log_streams;   /* log the DART stream registers, without the ADT description */
     const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only (unless any_uuid) */
@@ -350,7 +350,6 @@ static const struct dcp_soc dcp_soc_t6031 = {
     .oslog_always = true,
     .adt_psreg = true,
     .board_gate = true,
-    .armed_default = true,
     .any_uuid = true,
     .log_streams = true,
     .os_fw = V14_7,
@@ -2236,8 +2235,6 @@ static bool dcp6_armed(void *dt)
     int chosen = fdt_path_offset(dt, "/chosen");
     int len = 0;
     const char *optin = chosen >= 0 ? fdt_getprop(dt, chosen, dcp6.soc->optin, &len) : NULL;
-    if (dcp6.soc->armed_default)
-        return !(optin && len == 2 && !strcmp(optin, "0"));
     return optin && len == 2 && !strcmp(optin, "1");
 }
 
@@ -2758,10 +2755,7 @@ int dt_set_display_handoff(void *dt)
             dcp6_find_nubs();
             dcp6_reserve_oslogs(dt);
         }
-        if (dcp6.soc->armed_default)
-            dlog("switched off (chosen.%s=0): no display handoff\n", dcp6.soc->optin);
-        else
-            dlog("not armed (no chosen.%s=1): no display handoff\n", dcp6.soc->optin);
+        dlog("not armed (no chosen.%s=1): no display handoff\n", dcp6.soc->optin);
         return 0;
     }
 
