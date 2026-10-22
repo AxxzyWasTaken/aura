@@ -2764,7 +2764,29 @@ static int dt_set_t6030_dcpext(unsigned int n)
 static int dt_t6030_panel(unsigned int unused)
 {
     (void)unused;
+    /* The frontend mapping check replaces this with its own result. */
+    snprintf(t6030_display_handoff, sizeof(t6030_display_handoff), "DCP firmware handoff refused");
     return dt_set_t6030_dcp_handoff();
+}
+
+/* The native path of the matched J514S development DT: the panel, then each external controller. */
+static void dt_set_j514s_native(void)
+{
+    /* The panel step replaces this as it starts. */
+    snprintf(t6030_display_handoff, sizeof(t6030_display_handoff),
+             "no memory for the handoff transaction");
+    if (dt_display_transaction(dt_t6030_panel, 0)) {
+        printf("FDT: J514S native handoff refused; keeping the boot framebuffer\n");
+        /* The refused transaction discarded its edits, its result with them. */
+        int chosen = fdt_path_offset(dt, "/chosen");
+        if (chosen < 0 ||
+            fdt_setprop_string(dt, chosen, "aurora,j514s-display-handoff", t6030_display_handoff))
+            printf("FDT: cannot record the J514S display handoff result\n");
+        return;
+    }
+    for (unsigned int n = 0; n < 2; n++)
+        if (dt_display_transaction(dt_set_t6030_dcpext, n))
+            printf("FDT: J514S DCPEXT%u handoff refused\n", n);
 }
 
 static int dt_set_display(void)
@@ -2839,13 +2861,7 @@ static int dt_set_display(void)
         int dcp = fdt_path_offset(dt, "dcp");
         if (dcp < 0 || !fdt_getprop(dt, dcp, "apple,j514s-native-piodma", NULL))
             return 0;
-        if (dt_display_transaction(dt_t6030_panel, 0)) {
-            printf("FDT: J514S native handoff refused; keeping the boot framebuffer\n");
-            return 0;
-        }
-        for (unsigned int n = 0; n < 2; n++)
-            if (dt_display_transaction(dt_set_t6030_dcpext, n))
-                printf("FDT: J514S DCPEXT%u handoff refused\n", n);
+        dt_set_j514s_native();
         return 0;
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030") ||
                !fdt_node_check_compatible(dt, 0, "apple,t8122") ||
