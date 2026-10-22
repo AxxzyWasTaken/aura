@@ -160,6 +160,7 @@ static const struct adt_tunable_info atc_tunables_t8130[] = {
     {"tunable_AUX_TOP", "apple,tunable-common-b", 0x16000, 0x4000, true},
     {"tunable_AUSCMN_SHM", "apple,tunable-common-b", 0xa00, 0x200, true},
     {"tunable_CLKMON_CFG", "apple,tunable-common-b", 0x2600, 0x100, false},
+    {"tunable_CIO_SHIM", "apple,tunable-common-b", 0x4000, 0x4000, false},
     {"tunable_LN0_RX_TOP_USB_DFLT", "apple,tunable-lane0-usb", 0x9000, 0x1000, true},
     {"tunable_LN0_RX_EQ_USB_EQA", "apple,tunable-lane0-usb", 0xa000, 0x1000, true},
     {"tunable_LN0_RX_SHM_USB_DFLT", "apple,tunable-lane0-usb", 0xb000, 0x1000, true},

@@ -351,7 +351,7 @@ int payload_run(void)
     }
 
 #ifndef ESP_STAGE2
-    if (!stage1_config_applied && chip_id == T8140) {
+    if (!stage1_config_applied) {
         const char *target = stage1_config_target();
         if (target) {
             if (chainload_spec && strcmp(chainload_spec, target)) {

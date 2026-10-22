@@ -11,6 +11,11 @@ def test_t8140_display_handoff(tmp_path):
     start = source.index("struct dt_t8140_dram {")
     end = source.index("/* T8142 display carveouts:", start)
     helper = source[start:end]
+    # The read-only metadata exporter has its own actual-C tests. Keep this
+    # fixture focused on carveouts, dependency state and handoff failures.
+    observe_start = helper.index("static void dt_t8140_external_metadata(void)")
+    observe_end = helper.index("static int dt_set_display_t8140(void)", observe_start)
+    helper = helper[:observe_start] + "static void dt_t8140_external_metadata(void) {}\n" + helper[observe_end:]
     asc_source = (repo / "src/asc.c").read_text()
     asc_defs = asc_source[asc_source.index("#define ASC_CPU_CONTROL"):asc_source.index("struct asc_dev {")]
     asc_check = asc_source[asc_source.index("static bool asc_mailbox_empty("):asc_source.index("bool asc_can_recv(")]
@@ -353,15 +358,17 @@ static void setup(void)
         char path[64];
         snprintf(path, sizeof(path), "/soc/%s", refs[i]);
         assert(fdt_setprop_string(dt, fdt_path_offset(dt, "/aliases"), aliases[i], path) == 0);
+        assert(!fdt_setprop_string(dt, fdt_path_offset(dt, path), "compatible",
+                                  i < 2 ? "apple,t8140-dart" : "apple,t8140-asc-mailbox"));
         assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path), "phandle", 100 + i) == 0);
         assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path),
-                               i < 2 ? "#iommu-cells" : "#mbox-cells", 1) == 0);
+                               i < 2 ? "#iommu-cells" : "#mbox-cells", i < 2 ? 1 : 0) == 0);
         assert(fdt_setprop_string(dt, fdt_path_offset(dt, path), "status", "okay") == 0);
     }
     for (int i = 0; i < 2; i++) {
         const char *name = i ? "/soc/dcpext" : "/soc/dcp";
         fdt32_t iommu[] = {cpu_to_fdt32(100 + i), 0};
-        fdt32_t mbox[] = {cpu_to_fdt32(102 + i), 0};
+        fdt32_t mbox[] = {cpu_to_fdt32(102 + i)};
         assert(fdt_setprop(dt, fdt_path_offset(dt, name), "iommus", iommu,
                            sizeof(iommu)) == 0);
         assert(fdt_setprop(dt, fdt_path_offset(dt, i ? "/soc/dispext0" : "/soc/disp0"),
@@ -378,6 +385,8 @@ static void setup(void)
         snprintf(path, sizeof(path), "/soc/%s", dart);
         assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path), "phandle", 104 + i) == 0);
         assert(fdt_setprop_u32(dt, fdt_path_offset(dt, path), "#iommu-cells", 1) == 0);
+        assert(fdt_setprop_string(dt, fdt_path_offset(dt, path), "compatible", "apple,t8140-dart") == 0);
+        assert(fdt_setprop_string(dt, fdt_path_offset(dt, path), "status", "okay") == 0);
         fdt32_t iommu[] = {cpu_to_fdt32(104 + i), 0};
         assert(fdt_setprop(dt, fdt_path_offset(dt, display), "iommus", iommu, sizeof(iommu)) == 0);
         iommu[0] = cpu_to_fdt32(100 + i); iommu[1] = cpu_to_fdt32(23);
@@ -398,6 +407,13 @@ static void setup(void)
     }
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/soc"), "usb-pd") >= 0);
     assert(fdt_setprop_string(dt, fdt_path_offset(dt, "/soc/usb-pd"), "status", "okay") == 0);
+    int supply = fdt_add_subnode(dt, fdt_path_offset(dt, "/soc"), "external-power");
+    assert(supply >= 0);
+    assert(!fdt_setprop_string(dt, supply, "compatible", "apple,t8140-pmgr-pwrstate"));
+    assert(!fdt_setprop_u32(dt, supply, "phandle", 200));
+    assert(!fdt_setprop_u32(dt, supply, "#power-domain-cells", 0));
+    assert(!fdt_setprop_string(dt, supply, "status", "disabled"));
+    assert(!fdt_setprop_u32(dt, fdt_path_offset(dt, "/soc/dcpext"), "power-domains", 200));
     assert(fdt_add_subnode(dt, fdt_path_offset(dt, "/chosen"), "framebuffer") >= 0);
     cur_boot_args.phys_base = 0x1000342c000;
     cur_boot_args.mem_size = 0x1e39e8000;
@@ -489,6 +505,10 @@ int main(void)
     check_status("dcp", "okay");
     check_status("disp0", "okay");
     check_status("dcpext", "okay");
+    const fdt32_t *preflight = fdt_getprop(dt, fdt_path_offset(dt, "/chosen"),
+                                         "asahi,external-display-preflight", NULL);
+    assert(preflight && fdt32_to_cpu(*preflight) == 0x100);
+    check_status("external-power", "okay");
     check_status("dispext0", "disabled");
     assert(reservation_calls == 11);
     assert(fdt_path_offset(dt, "/reserved-memory/framebuffer@101eb4b8000") >= 0);
@@ -499,6 +519,16 @@ int main(void)
     check_status("/soc/dcp/typec-routes/port0", "okay");
     check_status("/soc/dcpext/typec-routes/port0", "okay");
     check_status("/soc/usb-pd", "okay");
+    assert(!dt_t8140_disable_dcpext());
+    check_status("external-power", "disabled");
+    check_status("dcp", "okay");
+
+    setup();
+    assert(!fdt_setprop_u32(dt, fdt_path_offset(dt, "/soc/external-power"),
+                           "power-domains", 200));
+    memcpy(before, dt, sizeof(tree));
+    assert(dt_set_display_t8140() < 0);
+    assert(!memcmp(before, dt, sizeof(tree)));
 
     /* A refused external controller must withdraw only its mode routes. */
     setup();
@@ -516,7 +546,7 @@ int main(void)
         setup();
         assert(dt_set_display_t8140() == 0);
         if (fault == 0) ext_power = false;
-        if (fault == 1) asc_state[1].status |= BIT(1);
+        if (fault == 1) asc_state[1].status = (asc_state[1].status | BIT(1)) & ~BIT(5);
         if (fault == 2) asc_state[1].i2a |= BIT(18);
         if (fault == 3) asc_state[1].stop_on_recheck = true;
         if (fault == 4) asc_state[1].a2i &= ~BIT(0);
@@ -605,16 +635,17 @@ int main(void)
     table_fault = 3;
     assert(dt_set_display_t8140() == 0);
     check_fallback(before);
+    /* Without its PIODMA child the internal display master cannot be shown
+     * to belong to the refused DCP, so refusal fails before any edit. */
     setup();
     assert(fdt_del_node(dt, fdt_path_offset(dt, "/soc/dcp/piodma")) == 0);
-    assert(dt_set_display_t8140() == 0);
-    check_fallback(before);
+    assert(dt_set_display_t8140() < 0);
     setup();
     fdt32_t malformed_child[] = {cpu_to_fdt32(104)};
     assert(fdt_setprop(dt, fdt_path_offset(dt, "/soc/dcp/piodma"), "iommus",
                        malformed_child, sizeof(malformed_child)) == 0);
+    /* A malformed reference fails refusal before any edit. */
     assert(dt_set_display_t8140() == -1);
-    check_claim(false);
 
     setup();
     fdt32_t too_large_sid[] = {cpu_to_fdt32(104), cpu_to_fdt32(256)};
