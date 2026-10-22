@@ -148,7 +148,9 @@ dcp_iboot_if_t *dcp_ib_init(dcp_dev_t *dcp)
     return iboot;
 
 err_shutdown:
-    afk_epic_shutdown_ep(iboot->epic);
+    /* Callbacks from an endpoint that did not stop can still reach this. */
+    if (afk_epic_shutdown_ep(iboot->epic) < 0)
+        return NULL;
 err_free:
     free(iboot);
     return NULL;
@@ -156,10 +158,11 @@ err_free:
 
 int dcp_ib_shutdown(dcp_iboot_if_t *iboot)
 {
-    int ret = afk_epic_shutdown_ep(iboot->epic);
-
+    /* An endpoint that did not stop can still call back into this interface. */
+    if (afk_epic_shutdown_ep(iboot->epic) < 0)
+        return -1;
     free(iboot);
-    return ret;
+    return 0;
 }
 
 static int dcp_ib_cmd(dcp_iboot_if_t *iboot, int op, size_t in_size)
