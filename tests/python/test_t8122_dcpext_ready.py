@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: MIT
 """Exercise firmware-ready publication with production reservation code and real FDTs."""
 
 from pathlib import Path

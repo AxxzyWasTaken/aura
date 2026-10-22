@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: MIT
 """Run the production T600x route handoff against real, relocating FDTs."""
 
 from pathlib import Path

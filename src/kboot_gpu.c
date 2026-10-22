@@ -1,9 +1,4 @@
-/* SPDX-License-Identifier: MIT AND GPL-2.0-or-later */
-/*
- * Original MIT code retains its MIT terms (LICENSE). The imported GPL portions
- * and their exact source revisions are listed in docs/m1-m3-handoff-sources.md.
- * GPL text: 3rdparty_licenses/LICENSE.GPL-2.0.
- */
+/* SPDX-License-Identifier: MIT */
 
 #include "kboot.h"
 #include "adt.h"

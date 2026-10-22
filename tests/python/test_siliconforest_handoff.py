@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: MIT
 """Fault injection into the production handoff transaction and Max opt-in."""
 
 from pathlib import Path

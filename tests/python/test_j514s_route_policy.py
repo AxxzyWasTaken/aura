@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: MIT
 """Exercise the J514S publication bodies against real libfdt route statuses."""
 from pathlib import Path
 from test_siliconforest_handoff import definition, run_c
