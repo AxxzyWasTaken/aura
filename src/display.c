@@ -464,9 +464,10 @@ int display_configure(const char *config)
     while (retries++ < (DISPLAY_STATUS_RETRIES(display_is_dptx))) {
         dcp_work(dcp);
         hpd = dcp_ib_get_hpd(iboot, &timing_cnt, &color_cnt);
-        if (hpd < 0)
-            ret = hpd;
-        else if (hpd && timing_cnt && color_cnt)
+        /* Only the latest status query decides; the power requests above are
+         * best effort and an earlier failed query may be followed by a good one. */
+        ret = hpd < 0 ? hpd : 0;
+        if (hpd > 0 && timing_cnt && color_cnt)
             break;
         if (retries < DISPLAY_STATUS_RETRIES(display_is_dptx))
             mdelay(DISPLAY_STATUS_DELAY);
