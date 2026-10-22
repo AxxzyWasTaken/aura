@@ -293,9 +293,10 @@ void do_enable_tso(void)
 }
 
 /*
- * Set by start.S when this stage moved itself above the chainloaded image:
- * the payload is still after the image at the old base. In .data, because
- * start.S writes it before .bss is cleared.
+ * Set by start.S when this stage moved itself above the chainloaded image, or
+ * down to the run base stage 1 put in its load header (chainload.h): the
+ * payload is still after the image at the old base. In .data, because start.S
+ * writes it before .bss is cleared.
  */
 u64 relocated_from __attribute__((section(".data"))) = 0;
 

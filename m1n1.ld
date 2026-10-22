@@ -264,3 +264,6 @@ PROT_WRITE = 0x02;
 PROT_EXECUTE = 0x04;
 
 _va_off = _va_base - _base;
+
+/* Bytes from _base to _end, for the load header (start.S) */
+_image_footprint = ABSOLUTE(_end - _base);
