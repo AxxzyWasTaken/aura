@@ -46,7 +46,7 @@ static int smp_wait(int cpu, u64 *retval)
 static void kboot_delete_chosen(const char *key) { advertised_tso = 0; }
 static void kboot_set_chosen(const char *key, const char *value)
 { advertised_tso = value != NULL; }
-''' + mitigations + '\nstatic int prepare_cpus(void)\n{\n    if (0) goto boot_failed;\n' + setup + r'''
+''' + mitigations + '\nstatic int prepare_cpus(void)\n{\n' + setup + r'''
     return 0;
 boot_failed:
     return -1;

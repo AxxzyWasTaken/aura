@@ -20,12 +20,20 @@ shift
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-# m1n1's ADT reader, unchanged except for one expression that takes char to be unsigned, as it
-# is on arm64 but not on x86-64
+# m1n1's ADT reader. A reader that still converts the node name through c_char gets one
+# expression changed to take char as unsigned, as it is on arm64 but not on x86-64; one that
+# reads the name as bytes already is used unchanged.
 mkdir -p "$tmp/rs" "$tmp/src"
-sed 's|CStr::from_bytes_until_nul(&self.name)|CStr::from_bytes_until_nul(unsafe { \&*(\&self.name as *const [c_char; 32] as *const [u8; 32]) })|' \
-    rust/src/adt.rs > "$tmp/rs/adt.rs"
-if [ "$(diff rust/src/adt.rs "$tmp/rs/adt.rs" | grep -c '^>')" != 1 ]; then
+if grep -q 'CStr::from_bytes_until_nul(&self.name)' rust/src/adt.rs; then
+    sed 's|CStr::from_bytes_until_nul(&self.name)|CStr::from_bytes_until_nul(unsafe { \&*(\&self.name as *const [c_char; 32] as *const [u8; 32]) })|' \
+        rust/src/adt.rs > "$tmp/rs/adt.rs"
+    if [ "$(diff rust/src/adt.rs "$tmp/rs/adt.rs" | grep -c '^>')" != 1 ]; then
+        echo "FAIL: rust/src/adt.rs changed; update the host build in $0"
+        exit 1
+    fi
+elif grep -q 'from_raw_parts(self.name.as_ptr() as \*const u8, 32)' rust/src/adt.rs; then
+    cp rust/src/adt.rs "$tmp/rs/adt.rs"
+else
     echo "FAIL: rust/src/adt.rs changed; update the host build in $0"
     exit 1
 fi

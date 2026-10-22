@@ -5,6 +5,7 @@ on:
     branches: [ main, integration/aurora, integration/neo ]
   pull_request:
     branches: [ main, integration/aurora, integration/neo ]
+  workflow_dispatch:
 
 permissions:
   contents: read

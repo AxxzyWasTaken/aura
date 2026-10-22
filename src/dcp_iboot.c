@@ -14,18 +14,17 @@
 #define TXBUF_LEN 0x4000
 #define RXBUF_LEN 0x4000
 
+/* Payload bytes reside in the fixed-size transport buffers. */
 struct txcmd {
     u32 op;
     u32 len;
     u32 unk1;
     u32 unk2;
-    u8 payload[];
 };
 
 struct rxcmd {
     u32 op;
     u32 len;
-    u8 payload[];
 };
 
 struct dcp_iboot_if {
@@ -149,7 +148,9 @@ dcp_iboot_if_t *dcp_ib_init(dcp_dev_t *dcp)
     return iboot;
 
 err_shutdown:
-    afk_epic_shutdown_ep(iboot->epic);
+    /* Callbacks from an endpoint that did not stop can still reach this. */
+    if (afk_epic_shutdown_ep(iboot->epic) < 0)
+        return NULL;
 err_free:
     free(iboot);
     return NULL;
@@ -157,8 +158,9 @@ err_free:
 
 int dcp_ib_shutdown(dcp_iboot_if_t *iboot)
 {
-    afk_epic_shutdown_ep(iboot->epic);
-
+    /* An endpoint that did not stop can still call back into this interface. */
+    if (afk_epic_shutdown_ep(iboot->epic) < 0)
+        return -1;
     free(iboot);
     return 0;
 }
@@ -166,18 +168,62 @@ int dcp_ib_shutdown(dcp_iboot_if_t *iboot)
 static int dcp_ib_cmd(dcp_iboot_if_t *iboot, int op, size_t in_size)
 {
     size_t rxsize = RXBUF_LEN;
+    /* The 26A428 AFKEPV2 handlers return only transport status for these
+     * setters. Supplying a reply buffer makes firmware try to copy an empty
+     * message and assert while queueing the response. */
+    bool setter = op == IBOOT_SET_POWER || op == IBOOT_SET_MODE || op == IBOOT_SET_SURFACE;
+    bool status_only = afk_epic_is_v2(iboot->epic) && setter;
     assert(in_size <= TXBUF_LEN - sizeof(struct txcmd));
 
     iboot->txcmd.op = op;
     iboot->txcmd.len = sizeof(struct txcmd) + in_size;
 
-    return afk_epic_command(iboot->epic, iboot->channel, 0xc0, iboot->txbuf,
-                            sizeof(struct txcmd) + in_size, iboot->rxbuf, &rxsize);
+    int ret = afk_epic_command(iboot->epic, iboot->channel, 0xc0, iboot->txbuf,
+                              sizeof(struct txcmd) + in_size,
+                              status_only ? NULL : iboot->rxbuf,
+                              status_only ? NULL : &rxsize);
+    if (ret)
+        return ret;
+    if (status_only)
+        return 0;
+    /* AFKEPV1 setters can also answer with transport status alone. J293
+     * SET_POWER was observed replying with no bytes at all. SET_MODE and
+     * SET_SURFACE carry no reply payload either (by the iBoot command
+     * contract), so their empty reply is admitted the same way; a non-empty
+     * reply must still be a well-formed header. */
+    if (setter && !rxsize)
+        return 0;
+    if (rxsize < sizeof(struct rxcmd) || iboot->rxcmd.len < sizeof(struct rxcmd) ||
+        iboot->rxcmd.len > rxsize) {
+        printf("dcp-iboot: invalid response length for operation %d (%zu bytes)\n", op, rxsize);
+        return -1;
+    }
+    size_t payload_size = iboot->rxcmd.len - sizeof(struct rxcmd);
+    if ((op == IBOOT_GET_HPD && payload_size < sizeof(struct get_hpd_resp)) ||
+        (op == IBOOT_SWAP_BEGIN && payload_size < sizeof(struct swap_start_resp)))
+        return -1;
+    if (op == IBOOT_GET_TIMING_MODES) {
+        struct get_tmode_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
+        if (payload_size < sizeof(*resp) ||
+            resp->count > (payload_size - sizeof(*resp)) / sizeof(resp->modes[0]))
+            return -1;
+    }
+    if (op == IBOOT_GET_COLOR_MODES) {
+        struct get_cmode_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
+        if (payload_size < sizeof(*resp) ||
+            resp->count > (payload_size - sizeof(*resp)) / sizeof(resp->modes[0]))
+            return -1;
+    }
+#ifdef AFK_TRACE
+    printf("dcp-iboot: operation %d response %zu bytes\n", op, rxsize);
+    hexdump(iboot->rxbuf, min(rxsize, 64));
+#endif
+    return 0;
 }
 
 int dcp_ib_set_surface(dcp_iboot_if_t *iboot, dcp_layer_t *layer)
 {
-    dcp_layer_t *cmd = (void *)iboot->txcmd.payload;
+    dcp_layer_t *cmd = (void *)(iboot->txbuf + sizeof(struct txcmd));
     *cmd = *layer;
 
     return dcp_ib_cmd(iboot, IBOOT_SET_SURFACE, sizeof(*layer));
@@ -185,7 +231,7 @@ int dcp_ib_set_surface(dcp_iboot_if_t *iboot, dcp_layer_t *layer)
 
 int dcp_ib_set_power(dcp_iboot_if_t *iboot, bool power)
 {
-    u32 *pwr = (void *)iboot->txcmd.payload;
+    u32 *pwr = (void *)(iboot->txbuf + sizeof(struct txcmd));
     *pwr = power;
 
     return dcp_ib_cmd(iboot, IBOOT_SET_POWER, 1);
@@ -193,7 +239,7 @@ int dcp_ib_set_power(dcp_iboot_if_t *iboot, bool power)
 
 int dcp_ib_get_hpd(dcp_iboot_if_t *iboot, int *timing_cnt, int *color_cnt)
 {
-    struct get_hpd_resp *resp = (void *)iboot->rxcmd.payload;
+    struct get_hpd_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
     int ret = dcp_ib_cmd(iboot, IBOOT_GET_HPD, 0);
 
     if (ret < 0)
@@ -209,7 +255,7 @@ int dcp_ib_get_hpd(dcp_iboot_if_t *iboot, int *timing_cnt, int *color_cnt)
 
 int dcp_ib_get_timing_modes(dcp_iboot_if_t *iboot, dcp_timing_mode_t **modes)
 {
-    struct get_tmode_resp *resp = (void *)iboot->rxcmd.payload;
+    struct get_tmode_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
     int ret = dcp_ib_cmd(iboot, IBOOT_GET_TIMING_MODES, 0);
 
     if (ret < 0)
@@ -221,7 +267,7 @@ int dcp_ib_get_timing_modes(dcp_iboot_if_t *iboot, dcp_timing_mode_t **modes)
 
 int dcp_ib_get_color_modes(dcp_iboot_if_t *iboot, dcp_color_mode_t **modes)
 {
-    struct get_cmode_resp *resp = (void *)iboot->rxcmd.payload;
+    struct get_cmode_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
     int ret = dcp_ib_cmd(iboot, IBOOT_GET_COLOR_MODES, 0);
 
     if (ret < 0)
@@ -236,7 +282,7 @@ int dcp_ib_set_mode(dcp_iboot_if_t *iboot, dcp_timing_mode_t *tmode, dcp_color_m
     struct {
         dcp_timing_mode_t tmode;
         dcp_color_mode_t cmode;
-    } *cmd = (void *)iboot->txcmd.payload;
+    } *cmd = (void *)(iboot->txbuf + sizeof(struct txcmd));
 
     cmd->tmode = *tmode;
     cmd->cmode = *cmode;
@@ -245,7 +291,7 @@ int dcp_ib_set_mode(dcp_iboot_if_t *iboot, dcp_timing_mode_t *tmode, dcp_color_m
 
 int dcp_ib_swap_begin(dcp_iboot_if_t *iboot)
 {
-    struct swap_start_resp *resp = (void *)iboot->rxcmd.payload;
+    struct swap_start_resp *resp = (void *)(iboot->rxbuf + sizeof(struct rxcmd));
     int ret = dcp_ib_cmd(iboot, IBOOT_SWAP_BEGIN, 0);
     if (ret < 0)
         return ret;
@@ -256,7 +302,7 @@ int dcp_ib_swap_begin(dcp_iboot_if_t *iboot)
 static int swap_set_layer_v12_3(dcp_iboot_if_t *iboot, int layer_id, dcp_layer_t *layer,
                                 dcp_rect_t *src_rect, dcp_rect_t *dst_rect)
 {
-    struct swap_set_layer_cmd *cmd = (void *)iboot->txcmd.payload;
+    struct swap_set_layer_cmd *cmd = (void *)(iboot->txbuf + sizeof(struct txcmd));
     memset(cmd, 0, sizeof(*cmd));
     cmd->layer_id = layer_id;
     cmd->layer = *layer;
@@ -269,7 +315,7 @@ static int swap_set_layer_v12_3(dcp_iboot_if_t *iboot, int layer_id, dcp_layer_t
 static int swap_set_layer_v13_3(dcp_iboot_if_t *iboot, int layer_id, dcp_layer_t *layer,
                                 dcp_rect_t *src_rect, dcp_rect_t *dst_rect)
 {
-    struct swap_set_layer_cmd_v13_3 *cmd = (void *)iboot->txcmd.payload;
+    struct swap_set_layer_cmd_v13_3 *cmd = (void *)(iboot->txbuf + sizeof(struct txcmd));
     memset(cmd, 0, sizeof(*cmd));
     cmd->layer_id = layer_id;
     cmd->layer = *layer;
@@ -290,6 +336,6 @@ int dcp_ib_swap_set_layer(dcp_iboot_if_t *iboot, int layer_id, dcp_layer_t *laye
 
 int dcp_ib_swap_end(dcp_iboot_if_t *iboot)
 {
-    memset(iboot->txcmd.payload, 0, 12);
+    memset(iboot->txbuf + sizeof(struct txcmd), 0, 12);
     return dcp_ib_cmd(iboot, IBOOT_SWAP_END, 12);
 }

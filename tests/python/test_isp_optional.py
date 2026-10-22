@@ -34,6 +34,7 @@ typedef unsigned long u64;
 typedef uint32_t u32;
 #define PACKED __attribute__((packed))
 #define T6030 0x6030
+#define T8140 0x8140
 #define SZ_16K 16384
 #define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
@@ -45,6 +46,13 @@ static struct adt_segment_ranges segments[2];
 /* 0: valid; 1: no ISP node; 2: no segment list; 3: empty; 4: partial entry; 5: FDT full */
 static int fault, reservations, fwdata_calls;
 static u64 isp_iova_base(void) { return 0x100000000ULL; }
+static bool isp_up = true;
+static int isp_get_heap(u64 *phys, u64 *iova, u64 *size)
+{
+    if (!isp_up) return -1;
+    *phys = 0x100000000ULL; *iova = 0x21ec000; *size = 0x14000;
+    return 0;
+}
 static int adt_path_offset(void *tree, const char *path)
 {
     (void)tree;
@@ -82,6 +90,8 @@ static void world(int which)
 {
     fault = which;
     reservations = fwdata_calls = fwdata_fault = 0;
+    chip_id = 0x8122;
+    isp_up = true;
     segments[0] = (struct adt_segment_ranges){.phys = 0x10000004000ULL, .iova = 0x4000,
         .size = 0x4000};
     segments[1] = (struct adt_segment_ranges){.phys = 0x10000010000ULL, .iova = 0x10000,
@@ -126,6 +136,18 @@ int main(void)
     assert(!fdt_del_node(dt, fdt_path_offset(dt, "/soc/isp")));
     assert(!fdt_delprop(dt, fdt_path_offset(dt, "/aliases"), "isp"));
     assert(dt_set_isp() == 0 && fwdata_calls == 1);
+    /* A T8140 ISP that isp_init() did not bring up has no firmware to reserve. */
+    world(2); chip_id = T8140; isp_up = false;
+    assert(dt_set_isp() == 0 && fwdata_calls == 1 && !strcmp(isp_status(), "okay"));
+    int found = 0;
+    assert(!fdt_getprop(dt, fdt_path_offset(dt, "isp"), "memory-region", &found));
+    /* One it brought up is reserved like any other. */
+    world(0); chip_id = T8140;
+    assert(dt_set_isp() == 0 && fwdata_calls == 1);
+    assert(fdt_getprop(dt, fdt_path_offset(dt, "isp"), "memory-region", &found) && found == 8);
+    /* If its firmware data then fails, it is disabled too. */
+    world(2); chip_id = T8140; isp_up = false; fwdata_fault = 1;
+    assert(dt_set_isp() == 0 && !strcmp(isp_status(), "disabled"));
     puts("PASS isp optional");
     return 0;
 }

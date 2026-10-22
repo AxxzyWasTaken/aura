@@ -6,6 +6,7 @@
 #include "devicetree.h"
 #include "malloc.h"
 #include "memory.h"
+#include "soc.h"
 #include "string.h"
 #include "utils.h"
 
@@ -86,6 +87,9 @@
 
 #define DART_MAX_TTBR_COUNT 4
 
+#define DART_GEN3_PTE_OFFSET GENMASK(37, 10)
+#define DART_GEN3_ROUTE      0x4604
+
 #define DART_TCR(dart) (dart->regs + dart->params->tcr_off + 4 * dart->device)
 #define DART_TTBR(dart, idx)                                                                       \
     (dart->regs + dart->params->ttbr_off + 4 * dart->params->ttbr_count * dart->device + 4 * idx)
@@ -112,14 +116,23 @@ struct dart_params {
 struct dart_dev {
     bool locked;
     bool keep;
+    bool legacy_mutable;
     uintptr_t regs;
     u8 device;
     enum dart_type_t type;
     const struct dart_params *params;
     u64 vm_base;
+    uintptr_t tlbi_aperture;
+    u8 tlbi_route;
 
     u64 *l1[DART_MAX_TTBR_COUNT];
 };
+
+/* A retained DCP root can outlive its software handle. Record every table
+ * published by the legacy view before publication, and reserve it at handoff. */
+#define LEGACY_L2_MAX_PAGES 32
+static u64 legacy_l2_pages[LEGACY_L2_MAX_PAGES];
+static size_t legacy_l2_count;
 
 static void dart_t8020_tlb_invalidate(dart_dev_t *dart)
 {
@@ -141,8 +154,24 @@ static void dart_t8110_tlb_invalidate(dart_dev_t *dart)
             FIELD_PREP(DART_T8110_TLB_CMD_OP, DART_T8110_TLB_CMD_OP_FLUSH_SID) |
                 FIELD_PREP(DART_T8110_TLB_CMD_STREAM, dart->device));
 
-    if (poll32(dart->regs + DART_T8110_TLB_CMD_OP, DART_T8110_TLB_CMD_BUSY, 0, 100))
+    if (poll32(dart->regs + DART_T8110_TLB_CMD, DART_T8110_TLB_CMD_BUSY, 0, 100))
         printf("dart: DART_T8110_TLB_CMD_BUSY did not clear.\n");
+}
+
+/* 26A428 SPTM gen3dart_write_tlbi_cmd_payload: a 128-bit aperture write,
+ * followed by VALE1OS, broadcasts a SID invalidation. The old +0x80 command
+ * register is used for translation queries, not this invalidation path.
+ * DCP SID 23 accepted this sequence on J873g without an exception. */
+static void dart_gen3_tlb_invalidate(dart_dev_t *dart)
+{
+    u64 lo = BIT(60) | ((u64)dart->tlbi_route << 56) | ((u64)dart->device << 48);
+    u64 hi = 0;
+    dma_wmb();
+    asm volatile("stp %0, %1, [%2]\n"
+                 "dsb ish\n"
+                 ".inst 0xd50881bf\n" /* tlbi vale1os, xzr */
+                 "dsb osh\n"
+                 : : "r"(lo), "r"(hi), "r"(dart->tlbi_aperture) : "memory");
 }
 
 const struct dart_params dart_t8020 = {
@@ -193,8 +222,89 @@ const struct dart_params dart_t8110 = {
     .tlb_invalidate = dart_t8110_tlb_invalidate,
 };
 
+/* The two-level Gen3 stream format was checked against live DCP firmware
+ * mappings. Three-level streams, cold initialization and PMGR2 are separate
+ * work; never substitute the older driver for those cases. */
+static const struct dart_params dart_gen3 = {
+    .sid_count = 256,
+    .pte_flags = FIELD_PREP(DART_PTE_SP_END, 0xfff) | DART_PTE_VALID,
+    .offset_mask = DART_GEN3_PTE_OFFSET,
+    .tcr_enabled = DART_T8110_TCR_TRANSLATE_ENABLE,
+    .tcr_disabled = DART_T8110_TCR_BYPASS_DAPF | DART_T8110_TCR_BYPASS_DART,
+    .tcr_off = DART_T8110_TCR_OFF,
+    .ttbr_valid = DART_T8110_TTBR_VALID,
+    .ttbr_addr = DART_T8110_TTBR_ADDR,
+    .ttbr_shift = DART_T8110_TTBR_SHIFT,
+    .ttbr_off = DART_T8110_TTBR_OFF,
+    .ttbr_count = 1,
+    .tlb_invalidate = dart_gen3_tlb_invalidate,
+};
+
+static dart_dev_t *dart_gen3_adopt_adt(int node, uintptr_t base, int device, bool keep_pts)
+{
+    /* Require an iBoot-provisioned display stream. In particular, do not read
+     * an unpowered USB DART while PMGR2 service control is unavailable. */
+    if (!keep_pts || device < 0 || device >= dart_gen3.sid_count) {
+        printf("dart: Gen3 cold initialization requires PMGR2 support\n");
+        return NULL;
+    }
+
+    int tlbi_path[8];
+    int tlbi_node = adt_path_offset_trace(adt, "/arm-io/dart-tlbi-aperture", tlbi_path);
+    u64 aperture, size, offset;
+    u32 sid_count;
+    if (tlbi_node < 0 ||
+        adt_get_reg(adt, tlbi_path, "reg", 0, &aperture, &size) < 0 ||
+        ADT_GETPROP(adt, node, "tlbi-aperture-offset", &offset) < 0 ||
+        ADT_GETPROP(adt, node, "sid-count", &sid_count) < 0 ||
+        sid_count > 256 || (u32)device >= sid_count || size < 16 ||
+        offset > size - 16 || (offset & 15)) {
+        printf("dart: invalid Gen3 SID/TLBI metadata\n");
+        return NULL;
+    }
+
+    u32 config = read32(base);
+    u32 version = read32(base + 8) & 0xffff;
+    u32 sid_config = read32(base + DART_T8110_TCR_OFF + 4 * device);
+    u32 enabled = read32(base + DART_T8110_ENABLE_STREAMS + 4 * (device >> 5));
+    u32 ttbr = read32(base + DART_T8110_TTBR_OFF + 4 * device);
+    if (((config >> 24) & 15) != 14 || version != 0x300 ||
+        (sid_config & 15) != 1 || !(enabled & BIT(device & 31)) ||
+        !(ttbr & DART_T8110_TTBR_VALID)) {
+        printf("dart: Gen3 stream %d is not an active two-level 16K stream\n", device);
+        return NULL;
+    }
+
+    dart_dev_t *dart = calloc(1, sizeof(*dart));
+    if (!dart)
+        return NULL;
+    dart->regs = base;
+    dart->device = device;
+    dart->type = DART_GEN3;
+    dart->params = &dart_gen3;
+    dart->keep = true;
+    dart->locked = !!(read32(base + 0x200) & read32(base + 0x208) & 1);
+    dart->l1[0] = (u64 *)(FIELD_GET(DART_T8110_TTBR_ADDR, ttbr) << DART_T8110_TTBR_SHIFT);
+    dart->tlbi_aperture = aperture + offset;
+    dart->tlbi_route = read32(base + DART_GEN3_ROUTE) & 15;
+    /* Table indices use the low 36 bits, but firmware buffer grants must
+     * retain the ADT's high IOVA window. T8152 DCP rejects low addresses as
+     * MMIO (observed for an RTKit buffer grant at 0x10000000). */
+    char prop[24];
+    snprintf(prop, sizeof(prop), "vm-base-%d", device);
+    if (ADT_GETPROP(adt, node, prop, &dart->vm_base) < 0)
+        ADT_GETPROP(adt, node, "vm-base", &dart->vm_base);
+    printf("dart: adopted Gen3 SID %d at 0x%lx, root %p, TLBI route %u%s\n", device,
+           base, dart->l1[0], dart->tlbi_route, dart->locked ? " (locked)" : "");
+    return dart;
+}
+
 dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t type)
 {
+    if (type == DART_GEN3) {
+        printf("dart: Gen3 requires ADT aperture and stream metadata\n");
+        return NULL;
+    }
     dart_dev_t *dart = calloc(1, sizeof(*dart));
     if (!dart)
         return NULL;
@@ -202,6 +312,7 @@ dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t
     dart->regs = base;
     dart->device = device;
     dart->type = type;
+    dart->keep = keep_pts;
 
     switch (type) {
         case DART_T8020:
@@ -213,6 +324,9 @@ dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t
         case DART_T6000:
             dart->params = &dart_t6000;
             break;
+        default:
+            free(dart);
+            return NULL;
     }
 
     if (device >= dart->params->sid_count) {
@@ -226,16 +340,19 @@ dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t
         case DART_T6000:
             if (read32(dart->regs + DART_T8020_CONFIG) & DART_T8020_CONFIG_LOCK)
                 dart->locked = true;
-            set32(dart->regs + DART_T8020_ENABLED_STREAMS, BIT(device & 0x1f));
+            if (!dart->locked)
+                set32(dart->regs + DART_T8020_ENABLED_STREAMS, BIT(device & 0x1f));
             break;
         case DART_T8110:
             if (read32(dart->regs + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR)
                 dart->locked = true;
-            write32(dart->regs + DART_T8110_ENABLE_STREAMS + 4 * (device >> 5), BIT(device & 0x1f));
+            if (!dart->locked)
+                write32(dart->regs + DART_T8110_ENABLE_STREAMS + 4 * (device >> 5),
+                        BIT(device & 0x1f));
             break;
+        default:
+            break; /* Unsupported types were rejected above. */
     }
-
-    dart->keep = keep_pts;
 
     if (dart->locked || keep_pts) {
         for (int i = 0; i < dart->params->ttbr_count; i++) {
@@ -248,6 +365,10 @@ dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t
 
     for (int i = 0; i < dart->params->ttbr_count; i++) {
         if (dart->l1[i])
+            continue;
+
+        /* Locked DARTs cannot accept a new translation root. */
+        if (dart->locked)
             continue;
 
         dart->l1[i] = memalign(SZ_16K, SZ_16K);
@@ -264,7 +385,8 @@ dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t
     if (!dart->locked && !keep_pts)
         write32(DART_TCR(dart), dart->params->tcr_enabled);
 
-    dart->params->tlb_invalidate(dart);
+    if (!dart->locked && !dart->keep)
+        dart->params->tlb_invalidate(dart);
     return dart;
 
 error:
@@ -292,7 +414,9 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
     enum dart_type_t type;
     const char *type_s;
 
-    if (adt_is_compatible(adt, node, "dart,t8020")) {
+    if (adt_is_compatible(adt, node, "dart,gen3")) {
+        return dart_gen3_adopt_adt(node, base, device, keep_pts);
+    } else if (adt_is_compatible(adt, node, "dart,t8020")) {
         type = DART_T8020;
         type_s = "t8020";
     } else if (adt_is_compatible(adt, node, "dart,t6000")) {
@@ -338,6 +462,37 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
     if (dart->locked)
         dart->vm_base &= (1LLU << 36) - 1;
 
+    return dart;
+}
+
+/* Legacy display firmware uses existing RAM tables even when configuration is
+ * protected. This view never replaces a root or unlocks configuration, and is
+ * not available through the FDT inspection or proxy constructors. */
+dart_dev_t *dart_init_adt_display(const char *path, int instance, int device)
+{
+    if (chip_id == T8103 && (device < 0 || device >= 32))
+        return NULL;
+
+    dart_dev_t *dart = dart_init_adt(path, instance, device, true);
+    if (!dart || chip_id != T8103 || dart->type != DART_T8020 || strcmp(path, "/arm-io/dart-dcp"))
+        return dart;
+
+    if (dart->locked) {
+        u32 tcr = read32(DART_TCR(dart));
+        u32 mode = DART_T8020_TCR_TRANSLATE_ENABLE | DART_T8020_TCR_BYPASS_DART |
+                   DART_T8020_TCR_BYPASS_DAPF;
+        if (!(read32(dart->regs + DART_T8020_ENABLED_STREAMS) & BIT(dart->device)) ||
+            (tcr & mode) != DART_T8020_TCR_TRANSLATE_ENABLE) {
+            printf("dart: legacy display stream is not translating\n");
+            dart_shutdown(dart);
+            return NULL;
+        }
+        dart->legacy_mutable = true;
+    }
+
+    /* Match the legacy display constructor's invalidation before RTKit starts.
+     * The locked/keep paths still retain every root throughout handoff. */
+    dart->params->tlb_invalidate(dart);
     return dart;
 }
 
@@ -408,8 +563,84 @@ dart_dev_t *dart_init_fdt(void *dt, u32 phandle, int device, bool keep_pts)
     return dart;
 }
 
+/* Inspect an inherited display translation without creating a root or
+ * enabling a stream if firmware did not leave the DART locked. */
+dart_dev_t *dart_init_fdt_locked(void *dt, u32 phandle, int device)
+{
+    int node = fdt_node_offset_by_phandle(dt, phandle);
+    if (node < 0 || fdt_node_check_compatible(dt, node, "apple,t8110-dart"))
+        return NULL;
+
+    u64 base = dt_get_address(dt, node);
+    if (!base || !(read32(base + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR)) {
+        printf("dart: inherited DART for phandle %u is not locked\n", phandle);
+        return NULL;
+    }
+
+    return dart_init_fdt(dt, phandle, device, true);
+}
+
+static bool dart_table_in_dram(u64 page, u64 base, u64 size)
+{
+    return page && !(page & (SZ_16K - 1)) && size >= SZ_16K &&
+           base <= UINT64_MAX - size && page >= base && page - base <= size - SZ_16K;
+}
+
+int dart_collect_locked_tables(dart_dev_t *dart, u64 dram_base, u64 dram_size,
+                               u64 *pages, size_t capacity, size_t *count)
+{
+    const u64 address_mask = GENMASK(37, 10);
+    u64 entries[SZ_16K / sizeof(u64)];
+    size_t used = 0;
+    if (!count)
+        return -1;
+    *count = 0;
+    if (!dart || dart->type != DART_T8110 || !dart->locked || !dart->keep ||
+        !pages || !capacity || dart->params->ttbr_count != 1 ||
+        !dart_table_in_dram((u64)dart->l1[0], dram_base, dram_size))
+        return -1;
+    u32 tcr = read32(DART_TCR(dart));
+    u32 ttbr = read32(DART_TTBR(dart, 0));
+    if (tcr != DART_T8110_TCR_TRANSLATE_ENABLE ||
+        !(ttbr & DART_T8110_TTBR_VALID) ||
+        (FIELD_GET(DART_T8110_TTBR_ADDR, ttbr) << DART_T8110_TTBR_SHIFT) !=
+            (u64)dart->l1[0])
+        return -1;
+
+    /* Read table descriptors only after the complete root page is in DRAM. */
+    memcpy(entries, dart->l1[0], sizeof(entries));
+    pages[used++] = (u64)dart->l1[0];
+    for (size_t i = 0; i < ARRAY_SIZE(entries); i++) {
+        u64 entry = entries[i];
+        if (!entry)
+            continue;
+        if (!(entry & DART_PTE_VALID) || (entry & ~(address_mask | DART_PTE_VALID)))
+            return -1;
+        u64 page = FIELD_GET(address_mask, entry) << DART_PTE_OFFSET_SHIFT;
+        if (!dart_table_in_dram(page, dram_base, dram_size) || page == (u64)dart->l1[0])
+            return -1;
+        size_t j;
+        for (j = 0; j < used && pages[j] != page; j++)
+            ;
+        if (j != used)
+            continue;
+        if (used == capacity)
+            return -1;
+        pages[used++] = page;
+    }
+    /* A changed root needs a new lifetime reservation before publication. */
+    if (memcmp(entries, dart->l1[0], sizeof(entries)) || read32(DART_TCR(dart)) != tcr ||
+        read32(DART_TTBR(dart, 0)) != ttbr)
+        return -1;
+    *count = used;
+    return 0;
+}
+
 int dart_setup_pt_region(dart_dev_t *dart, const char *path, int device, u64 vm_base)
 {
+    if (dart->locked)
+        return -1;
+
     int node = adt_path_offset(adt, path);
     if (node < 0) {
         printf("dart: Error getting DART node %s\n", path);
@@ -497,20 +728,32 @@ static u64 *dart_get_l2(dart_dev_t *dart, u32 idx)
     int ttbr = idx >> 11;
     idx &= 0x7ff;
 
+    if (ttbr >= dart->params->ttbr_count || !dart->l1[ttbr])
+        return NULL;
+
     if (dart->l1[ttbr][idx] & DART_PTE_VALID) {
         u64 off = FIELD_GET(dart->params->offset_mask, dart->l1[ttbr][idx])
                   << DART_PTE_OFFSET_SHIFT;
         return (u64 *)off;
     }
 
+    if (dart->legacy_mutable && legacy_l2_count >= LEGACY_L2_MAX_PAGES)
+        return NULL;
+
     u64 *tbl = memalign(SZ_16K, SZ_16K);
     if (!tbl)
         return NULL;
 
+    u64 offset = FIELD_PREP(dart->params->offset_mask, ((u64)tbl) >> DART_PTE_OFFSET_SHIFT);
+    if (dart->legacy_mutable &&
+        (FIELD_GET(dart->params->offset_mask, offset) << DART_PTE_OFFSET_SHIFT) != (u64)tbl) {
+        free(tbl);
+        return NULL;
+    }
     memset(tbl, 0, SZ_16K);
 
-    u64 offset = FIELD_PREP(dart->params->offset_mask, ((u64)tbl) >> DART_PTE_OFFSET_SHIFT);
-
+    if (dart->legacy_mutable)
+        legacy_l2_pages[legacy_l2_count++] = (u64)tbl;
     dart->l1[ttbr][idx] = offset | DART_PTE_VALID;
 
     return tbl;
@@ -541,6 +784,9 @@ static int dart_map_page(dart_dev_t *dart, uintptr_t iova, uintptr_t paddr, u32 
 
 int dart_map_flags(dart_dev_t *dart, uintptr_t iova, void *bfr, size_t len, u32 flags)
 {
+    if (dart->locked && !dart->legacy_mutable)
+        return -1;
+
     uintptr_t paddr = (uintptr_t)bfr;
     u64 offset = 0;
 
@@ -577,15 +823,22 @@ static void dart_unmap_page(dart_dev_t *dart, uintptr_t iova)
     u32 l1_index = (iova >> 25) & 0x7ff;
     u32 l2_index = (iova >> 14) & 0x7ff;
 
-    if (!(dart->l1[ttbr][l1_index] & DART_PTE_VALID))
+    if (ttbr >= (u32)dart->params->ttbr_count || !dart->l1[ttbr])
+        return;
+    u64 entry = dart->l1[ttbr][l1_index];
+    if (!(entry & DART_PTE_VALID))
         return;
 
-    u64 *l2 = dart_get_l2(dart, l1_index);
+    u64 off = FIELD_GET(dart->params->offset_mask, entry) << DART_PTE_OFFSET_SHIFT;
+    u64 *l2 = (u64 *)off;
     l2[l2_index] = 0;
 }
 
 void dart_unmap(dart_dev_t *dart, uintptr_t iova, size_t len)
 {
+    if (dart->locked && !dart->legacy_mutable)
+        return;
+
     if (len % SZ_16K)
         return;
     if (iova % SZ_16K)
@@ -603,6 +856,9 @@ void dart_unmap(dart_dev_t *dart, uintptr_t iova, size_t len)
 
 void dart_free_l2(dart_dev_t *dart, uintptr_t iova)
 {
+    if (dart->locked)
+        return;
+
     if (iova & ((1 << 25) - 1)) {
         printf("dart: %08lx is not at the start of L2 table\n", iova);
         return;
@@ -745,12 +1001,56 @@ u64 dart_search(dart_dev_t *dart, void *paddr)
                     continue;
                 u64 *dst = (u64 *)(FIELD_GET(dart->params->offset_mask, l2[l2_index])
                                    << DART_PTE_OFFSET_SHIFT);
-                if (dst == paddr)
-                    return ((u64)ttbr << 36) | ((u64)l1_index << 25) | (l2_index << 14);
+                if (dst == paddr) {
+                    u64 iova = ((u64)ttbr << 36) | ((u64)l1_index << 25) | (l2_index << 14);
+                    if (dart->type == DART_GEN3)
+                        iova |= dart->vm_base & ~GENMASK(35, 0);
+                    return iova;
+                }
             }
         }
     }
 
+    return DART_PTR_ERR;
+}
+
+u64 dart_search_range(dart_dev_t *dart, u64 paddr, size_t len)
+{
+    if (!len || (paddr & (SZ_16K - 1)) || paddr > UINT64_MAX - len || len > SIZE_MAX - (SZ_16K - 1))
+        return DART_PTR_ERR;
+
+    size_t pages = ALIGN_UP(len, SZ_16K) / SZ_16K;
+    for (int ttbr = 0; ttbr < dart->params->ttbr_count; ttbr++) {
+        if (!dart->l1[ttbr])
+            continue;
+        for (u32 l1 = 0; l1 < 2048; l1++) {
+            if (!(dart->l1[ttbr][l1] & DART_PTE_VALID))
+                continue;
+            u64 *l2 = (u64 *)(FIELD_GET(dart->params->offset_mask, dart->l1[ttbr][l1])
+                              << DART_PTE_OFFSET_SHIFT);
+            for (u32 page = 0; page < 2048; page++) {
+                if (!(l2[page] & DART_PTE_VALID))
+                    continue;
+                u64 first = FIELD_GET(dart->params->offset_mask, l2[page]) << DART_PTE_OFFSET_SHIFT;
+                if (first != paddr)
+                    continue;
+                u64 iova = ((u64)ttbr << 36) | ((u64)l1 << 25) | ((u64)page << 14);
+                bool contiguous = true;
+                for (size_t n = 1; n < pages; n++) {
+                    if (n > (UINT64_MAX - iova) / SZ_16K ||
+                        (u64)dart_translate_silent(dart, iova + n * SZ_16K) != paddr + n * SZ_16K) {
+                        contiguous = false;
+                        break;
+                    }
+                }
+                if (contiguous) {
+                    if (dart->type == DART_GEN3)
+                        iova |= dart->vm_base & ~GENMASK(35, 0);
+                    return iova;
+                }
+            }
+        }
+    }
     return DART_PTR_ERR;
 }
 
@@ -761,7 +1061,8 @@ u64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len)
     if (start < 0 || start % SZ_16K)
         return -1;
 
-    uintptr_t end = 1LLU << 36;
+    /* High ADT windows still cover a 36-bit page-table address space. */
+    uintptr_t end = dart->vm_base + (1LLU << 36);
     uintptr_t iova = start;
 
     while (iova + len <= end) {
@@ -785,8 +1086,12 @@ u64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len)
 
 void dart_shutdown(dart_dev_t *dart)
 {
-    if (!dart->locked && !dart->keep)
-        write32(DART_TCR(dart), dart->params->tcr_disabled);
+    if (dart->locked || dart->keep) {
+        free(dart);
+        return;
+    }
+
+    write32(DART_TCR(dart), dart->params->tcr_disabled);
 
     for (int i = 0; i < dart->params->ttbr_count; ++i)
         if (is_heap(dart->l1[i]))
@@ -810,6 +1115,27 @@ void dart_shutdown(dart_dev_t *dart)
         if (is_heap(dart->l1[i]))
             free(dart->l1[i]);
     free(dart);
+}
+
+/* Reservation failure is fatal to handoff: firmware can still follow a table
+ * after its handle has gone away, including when initialization is retried. */
+int dart_reserve_legacy_tables(void *dt, u64 dram_base, u64 dram_size)
+{
+    if (chip_id != T8103 || !legacy_l2_count)
+        return 0;
+    if (!dt || legacy_l2_count > LEGACY_L2_MAX_PAGES || dram_size < SZ_16K ||
+        dram_base > UINT64_MAX - dram_size)
+        return -1;
+
+    for (size_t i = 0; i < legacy_l2_count; i++) {
+        u64 page = legacy_l2_pages[i];
+        if ((page & (SZ_16K - 1)) || page < dram_base || page - dram_base > dram_size - SZ_16K)
+            return -1;
+    }
+    for (size_t i = 0; i < legacy_l2_count; i++)
+        if (fdt_add_mem_rsv(dt, legacy_l2_pages[i], SZ_16K))
+            return -1;
+    return 0;
 }
 
 u64 dart_vm_base(dart_dev_t *dart)

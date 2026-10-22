@@ -1,4 +1,11 @@
 RUSTARCH ?= aarch64-unknown-none-softfloat
+BUILTIN_LOGO ?= bootlogo
+
+ifneq ($(BUILTIN_LOGO),bootlogo)
+ifneq ($(words $(wildcard data/$(BUILTIN_LOGO)_128.bin data/$(BUILTIN_LOGO)_256.bin)),2)
+$(error BUILTIN_LOGO assets are missing)
+endif
+endif
 
 ifeq ($(shell uname),Darwin)
 USE_CLANG ?= 1
@@ -31,8 +38,9 @@ ARCH ?= aarch64-linux-gnu-
 endif
 
 ifeq ($(USE_CLANG),1)
-CC := $(TOOLCHAIN)clang --target=$(ARCH)
-AS := $(TOOLCHAIN)clang --target=$(ARCH)
+CLANG_TARGET := $(if $(ARCH),--target=$(ARCH))
+CC := $(TOOLCHAIN)clang $(CLANG_TARGET)
+AS := $(TOOLCHAIN)clang $(CLANG_TARGET)
 LD := $(LLDDIR)ld.lld
 OBJCOPY := $(TOOLCHAIN)llvm-objcopy
 CLANG_FORMAT ?= $(TOOLCHAIN)clang-format
@@ -92,6 +100,17 @@ CFG += CHAINLOADING
 CARGO_FLAGS += --features chainload
 endif
 
+# Select an ESP-loaded image and omit the embedded Stage 1 configuration.
+# Transport and handoff special cases remain scoped to their supported chips;
+# the option does not imply hardware qualification on every platform.
+ifeq ($(ESP_STAGE2),1)
+ifneq ($(CHAINLOADING),1)
+$(error ESP_STAGE2 requires CHAINLOADING=1 for boot=)
+endif
+CFG += ESP_STAGE2
+endif
+
+
 LDFLAGS := -EL -maarch64elf --no-undefined -X -Bsymbolic \
 	-z notext --no-apply-dynamic-relocs --orphan-handling=warn \
 	-z nocopyreloc --gc-sections -pie
@@ -105,7 +124,7 @@ TINF_OBJECTS := $(patsubst %,tinf/%, \
 DLMALLOC_OBJECTS := dlmalloc/malloc.o
 
 LIBFDT_OBJECTS := $(patsubst %,libfdt/%, \
-	fdt_addresses.o fdt_empty_tree.o fdt_ro.o fdt_rw.o fdt_strerror.o fdt_sw.o \
+	fdt_addresses.o fdt_check.o fdt_empty_tree.o fdt_ro.o fdt_rw.o fdt_strerror.o fdt_sw.o \
 	fdt_wip.o fdt.o)
 
 CHICKENS_OBJECTS := $(patsubst %,chickens/%, \
@@ -121,6 +140,7 @@ CHICKENS_OBJECTS := $(patsubst %,chickens/%, \
 	twister.o)
 
 DCP_OBJECTS := $(patsubst %,dcp/%, \
+	atc_phy.o \
 	dpav_ep.o \
 	dptx_phy.o \
 	dptx_port_ep.o \
@@ -139,12 +159,12 @@ HV_OBJECTS := $(patsubst %,hv/%, \
 	hv_wdt.o)
 
 OBJECTS := \
+	boot_storage.o \
 	adt.o \
 	afk.o \
 	aic.o \
 	asc.o \
-	bootlogo_48.o bootlogo_128.o bootlogo_256.o \
-	stage1_config.o \
+	bootlogo_48.o $(BUILTIN_LOGO)_128.o $(BUILTIN_LOGO)_256.o \
 	chainload.o \
 	chainload_asm.o \
 	chickens.o \
@@ -169,7 +189,7 @@ OBJECTS := \
 	kboot.o kboot_atc.o kboot_gpu_t8122.o kboot_gpu_t8122_power.o kboot_pmp_t8122.o \
 	kboot_t6020_compat.o \
 	kboot_display_handoff.o kboot_display_facts.o kboot_gpu26.o kboot_gpu_t6031.o kboot_t6031.o \
-	main.o \
+	main.o boot_options.o \
 	mitigations.o \
 	mcc.o \
 	memory.o memory_asm.o \
@@ -182,18 +202,20 @@ OBJECTS := \
 	rtkit.o \
 	sart.o \
 	sep.o \
+	stage1_config.o \
+	stage1_proxy.o \
 	sio.o \
 	smc.o \
 	smp.o \
-	spmi.o \
+	spmi.o ace3.o \
 	start.o \
 	startup.o \
 	string.o \
 	tunables.o tunables_static.o \
-	tps6598x.o \
+	tps6598x.o tps6598x_command_core.o \
 	uart.o \
 	uartproxy.o \
-	usb.o usb_dwc3.o \
+	usb.o usb_dwc3.o usb_dwc3_hs.o usb_dwc3_ss.o usb_cdc.o usb_cdc_atc.o usb_cdc_bulk.o usb_cdc_ss_desc.o usb_cdc_state.o \
 	utils.o utils_asm.o \
 	vsprintf.o \
 	wdt.o \
@@ -224,9 +246,9 @@ all: build/$(TARGET) build/$(TARGET_RAW)
 clean:
 	rm -rf build/* build/.deps
 format:
-	$(CLANG_FORMAT) -i src/*.c src/chickens/*.c src/dcp/*.c src/hv/*.c src/math/*.c src/*.h src/dcp/*.h src/hv/*.h src/math/*.h sysinc/*.h
+	$(CLANG_FORMAT) -i src/*.c src/*.inc src/chickens/*.c src/dcp/*.c src/hv/*.c src/math/*.c src/*.h src/dcp/*.h src/hv/*.h src/math/*.h sysinc/*.h
 format-check:
-	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/chickens/*.c src/dcp/*.c src/hv/*.c src/math/*.c src/*.h src/dcp/*.h src/hv/*.h src/math/*.h sysinc/*.h
+	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/*.inc src/chickens/*.c src/dcp/*.c src/hv/*.c src/math/*.c src/*.h src/dcp/*.h src/hv/*.h src/math/*.h sysinc/*.h
 rustfmt:
 	cd rust && cargo fmt
 rustfmt-check:
@@ -298,6 +320,7 @@ build-tag src/../build/build_tag.h &:
 build-cfg src/../build/build_cfg.h &:
 	$(QUIET)mkdir -p build
 	$(QUIET)for i in $(CFG); do echo "#define $$i"; done > build/build_cfg.tmp
+	$(QUIET)echo "#define BUILTIN_LOGO $(BUILTIN_LOGO)" >> build/build_cfg.tmp
 	$(QUIET)cmp -s build/build_cfg.h build/build_cfg.tmp 2>/dev/null || \
 	( mv -f build/build_cfg.tmp build/build_cfg.h && echo "  CFG   build/build_cfg.h" )
 
@@ -311,6 +334,18 @@ build/bootlogo_%.o: build/bootlogo_%.bin.gz
 	$(QUIET)echo "  BIN   $@"
 	$(QUIET)mkdir -p "$(dir $@)"
 	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
+
+ifneq ($(BUILTIN_LOGO),bootlogo)
+build/$(BUILTIN_LOGO)_%.bin.gz: data/$(BUILTIN_LOGO)_%.bin
+	$(QUIET)echo "  GZIP  $@"
+	$(QUIET)mkdir -p "$(dir $@)"
+	$(QUIET)gzip -9 -n -c $< > $@
+
+build/$(BUILTIN_LOGO)_%.o: build/$(BUILTIN_LOGO)_%.bin.gz
+	$(QUIET)echo "  BIN   $@"
+	$(QUIET)mkdir -p "$(dir $@)"
+	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
+endif
 
 build/%.bin: data/%.bin
 	$(QUIET)echo "  IMG   $@"

@@ -235,6 +235,7 @@ typedef int dart_dev_t;
 #define T6000 0x6000
 #define T6001 0x6001
 #define T6002 0x6002
+#define T8140 0x8140
 #define bail_cleanup(...) do { ret = -1; goto err; } while (0)
 static unsigned char blob[8192];
 static void *dt = blob;
@@ -247,8 +248,9 @@ static int dt_get_iommu_node(int node, int index) { return -1; }
 static int dt_get_or_add_reserved_mem(const char *name, const char *compat,
                                      bool nomap, u64 address, size_t size)
 { return fail_reserve ? -FDT_ERR_NOSPACE : fdt_path_offset(dt, "/reserved-memory"); }
-static int dt_device_set_reserved_mem_from_dart(int n, dart_dev_t *d, const char *name,
-                                               uint32_t phandle, u64 address, size_t size)
+static int dt_device_set_reserved_mem_from_dart(int n, dart_dev_t *d, const char *device,
+                                               const char *name, uint32_t phandle,
+                                               u64 address, u64 size)
 { return 0; }
 static int dt_device_add_mem_region(const char *alias, uint32_t phandle, const char *name)
 { return 0; }
