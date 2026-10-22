@@ -232,8 +232,11 @@ void _start_c(void *boot_args, void *base)
     printf("\n");
 
     printf("boot_args at %p\n", boot_args);
-    if (relocated_from)
+    if (relocated_from && relocated_from < (u64)_base)
         printf("aura moved itself from 0x%lx to %p, above the chainloaded image\n", relocated_from,
+               _base);
+    else if (relocated_from)
+        printf("aura moved itself from 0x%lx to %p, the run base stage 1 gave it\n", relocated_from,
                _base);
 
     dump_boot_args(&cur_boot_args);

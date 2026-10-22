@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT AND GPL-2.0-only */
 
 #include "../build/build_cfg.h"
+#include "chainload.h"
 #include "smp_asm.h"
 #include "soc.h"
 
@@ -78,7 +79,97 @@ _vectors_start:
 .globl _start
 .type _start, @function
 _start:
+    b .Lstart_entry
+    .long 0
+    /* Load header at CHAINLOAD_HDR_OFFSET, read by chainload.c */
+.Lload_header:
+    .ascii "AURALOAD"
+    .long CHAINLOAD_HDR_VERSION
+    .long CHAINLOAD_HDR_F_RUN_BASE
+    .quad _image_footprint
+.Lrun_base:
+    .quad 0
+.Lload_header_end:
+    .if .Lload_header - _start != CHAINLOAD_HDR_OFFSET - CHAINLOAD_ENTRY_OFFSET
+    .error "load header is not at CHAINLOAD_HDR_OFFSET"
+    .endif
+    .if .Lrun_base - .Lload_header != CHAINLOAD_HDR_RUN_BASE_OFF
+    .error "run_base is not at CHAINLOAD_HDR_RUN_BASE_OFF"
+    .endif
+    .if .Lload_header_end - .Lload_header != CHAINLOAD_HDR_SIZE
+    .error "load header size differs from CHAINLOAD_HDR_SIZE"
+    .endif
+
+.Lstart_entry:
     mov x19, x0
+
+    /*
+     * Run below the address stage 1 staged this image at (chainload.c). On
+     * T8140, stage 1 copies a chainloaded image to its own base, where the
+     * locked RVBAR of the secondary cores points, but iBoot ends its own
+     * allocations there with boot_args and the firmware RO range, about
+     * 10 MiB above that base on a J700. An image too large to fit below it
+     * is staged after stage 1's heap instead, with run_base in the header
+     * above set to stage 1's base. Copy this image from _base to _end there,
+     * before any stack or .bss is touched, and continue in the copy. The
+     * payload, SEPFW and boot_args stay where stage 1 staged them
+     * (relocated_from records that base) and top_of_kernel_data already
+     * lies above them, so the copy runs, resets and reserves memory exactly
+     * as a smaller image placed at that base does.
+     *
+     * run_base is zero in every image file, so nothing moves unless a stage
+     * 1 asked for it. Stage 1 checked that the copy ends below this image;
+     * if it does not, park the CPU rather than run from here, where the
+     * memory below would be left unreserved.
+     */
+    adr x1, .Lrun_base
+    ldr x21, [x1]
+    cbz x21, .Lrun_base_done
+    adrp x20, _base
+    adrp x22, _end
+    sub x22, x22, x20
+    tst x21, #0x3fff
+    b.ne .Lrun_base_refused
+    adds x23, x21, x22
+    b.cs .Lrun_base_refused
+    cmp x23, x20
+    b.hi .Lrun_base_refused
+    mov x1, x20
+    mov x2, x21
+    mov x3, x22
+.Lrun_base_copy:
+    ldp x4, x5, [x1], #16
+    stp x4, x5, [x2], #16
+    subs x3, x3, #16
+    b.ne .Lrun_base_copy
+    adrp x1, relocated_from
+    add x1, x1, :lo12:relocated_from
+    sub x1, x1, x20
+    str x20, [x1, x21]
+    /* Publish the copy as the chainload stub publishes an image */
+    mov x1, x21
+.Lrun_base_clean:
+    dc cvac, x1
+    add x1, x1, #64
+    cmp x1, x23
+    b.lo .Lrun_base_clean
+    dsb sy
+    mov x1, x21
+.Lrun_base_invalidate:
+    ic ivau, x1
+    add x1, x1, #64
+    cmp x1, x23
+    b.lo .Lrun_base_invalidate
+    dsb sy
+    isb
+    adr x1, 3f
+    sub x1, x1, x20
+    add x1, x1, x21
+    br x1
+.Lrun_base_refused:
+    wfe
+    b .Lrun_base_refused
+.Lrun_base_done:
 
     /*
      * Run from above the image we were chainloaded in. Stage 1 copies this
