@@ -17,7 +17,9 @@ def test_reserved_memory_reg_alignment(tmp_path):
 #include <stdio.h>
 #include <string.h>
 #include "libfdt.h"
-typedef uint64_t u64;
+/* Match m1n1's aarch64-linux-gnu target, not the host libc's uint64_t alias. */
+typedef unsigned long u64;
+_Static_assert(sizeof(u64) == 8, "the m1n1 host fixture requires an LP64 host");
 #define MAX_MEM_REGIONS 32
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
 static _Alignas(8) unsigned char blob[8192];
