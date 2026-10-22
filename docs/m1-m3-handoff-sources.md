@@ -1,7 +1,10 @@
 # M1–M3 handoff integration sources
 
 This series starts at omacom/m1n1 integration/aurora
-`d05ba17dfb771871d608225be42968bbb1e75a18`. It carries public source only.
+`d05ba17dfb771871d608225be42968bbb1e75a18`, with Scott Jones's existing
+PR #4 (`bd5a2348806923e4139bc300f05b8df887bc06d3`) as its prerequisite.
+The ISP firmware support is inherited from that PR rather than submitted a
+second time. This series carries public source only.
 The original authors and their supplied sign-offs remain on the carry commits.
 No sign-off was added for an author who did not supply one.
 
@@ -29,7 +32,7 @@ SiliconForest `aca1258c2d7daad7db7079d4f89bb8217659f7ac`, SHA256
 | ISP segment-list hardening | siliconforest-m1n1 `2f6117a3b2450c1cc3befb7afa9fcdecb5a0cf40` | GPL-2.0-or-later for src/isp.c and its Python test. The same source revision explicitly leaves tests/t6031_host.c under MIT. |
 | T8122 external-firmware marker | GehrmannSolutions/omarchy-m3-air `5f0d61514cf2bf2ec598850bcca4e007c0c1f083`, boot/m1n1-aurora-t8122-dcpext.patch | MIT; Marius Gehrmann's additional notice is retained in 3rdparty_licenses/LICENSE.Marius-Gehrmann. No supplied Signed-off-by; none invented. |
 | Transactional T8122 marker and ASC-list validation | siliconforest-m1n1 `1ecaa8c59d55e0b51275f6ebc063808c2c70bd21` | GPL-2.0-or-later: src/kboot.c and its Python regression tests. |
-| T600x route admission and legacy fallback | siliconforest-m1n1 `24a133ffae06d2b8598173329953ba802a82ca46`, `99817310f70204e3dc469c3ec0c53f94a008a292`, `a28c2231045abc6695e6d8302bcdb5100805d202` | GPL-2.0-or-later: src/kboot.c and its Python regression tests. The commit records Andreas Fernandez's public PR33 design as its basis; the adaptation is credited to Chris Kearney. |
+| T600x route admission and legacy fallback | siliconforest-m1n1 `24a133ffae06d2b8598173329953ba802a82ca46`, `99817310f70204e3dc469c3ec0c53f94a008a292`, `a28c2231045abc6695e6d8302bcdb5100805d202` | GPL-2.0-or-later: src/kboot.c and its Python regression tests. The commit records Andreas Fernandez (Ante, GitHub @Ante042) and https://github.com/aurora-silicon/m1n1/pull/33 as its basis; the adaptation is credited to Chris Kearney. |
 | M1/M2-only Sequoia display power cycle | AsahiLinux/m1n1 `1795c4abbd795145b737835436dfc9cb31aaf285` | GPL-2.0-or-later: the SoC admission conjunct in src/display.c; Janne Grunau's authorship/sign-off retained. |
 | Rust 1.99 freestanding build workaround | AsahiLinux/m1n1 `7f208771` | GPL-2.0-or-later: Makefile Cargo LLVM option. The conditional LLVM-version guard is a local adaptation; LLVM 20 does not recognize the option, while the locally tested LLVM 21 and 23 Rust toolchains do. |
 
@@ -70,3 +73,13 @@ replacement must not be applied wholesale when combining the pending Neo work:
 Neo has native display paths for firmware outside that older display whitelist.
 The independent Neo and pending upstream PR5/PR6 changes need their own
 integration review; this series does not replace those branches.
+
+## Submission dependencies and disclosure
+
+This proposal depends on omacom/m1n1 #4 for Scott's ISP case and #3 for the
+repository's pending AI-assisted contribution-policy clarification. Its source
+comparison and adaptations were developed and adversarially reviewed with
+Codex, Claude and Grok assistance, disclosed in the commit trailers and PR.
+The original T600x proposal author is Andreas Fernandez (GitHub @Ante042,
+display name Ante); his original commit and supplied sign-off are the source
+record, and this adaptation does not claim he signed off the additional code.
