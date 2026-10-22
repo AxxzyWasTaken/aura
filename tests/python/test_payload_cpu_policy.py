@@ -48,7 +48,7 @@ static int smp_call4(int cpu, void *fn, u64 a, u64 b, u64 c, u64 d)
 static int smp_wait(int cpu, u64 *retval)
 { return (waiting_kind == 1 ? cpu == fail_mitigation_wait : cpu == fail_tso_wait) ? -2 : 0; }
 static int smp_wait_timed(int cpu, u64 *retval, u32 timeout_ms)
-{ assert(timeout_ms <= 1000); return smp_wait(cpu, retval); }
+{ assert(timeout_ms == 5000); return smp_wait(cpu, retval); }
 static void kboot_delete_chosen(const char *key) { advertised_tso = 0; }
 static void kboot_set_chosen(const char *key, const char *value)
 { advertised_tso = value != NULL; }

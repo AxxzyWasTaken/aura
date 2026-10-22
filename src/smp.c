@@ -904,10 +904,10 @@ int smp_wait(int cpu, u64 *retval)
 int smp_call_sync0(int cpu, void *func)
 {
     /*
-     * The setup callbacks joined here finish in microseconds. A second after the ACK window is
-     * ample, and keeps a stuck secondary from adding minutes to the boot before it is refused.
+     * These setup callbacks contain no device waits. Give slow completion a conservative
+     * margin after the ACK window, without inheriting the general wait's five-minute bound.
      */
-    const u32 join_ms = 1000;
+    const u32 join_ms = 5000;
     u64 ignored;
     int dispatched = smp_call4(cpu, func, 0, 0, 0, 0);
     /* A busy slot can still contain an older callback, so join it too. */
