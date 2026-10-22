@@ -78,7 +78,10 @@ void run_actions(void)
 {
     bool usb_up = false;
     enum stage1_proxy_result window_result = STAGE1_PROXY_TIMEOUT;
+    enum stage1_payload_action payload_action;
 
+#ifndef J613_ESP_STAGE1
+    /* J613 Stage 1 runs its own USB window after the board checks below. */
     u32 window_ms = stage1_config_window_ms();
     if (window_ms && !m1n1_proxy_enabled()) {
         window_result = uartproxy_wait_stage1(window_ms);
@@ -92,8 +95,12 @@ void run_actions(void)
         }
         printf("Stage 1: proxy window ended\n");
     }
+#endif
 
 #ifdef J613_ESP_STAGE1
+    /* The board and configuration checks fall back before any payload is checked. */
+    payload_action =
+        stage1_proxy_payload_action(window_result, false, usb_cdc_ready(), !usb_cdc_owns_carrier());
     const char *target = adt_getprop(adt, 0, "target-type", NULL);
     /* Stage 1 only chainloads; stage 2 applies each board's hardware gates. */
     bool board = target && (!strcmp(target, "J613") || !strcmp(target, "J615"));
@@ -184,8 +191,8 @@ void run_actions(void)
         printf("Checking for payloads...\n");
 
     bool payload_valid = !m1n1_proxy_enabled() && payload_run() == 0;
-    enum stage1_payload_action payload_action = stage1_proxy_payload_action(
-        window_result, payload_valid, usb_cdc_ready(), !usb_cdc_owns_carrier());
+    payload_action = stage1_proxy_payload_action(window_result, payload_valid, usb_cdc_ready(),
+                                                 !usb_cdc_owns_carrier());
     if (payload_action == STAGE1_PAYLOAD_NATIVE) {
         printf("Valid payload found\n");
         return;
