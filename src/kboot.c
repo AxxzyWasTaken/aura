@@ -3329,12 +3329,31 @@ static int dt_set_isp_fwdata(void)
 
     int mem_node = dt_get_or_add_reserved_mem("isp-heap", "apple,asc-mem", true, phys, size);
     if (mem_node < 0)
-        return ret;
+        return -1;
 
     ret = dt_device_set_reserved_mem(mem_node, "isp-heap", dev_phandle, iova, size);
     if (ret < 0)
         return ret;
 
+    return 0;
+}
+
+/*
+ * The camera is optional. Without a valid ADT firmware description, or if its firmware or heap
+ * reservation fails, disable the ISP and boot on without it instead of failing the whole handoff.
+ */
+static int dt_set_isp(void)
+{
+    if (!dt_reserve_asc_firmware("/arm-io/isp", "/arm-io/isp0", "isp", false, isp_iova_base()) &&
+        !dt_set_isp_fwdata())
+        return 0;
+
+    int node = fdt_path_offset(dt, "isp");
+    if (node < 0)
+        return -1;
+    printf("FDT: ISP firmware or heap not reserved, disabling the ISP\n");
+    if (fdt_setprop_string(dt, node, "status", "disabled") < 0)
+        return -1;
     return 0;
 }
 
@@ -3921,9 +3940,7 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_setup_sio())
         return -1;
-    if (dt_reserve_asc_firmware("/arm-io/isp", "/arm-io/isp0", "isp", false, isp_iova_base()))
-        return -1;
-    if (dt_set_isp_fwdata())
+    if (dt_set_isp())
         return -1;
     if (dt_set_pmgr())
         return -1;
