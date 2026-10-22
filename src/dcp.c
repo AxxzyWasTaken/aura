@@ -281,16 +281,26 @@ int dcp_shutdown(dcp_dev_t *dcp, bool sleep)
         sleep = false;
     }
     /* dcp/dcp0 on desktop M2 and M2 Pro/Max devices do not wake from sleep */
-    int ret = dcp_system_shutdown(dcp->system_ep);
+    /* An interface whose endpoint did not stop stays allocated and attached,
+     * since its callbacks can still run while another endpoint is polled. */
+    int ret = 0;
+    if (dcp_system_shutdown(dcp->system_ep) < 0)
+        ret = -1;
+    else
+        dcp->system_ep = NULL;
     if (dcp_dptx_shutdown(dcp->dptx_ep) < 0)
         ret = -1;
+    else
+        dcp->dptx_ep = NULL;
     if (dcp_dpav_shutdown(dcp->dpav_ep) < 0)
         ret = -1;
-    dcp->system_ep = NULL;
-    dcp->dptx_ep = NULL;
-    dcp->dpav_ep = NULL;
-    free(dcp->phy);
-    dcp->phy = NULL;
+    else
+        dcp->dpav_ep = NULL;
+    /* The DPTX ports use the PHY until their endpoint has stopped. */
+    if (!dcp->dptx_ep) {
+        free(dcp->phy);
+        dcp->phy = NULL;
+    }
     /* The firmware may still use every buffer and mapping below until it has
      * stopped, so keep them all and report the failure. */
     if (ret < 0 || afk_epic_shutdown(dcp->afk) < 0) {

@@ -65,7 +65,9 @@ dcp_dpav_if_t *dcp_dpav_init(dcp_dev_t *dcp)
     return dpav;
 
 err_shutdown:
-    afk_epic_shutdown_ep(dpav->epic);
+    /* Callbacks from an endpoint that did not stop can still reach this. */
+    if (afk_epic_shutdown_ep(dpav->epic) < 0)
+        return NULL;
 err_free:
     free(dpav);
     return NULL;
@@ -73,11 +75,11 @@ err_free:
 
 int dcp_dpav_shutdown(dcp_dpav_if_t *dpav)
 {
-    int ret = 0;
-
-    if (dpav) {
-        ret = afk_epic_shutdown_ep(dpav->epic);
-        free(dpav);
-    }
-    return ret;
+    if (!dpav)
+        return 0;
+    /* An endpoint that did not stop can still call back into this interface. */
+    if (afk_epic_shutdown_ep(dpav->epic) < 0)
+        return -1;
+    free(dpav);
+    return 0;
 }
