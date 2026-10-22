@@ -92,7 +92,7 @@ endif
 # Rust 1.89's LLVM does not know this option. Keep older toolchains usable.
 RUSTC ?= rustc
 export RUSTC
-RUST_LLVM_MAJOR := $(shell $(RUSTC) --version --verbose | sed -n 's/^LLVM version: //p' | cut -d. -f1)
+RUST_LLVM_MAJOR := $(shell "$(RUSTC)" --version --verbose | sed -n 's/^LLVM version: //p' | cut -d. -f1)
 ifneq ($(shell test "$(RUST_LLVM_MAJOR)" -ge 21 2>/dev/null && echo supported),)
 CARGO_RUSTFLAGS := --config 'build.rustflags = ["-C", "llvm-args=-disable-loop-idiom-wcslen"]'
 endif
