@@ -27,7 +27,9 @@ def test_firmware_ready_requires_complete_reservations_and_keeps_suppliers_disab
 #include <stdlib.h>
 #include <string.h>
 #include "libfdt.h"
-typedef uint64_t u64;
+/* Match m1n1's aarch64-linux-gnu target, not the host libc's uint64_t alias. */
+typedef unsigned long u64;
+_Static_assert(sizeof(u64) == 8, "the m1n1 host fixture requires an LP64 host");
 typedef uint32_t u32;
 #define PACKED __attribute__((packed))
 #define T8122 0x8122
