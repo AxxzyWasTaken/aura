@@ -381,8 +381,9 @@ int payload_run(void)
             printf("SMP: refusing payload handoff with missing T8140 CPUs\n");
             goto boot_failed;
         }
-        if (mitigations_perform()) {
-            if (chip_id == T8140)
+        int mitigation_ret = mitigations_perform();
+        if (mitigation_ret) {
+            if (mitigation_ret == SMP_TIMEOUT || chip_id == T8140)
                 goto boot_failed;
             printf("Mitigations: continuing payload handoff with incomplete CPU initialization\n");
         }
@@ -394,9 +395,10 @@ int payload_run(void)
                 if (i == boot_cpu_idx)
                     continue;
                 if (smp_is_alive(i)) {
-                    if (smp_call0(i, do_enable_tso) || smp_wait(i, NULL)) {
+                    int ret = smp_call_sync0(i, do_enable_tso);
+                    if (ret) {
                         printf("TSO: CPU %d initialization failed\n", i);
-                        if (chip_id == T8140)
+                        if (ret == SMP_TIMEOUT || chip_id == T8140)
                             goto boot_failed;
                         tso_failed = true;
                     }

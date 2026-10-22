@@ -4,6 +4,8 @@ from test_smp_timeouts import REPO, compile_and_run
 
 
 def test_payload_handoff_policy_and_best_effort_mitigations(tmp_path):
+    smp = (REPO / "src/smp.c").read_text()
+    sync = smp[smp.index("int smp_call_sync0("):smp.index("bool smp_has_pending_calls(")]
     payload = (REPO / "src/payload.c").read_text()
     setup = payload[payload.index("        cpufreq_init();"):
                     payload.index("        for (size_t i = 0; i < chosen_cnt; i++)")]
@@ -16,8 +18,10 @@ def test_payload_handoff_policy_and_best_effort_mitigations(tmp_path):
 #include <stdio.h>
 #include <stddef.h>
 typedef uint64_t u64;
+typedef uint32_t u32;
 #define MAX_CPUS 4
 #define T8140 0x8140
+#define SMP_TIMEOUT -2
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define smp_call0(cpu, fn) smp_call4(cpu, fn, 0, 0, 0, 0)
 static int chip_id, boot_cpu_idx, start_error, fail_mitigation_cpu, fail_tso_cpu, fail_mitigation_wait, fail_tso_wait, waiting_kind;
@@ -43,10 +47,12 @@ static int smp_call4(int cpu, void *fn, u64 a, u64 b, u64 c, u64 d)
 }
 static int smp_wait(int cpu, u64 *retval)
 { return (waiting_kind == 1 ? cpu == fail_mitigation_wait : cpu == fail_tso_wait) ? -2 : 0; }
+static int smp_wait_timed(int cpu, u64 *retval, u32 timeout_ms)
+{ assert(timeout_ms <= 1000); return smp_wait(cpu, retval); }
 static void kboot_delete_chosen(const char *key) { advertised_tso = 0; }
 static void kboot_set_chosen(const char *key, const char *value)
 { advertised_tso = value != NULL; }
-''' + mitigations + '\nstatic int prepare_cpus(void)\n{\n' + setup + r'''
+''' + sync + mitigations + '\nstatic int prepare_cpus(void)\n{\n' + setup + r'''
     return 0;
 boot_failed:
     return -1;
@@ -75,12 +81,12 @@ int main(void)
         assert(!advertised_tso);
         assert(tso_calls == (chip_id == T8140 ? 1 : 3));
         reset(); fail_mitigation_wait = 1;
-        assert(prepare_cpus() == (chip_id == T8140 ? -1 : 0));
-        assert(mitigation_calls == 3);
+        assert(prepare_cpus() == -1);
+        assert(mitigation_calls == 1);
         reset(); fail_tso_wait = 1;
-        assert(prepare_cpus() == (chip_id == T8140 ? -1 : 0));
+        assert(prepare_cpus() == -1);
         assert(!advertised_tso);
-        assert(tso_calls == (chip_id == T8140 ? 1 : 3));
+        assert(tso_calls == 1);
         reset(); start_error = -1;
         assert(prepare_cpus() == (chip_id == T8140 ? -1 : 0));
     }

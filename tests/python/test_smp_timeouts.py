@@ -39,12 +39,13 @@ static int boot_cpu_idx;
 static bool wfe_mode = true;
 static u64 ticks;
 static bool complete;
+static u64 complete_after;
 static u64 callback_result;
 static void smp_send_ipi(int cpu) {}
 static u64 get_ticks(void)
 {
     ticks += 1000;
-    if (complete && spin_table[1].target) {
+    if (complete && ticks >= complete_after && spin_table[1].target) {
         spin_table[1].flag++;
         spin_table[1].retval = callback_result;
         spin_table[1].target = 0;
@@ -85,6 +86,33 @@ int main(void)
     assert(smp_call4(1, callback, 1, 2, 3, 4) == 0);
     assert(smp_wait(1, &result) == 0 && result == 0);
     assert(smp_wait(1, NULL) == 0);
+    assert(!smp_has_pending_calls());
+    complete_after = 4000;
+    ticks = 0;
+    assert(smp_call_sync0(1, callback) == 0); /* ACK times out; completion is joined. */
+    assert(!smp_has_pending_calls() && !spin_table[1].target);
+
+    complete = false;
+    assert(smp_call_sync0(1, callback) == SMP_TIMEOUT);
+    assert(smp_has_pending_calls());
+    pending = spin_table[1];
+    assert(smp_call_sync0(1, callback) == SMP_TIMEOUT); /* Busy and still pending. */
+    assert(!memcmp(&pending, &spin_table[1], sizeof(pending)));
+    complete = true;
+    complete_after = 0;
+    assert(smp_call_sync0(1, callback) == -1); /* Busy request joined, not dispatched. */
+    assert(!smp_has_pending_calls());
+
+    /* A stuck secondary is refused after the 1 s ACK window and a 1 s join, not minutes. */
+    complete = false;
+    ticks = 0;
+    assert(smp_call_sync0(1, callback) == SMP_TIMEOUT);
+    assert(ticks <= 5000);
+    /* It still completes later, and is joined then. */
+    complete = true;
+    complete_after = 0;
+    assert(smp_wait(1, &result) == 0);
+    assert(!smp_has_pending_calls());
     return 0;
 }
 '''
@@ -92,6 +120,8 @@ int main(void)
 
 
 def test_internal_callers_stop_on_failure(tmp_path):
+    smp = (REPO / "src/smp.c").read_text()
+    sync = smp[smp.index("int smp_call_sync0("):smp.index("bool smp_has_pending_calls(")]
     memory = (REPO / "src/memory.c").read_text()
     mmu = memory[memory.index("int mmu_init_secondary("):memory.index("void mmu_shutdown(")]
     mitigation = (REPO / "src/mitigations.c").read_text()
@@ -107,6 +137,7 @@ def test_internal_callers_stop_on_failure(tmp_path):
 #include <stdio.h>
 #include <string.h>
 typedef uint64_t u64;
+typedef uint32_t u32;
 #define MAX_CPUS 4
 #define SMP_TIMEOUT -2
 #define BIT(n) (1ULL << (n))
@@ -143,7 +174,10 @@ static int smp_call4(int cpu, void *fn, u64 a, u64 b, u64 c, u64 d)
 }
 static int smp_wait(int cpu, u64 *result)
 { return ++waits == fail_wait ? SMP_TIMEOUT : 0; }
-''' + mmu + mitigation + hv + watchdog + r'''
+/* Setup calls are joined for at most a second, not smp_wait()'s minutes. */
+static int smp_wait_timed(int cpu, u64 *result, u32 timeout_ms)
+{ assert(timeout_ms <= 1000); return smp_wait(cpu, result); }
+''' + mmu + sync + mitigation + hv + watchdog + r'''
 static void reset(void)
 {
     calls = waits = fail_call = fail_wait = 0;
@@ -164,9 +198,9 @@ int main(void)
     assert(mmu_init_secondary(1) == 0);
 
     reset(); fail_call = 1;
-    assert(mitigations_perform() == -1 && waits == 0);
+    assert(mitigations_perform() == -1 && waits == 1);
     reset(); fail_wait = 1;
-    assert(mitigations_perform() == -1);
+    assert(mitigations_perform() == SMP_TIMEOUT);
     reset();
     assert(mitigations_perform() == 0);
 
