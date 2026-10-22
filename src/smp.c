@@ -156,7 +156,7 @@ static int smp_prepare_rvbar(const struct cpu_info *cpu)
     u64 locked = rvbar & RVBAR_ADDR;
     u64 target = (u64)_vectors_start;
 
-    if (locked == target || (!(rvbar & RVBAR_LOCK) && cpu_features->apple_sysregs_unlocked))
+    if (locked == target || cpu_features->apple_sysregs_unlocked)
         return 0;
     /* A stage that moved above the chainloaded image keeps entry at its old base. */
     if (relocated_from && locked == old_vectors_start())
