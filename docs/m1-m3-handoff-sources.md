@@ -59,8 +59,11 @@ Repository links for these source revisions are
 
 ## Deliberate exclusions
 
-No logo, branding, policy-file, README, workflow, stage-1 or firmware updates
-are part of this series. The broad Asahi source/GPL transition and hypervisor
+No logo, branding, policy-file, README, stage-1 or firmware updates are part
+of this series. The existing upstream test matrix now also triggers on both
+integration branches, with read-only repository permissions. A common FDT
+memory-map fix uses alignment-safe reads; its regression exercises the actual
+function on 4-byte- and 8-byte-aligned properties with ASan/UBSan. The broad Asahi source/GPL transition and hypervisor
 sync are not carried. In particular `80954151`'s unsupported-firmware display
 replacement must not be applied wholesale when combining the pending Neo work:
 Neo has native display paths for firmware outside that older display whitelist.
