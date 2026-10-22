@@ -5138,7 +5138,25 @@ int kboot_prepare_dt(void *fdt)
     if (fdt_add_mem_rsv(dt, (u64)dt, dt_bufsize))
         bail("FDT: couldn't add reservation for the devtree\n");
 
+    if (dart_reserve_legacy_tables(dt, cur_boot_args.phys_base, cur_boot_args.mem_size))
+        bail("FDT: couldn't reserve legacy DCP translation tables\n");
+
     u64 image_end = (u64)_end;
+    if (chip_id == T8103) {
+        /* chainload_image carries the previous stage's live heap in this
+         * high-water mark. Its retained DCP tables no longer have a local
+         * record, so keep the inherited prefix as well as our own image.
+         * This excludes allocations made by the current stage. */
+        u64 inherited = cur_boot_args.top_of_kernel_data;
+        if (!cur_boot_args.mem_size ||
+            cur_boot_args.phys_base > UINT64_MAX - cur_boot_args.mem_size)
+            bail("FDT: invalid T8103 inherited RAM extent\n");
+        u64 ram_end = cur_boot_args.phys_base + cur_boot_args.mem_size;
+        image_end = max(image_end, inherited);
+        if ((u64)_base < cur_boot_args.phys_base || inherited < (u64)_base ||
+            image_end < (u64)_base || image_end > ram_end)
+            bail("FDT: invalid T8103 inherited memory extent\n");
+    }
     if (chip_id == T8140) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;
         u64 high_water = heapblock_high_water();

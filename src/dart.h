@@ -19,6 +19,7 @@ enum dart_type_t {
 
 dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t type);
 dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_pts);
+dart_dev_t *dart_init_adt_display(const char *path, int instance, int device);
 void dart_lock_adt(const char *path, int instance);
 dart_dev_t *dart_init_fdt(void *dt, u32 phandle, int device, bool keep_pts);
 dart_dev_t *dart_init_fdt_locked(void *dt, u32 phandle, int device);
@@ -35,6 +36,7 @@ u64 dart_search(dart_dev_t *dart, void *paddr);
 u64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len);
 u64 dart_search_range(dart_dev_t *dart, u64 paddr, size_t len);
 void dart_shutdown(dart_dev_t *dart);
+int dart_reserve_legacy_tables(void *dt, u64 dram_base, u64 dram_size);
 u64 dart_vm_base(dart_dev_t *dart);
 
 #endif

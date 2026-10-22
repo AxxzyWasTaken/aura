@@ -191,7 +191,7 @@ dcp_dev_t *dcp_init(const display_config_t *cfg)
     if (!dcp)
         return NULL;
 
-    dcp->dart_dcp = dart_init_adt(cfg->dcp_dart, 0, sid, true);
+    dcp->dart_dcp = dart_init_adt_display(cfg->dcp_dart, 0, sid);
     if (!dcp->dart_dcp) {
         printf("dcp: failed to initialize DCP DART\n");
         goto out_free;
@@ -235,6 +235,8 @@ dcp_dev_t *dcp_init(const display_config_t *cfg)
                                        : rtkit_boot(dcp->rtkit);
     if (!booted) {
         printf("dcp: failed to boot RTKit\n");
+        if (rtkit_has_owned_buffers(dcp->rtkit))
+            goto out_running;
         goto out_iovad;
     }
 

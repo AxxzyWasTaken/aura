@@ -6,6 +6,7 @@
 #include "devicetree.h"
 #include "malloc.h"
 #include "memory.h"
+#include "soc.h"
 #include "string.h"
 #include "utils.h"
 
@@ -115,6 +116,7 @@ struct dart_params {
 struct dart_dev {
     bool locked;
     bool keep;
+    bool legacy_mutable;
     uintptr_t regs;
     u8 device;
     enum dart_type_t type;
@@ -125,6 +127,12 @@ struct dart_dev {
 
     u64 *l1[DART_MAX_TTBR_COUNT];
 };
+
+/* A retained DCP root can outlive its software handle. Record every table
+ * published by the legacy view before publication, and reserve it at handoff. */
+#define LEGACY_L2_MAX_PAGES 32
+static u64 legacy_l2_pages[LEGACY_L2_MAX_PAGES];
+static size_t legacy_l2_count;
 
 static void dart_t8020_tlb_invalidate(dart_dev_t *dart)
 {
@@ -457,6 +465,37 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
     return dart;
 }
 
+/* Legacy display firmware uses existing RAM tables even when configuration is
+ * protected. This view never replaces a root or unlocks configuration, and is
+ * not available through the FDT inspection or proxy constructors. */
+dart_dev_t *dart_init_adt_display(const char *path, int instance, int device)
+{
+    if (chip_id == T8103 && (device < 0 || device >= 32))
+        return NULL;
+
+    dart_dev_t *dart = dart_init_adt(path, instance, device, true);
+    if (!dart || chip_id != T8103 || dart->type != DART_T8020 || strcmp(path, "/arm-io/dart-dcp"))
+        return dart;
+
+    if (dart->locked) {
+        u32 tcr = read32(DART_TCR(dart));
+        u32 mode = DART_T8020_TCR_TRANSLATE_ENABLE | DART_T8020_TCR_BYPASS_DART |
+                   DART_T8020_TCR_BYPASS_DAPF;
+        if (!(read32(dart->regs + DART_T8020_ENABLED_STREAMS) & BIT(dart->device)) ||
+            (tcr & mode) != DART_T8020_TCR_TRANSLATE_ENABLE) {
+            printf("dart: legacy display stream is not translating\n");
+            dart_shutdown(dart);
+            return NULL;
+        }
+        dart->legacy_mutable = true;
+    }
+
+    /* Match the legacy display constructor's invalidation before RTKit starts.
+     * The locked/keep paths still retain every root throughout handoff. */
+    dart->params->tlb_invalidate(dart);
+    return dart;
+}
+
 void dart_lock_adt(const char *path, int instance)
 {
     int dart_path[8];
@@ -698,14 +737,23 @@ static u64 *dart_get_l2(dart_dev_t *dart, u32 idx)
         return (u64 *)off;
     }
 
+    if (dart->legacy_mutable && legacy_l2_count >= LEGACY_L2_MAX_PAGES)
+        return NULL;
+
     u64 *tbl = memalign(SZ_16K, SZ_16K);
     if (!tbl)
         return NULL;
 
+    u64 offset = FIELD_PREP(dart->params->offset_mask, ((u64)tbl) >> DART_PTE_OFFSET_SHIFT);
+    if (dart->legacy_mutable &&
+        (FIELD_GET(dart->params->offset_mask, offset) << DART_PTE_OFFSET_SHIFT) != (u64)tbl) {
+        free(tbl);
+        return NULL;
+    }
     memset(tbl, 0, SZ_16K);
 
-    u64 offset = FIELD_PREP(dart->params->offset_mask, ((u64)tbl) >> DART_PTE_OFFSET_SHIFT);
-
+    if (dart->legacy_mutable)
+        legacy_l2_pages[legacy_l2_count++] = (u64)tbl;
     dart->l1[ttbr][idx] = offset | DART_PTE_VALID;
 
     return tbl;
@@ -736,7 +784,7 @@ static int dart_map_page(dart_dev_t *dart, uintptr_t iova, uintptr_t paddr, u32 
 
 int dart_map_flags(dart_dev_t *dart, uintptr_t iova, void *bfr, size_t len, u32 flags)
 {
-    if (dart->locked)
+    if (dart->locked && !dart->legacy_mutable)
         return -1;
 
     uintptr_t paddr = (uintptr_t)bfr;
@@ -775,16 +823,20 @@ static void dart_unmap_page(dart_dev_t *dart, uintptr_t iova)
     u32 l1_index = (iova >> 25) & 0x7ff;
     u32 l2_index = (iova >> 14) & 0x7ff;
 
-    if (!(dart->l1[ttbr][l1_index] & DART_PTE_VALID))
+    if (ttbr >= (u32)dart->params->ttbr_count || !dart->l1[ttbr])
+        return;
+    u64 entry = dart->l1[ttbr][l1_index];
+    if (!(entry & DART_PTE_VALID))
         return;
 
-    u64 *l2 = dart_get_l2(dart, l1_index);
+    u64 off = FIELD_GET(dart->params->offset_mask, entry) << DART_PTE_OFFSET_SHIFT;
+    u64 *l2 = (u64 *)off;
     l2[l2_index] = 0;
 }
 
 void dart_unmap(dart_dev_t *dart, uintptr_t iova, size_t len)
 {
-    if (dart->locked)
+    if (dart->locked && !dart->legacy_mutable)
         return;
 
     if (len % SZ_16K)
@@ -1010,6 +1062,27 @@ void dart_shutdown(dart_dev_t *dart)
         if (is_heap(dart->l1[i]))
             free(dart->l1[i]);
     free(dart);
+}
+
+/* Reservation failure is fatal to handoff: firmware can still follow a table
+ * after its handle has gone away, including when initialization is retried. */
+int dart_reserve_legacy_tables(void *dt, u64 dram_base, u64 dram_size)
+{
+    if (chip_id != T8103 || !legacy_l2_count)
+        return 0;
+    if (!dt || legacy_l2_count > LEGACY_L2_MAX_PAGES || dram_size < SZ_16K ||
+        dram_base > UINT64_MAX - dram_size)
+        return -1;
+
+    for (size_t i = 0; i < legacy_l2_count; i++) {
+        u64 page = legacy_l2_pages[i];
+        if ((page & (SZ_16K - 1)) || page < dram_base || page - dram_base > dram_size - SZ_16K)
+            return -1;
+    }
+    for (size_t i = 0; i < legacy_l2_count; i++)
+        if (fdt_add_mem_rsv(dt, legacy_l2_pages[i], SZ_16K))
+            return -1;
+    return 0;
 }
 
 u64 dart_vm_base(dart_dev_t *dart)
