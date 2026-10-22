@@ -86,7 +86,7 @@ int isp_init(void)
     const struct adt_segment_ranges *seg =
         adt_getprop(adt, isp_node, "segment-ranges", &segments_len);
     u64 firmware_end;
-    if (isp_node < 0 || isp_firmware_end(seg, segments_len, &firmware_end)) {
+    if (isp_firmware_end(seg, segments_len, &firmware_end)) {
         printf("isp: invalid firmware segment list\n");
         return -1;
     }

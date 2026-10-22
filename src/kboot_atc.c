@@ -520,9 +520,6 @@ static void dt_copy_atc_tunables(void *dt, const char *adt_path, const char *dt_
         return;
     }
 
-    if (adt_node < 0)
-        return;
-
     if (!fdt_node_check_compatible(dt, fdt_node, "apple,t6030-atcphy-dp")) {
         if (adt_is_compatible_at(adt, adt_node, "atc-phy,t8122", 0))
             dt_copy_atc_t6030_dp_tunables(dt, adt_node, fdt_node, adt_path);
