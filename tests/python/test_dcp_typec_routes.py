@@ -23,9 +23,10 @@ def test_routes_follow_the_reserved_owner_atomically(tmp_path):
 static unsigned char blob[16384];
 static void *dt = blob;
 static unsigned chip_id;
-static int writes, fail_write, fail_alloc;
+static int writes, fail_write, fail_alloc, allocs;
 static void *checked_malloc(size_t size)
 {
+    allocs++;
     return fail_alloc ? NULL : malloc(size);
 }
 static int checked_set_string(void *tree, int node, const char *name, const char *value)
@@ -115,13 +116,17 @@ int main(void)
         const fdt32_t *p = fdt_getprop(dt, path("dcpext0"), "memory-region", &len);
         assert(p && len == 4 && fdt32_ld(p) == 99);
     }
-    for (int failure = 0; failure <= 4; failure++) {
+    for (int failure = 1; failure <= 4; failure++) {
         world(true);
         unsigned char before[sizeof(blob)]; memcpy(before, blob, sizeof(blob));
-        fail_alloc = failure == 0; fail_write = failure;
+        fail_write = failure;
         assert(dt_enable_dcp_with_typec_routes("dcpext0") < 0);
         assert(dt == blob && !memcmp(before, blob, sizeof(blob)));
     }
+    /* Without memory for the transaction the controller is enabled as before; routes are untouched. */
+    world(true); fail_alloc = 1;
+    assert(!dt_enable_dcp_with_typec_routes("dcpext0"));
+    status("/soc/dcpext0", "okay"); routes_status("disabled");
     /* The old enable path on other SoCs must not need scratch allocation. */
     world(true); chip_id = 0x8103; fail_alloc = 1;
     assert(!dt_enable_dcp_with_typec_routes("dcpext0"));
@@ -130,9 +135,11 @@ int main(void)
     unsigned char before[sizeof(blob)]; memcpy(before, blob, sizeof(blob));
     assert(dt_enable_dcp_with_typec_routes("absent") < 0);
     assert(dt == blob && !memcmp(before, blob, sizeof(blob)));
-    world(false);
+    /* A controller without routes, like the internal DCP, needs no transaction. */
+    world(false); allocs = 0; fail_alloc = 1;
     assert(!dt_enable_dcp_with_typec_routes("dcpext0"));
     status("/soc/dcpext0", "okay");
+    assert(allocs == 0);
     puts("PASS T600x route ownership, relocation, legacy routes and atomic refusal");
     return 0;
 }

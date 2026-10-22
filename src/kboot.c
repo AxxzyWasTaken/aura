@@ -1686,57 +1686,60 @@ static int dt_set_dcp_firmware(const char *alias)
  */
 static int dt_enable_dcp_with_typec_routes(const char *alias)
 {
+    int node = fdt_path_offset(dt, alias);
+    if (node < 0)
+        return node;
     /* Other SoCs keep the original single-property enable path. */
-    if (chip_id != T6000 && chip_id != T6001 && chip_id != T6002) {
-        int node = fdt_path_offset(dt, alias);
-        return node < 0 ? node : fdt_setprop_string(dt, node, "status", "okay");
-    }
+    if (chip_id != T6000 && chip_id != T6001 && chip_id != T6002)
+        return fdt_setprop_string(dt, node, "status", "okay");
+
+    int routes = fdt_subnode_offset(dt, node, "typec-routes");
+    if (routes < 0 && routes != -FDT_ERR_NOTFOUND)
+        return routes;
+    /* A controller without routes, such as the internal DCP, has nothing to publish with it. */
+    if (routes == -FDT_ERR_NOTFOUND)
+        return fdt_setprop_string(dt, node, "status", "okay");
 
     void *original = dt;
     size_t capacity = fdt_totalsize(original);
     void *scratch = malloc(capacity);
-    if (!scratch)
-        return -1;
+    if (!scratch) {
+        /* Without the transaction, enable the controller as before; leave route statuses alone. */
+        printf("FDT: no memory to publish the %s Type-C routes; leaving route statuses unchanged\n",
+               alias);
+        return fdt_setprop_string(dt, node, "status", "okay");
+    }
     memcpy(scratch, original, capacity);
     dt = scratch;
 
     int ret = 0;
-    int node = fdt_path_offset(dt, alias);
-    if (node < 0) {
-        ret = node;
+    node = fdt_path_offset(dt, alias);
+    routes = node < 0 ? node : fdt_subnode_offset(dt, node, "typec-routes");
+    if (routes < 0) {
+        ret = routes;
         goto out;
     }
-
-    if (chip_id == T6000 || chip_id == T6001 || chip_id == T6002) {
-        int routes = fdt_subnode_offset(dt, node, "typec-routes");
-        if (routes < 0 && routes != -FDT_ERR_NOTFOUND) {
-            ret = routes;
+    int route;
+    fdt_for_each_subnode(route, dt, routes)
+    {
+        int len = 0;
+        const char *status = fdt_getprop(dt, route, "status", &len);
+        if (!status) {
+            if (len == -FDT_ERR_NOTFOUND)
+                continue;
+            ret = len;
             goto out;
         }
-        if (routes >= 0) {
-            int route;
-            fdt_for_each_subnode(route, dt, routes)
-            {
-                int len = 0;
-                const char *status = fdt_getprop(dt, route, "status", &len);
-                if (!status) {
-                    if (len == -FDT_ERR_NOTFOUND)
-                        continue;
-                    ret = len;
-                    goto out;
-                }
-                /* Do not turn a reserved, failed or malformed route on. */
-                if (len != sizeof("disabled") || memcmp(status, "disabled", len))
-                    continue;
-                ret = fdt_setprop_string(dt, route, "status", "okay");
-                if (ret)
-                    goto out;
-            }
-            if (route != -FDT_ERR_NOTFOUND) {
-                ret = route;
-                goto out;
-            }
-        }
+        /* Do not turn a reserved, failed or malformed route on. */
+        if (len != sizeof("disabled") || memcmp(status, "disabled", len))
+            continue;
+        ret = fdt_setprop_string(dt, route, "status", "okay");
+        if (ret)
+            goto out;
+    }
+    if (route != -FDT_ERR_NOTFOUND) {
+        ret = route;
+        goto out;
     }
 
     /* Resolve the owner again after editing its route properties. */
