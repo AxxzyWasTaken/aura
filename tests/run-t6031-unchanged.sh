@@ -21,6 +21,10 @@ mkdir -p "$tmp/base-tree"
 git archive "$base" | tar -x -C "$tmp/base-tree"
 export ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0}
 fail=0
+fail() {
+    echo "FAIL: $*" >&2
+    exit 1
+}
 
 # The output of a run, with the build directory's name taken out of assertion messages
 run() { # run <out> <cmd...>
@@ -28,7 +32,8 @@ run() { # run <out> <cmd...>
     shift
     rc=0
     { "$@" > "$out" 2>&1; } 2>/dev/null || rc=$?
-    sed -i "s|$tmp/[a-z0-9-]*/|BUILD/|g" "$out"
+    sed "s|$tmp/[a-z0-9-]*/|BUILD/|g" "$out" > "$out.normalized"
+    mv "$out.normalized" "$out"
     echo "exit $rc" >> "$out"
 }
 
@@ -58,7 +63,10 @@ build_g15() { # build_g15 <tree> <out>
 build_g15 "$tmp/base-tree" "$tmp/g15-base"
 build_g15 "$root" "$tmp/g15-new"
 same=0 failing=""
-for s in $("$tmp/g15-base/kboot-gpu-g15" list); do
+scenarios=$("$tmp/g15-base/kboot-gpu-g15" list) || fail "baseline G15 scenario discovery"
+executed=0
+for s in $scenarios; do
+    executed=$((executed + 1))
     run "$tmp/g15-base/$s.out" "$tmp/g15-base/kboot-gpu-g15" "$s"
     run "$tmp/g15-new/$s.out" "$tmp/g15-new/kboot-gpu-g15" "$s"
     if ! cmp -s "$tmp/g15-base/$s.out" "$tmp/g15-new/$s.out"; then
@@ -70,6 +78,7 @@ for s in $("$tmp/g15-base/kboot-gpu-g15" list); do
     same=$((same + 1))
     tail -n 1 "$tmp/g15-new/$s.out" | grep -qx 'exit 0' || failing="$failing $s"
 done
+[ "$executed" -gt 0 ] || fail "no baseline G15 scenarios executed"
 echo "G15 GPU setup: $same scenarios identical to $base (DT, bus and PMGR traces, log)"
 [ -z "$failing" ] || echo "  of which failing their own checks on $base and here alike:$failing"
 

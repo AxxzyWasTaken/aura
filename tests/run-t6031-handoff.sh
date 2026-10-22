@@ -17,6 +17,10 @@ cd "$(dirname "$0")/.."
 root=$(pwd)
 allow=${1:?usage: run-t6031-handoff.sh <adt-allowlist.txt> [scenario...]}
 shift
+fail() {
+    echo "FAIL: $*" >&2
+    exit 1
+}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
@@ -94,7 +98,14 @@ export ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0}
 out=${T6031_OUT:-$tmp/out}
 mkdir -p "$out"
 fail=0
-for s in ${*:-$("$tmp/t6031-host" "$tmp/mac.adt" "$dtb" list)}; do
+if [ "$#" -gt 0 ]; then
+    scenarios=$*
+else
+    scenarios=$("$tmp/t6031-host" "$tmp/mac.adt" "$dtb" list) ||
+        fail "T6031 scenario discovery"
+fi
+executed=0
+for s in $scenarios; do
     if "$tmp/t6031-host" "$tmp/mac.adt" "$dtb" "$s" > "$out/$s.txt" 2>&1; then
         grep -E '^(ok|FAIL) ' "$out/$s.txt" | sed "s/^/$s: /"
     else
@@ -102,6 +113,8 @@ for s in ${*:-$("$tmp/t6031-host" "$tmp/mac.adt" "$dtb" list)}; do
         cat "$out/$s.txt"
     fi
     tail -n 1 "$out/$s.txt"
+    executed=$((executed + 1))
 done
-[ $fail = 0 ] && echo "T6031 handoff: every scenario passes"
+[ "$executed" -gt 0 ] || fail "no T6031 scenarios executed"
+[ $fail = 0 ] && echo "T6031 handoff: $executed scenarios; every scenario passes"
 exit $fail
