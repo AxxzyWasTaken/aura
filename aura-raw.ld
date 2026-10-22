@@ -183,3 +183,6 @@ SECTIONS {
 PROT_READ = 0x01;
 PROT_WRITE = 0x02;
 PROT_EXECUTE = 0x04;
+
+/* Bytes from _base to _end, for the load header (start.S) */
+_image_footprint = ABSOLUTE(_end - _base);
