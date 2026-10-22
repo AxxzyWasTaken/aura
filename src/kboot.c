@@ -2690,9 +2690,21 @@ static int dt_t6030_dcpext_enable(const char *alias)
     if (routes >= 0)
         fdt_for_each_subnode(route, dt, routes)
         {
+            int len = 0;
+            const char *status = fdt_getprop(dt, route, "status", &len);
+            if (!status) {
+                if (len == -FDT_ERR_NOTFOUND)
+                    continue;
+                return len;
+            }
+            /* Preserve unavailable and malformed route policy from the DT. */
+            if (len != sizeof("disabled") || memcmp(status, "disabled", len))
+                continue;
             if (fdt_setprop_string(dt, route, "status", "okay"))
                 return -1;
         }
+    if (routes >= 0 && route != -FDT_ERR_NOTFOUND)
+        return route;
 
     node = fdt_path_offset(dt, alias);
     if (node < 0 || fdt_setprop_string(dt, node, "status", "okay"))
@@ -2715,11 +2727,17 @@ static int dt_set_t6030_dcpext(unsigned int n)
     int node = fdt_path_offset(dt, alias);
     if (node < 0)
         return -1;
-    const char *status = fdt_getprop(dt, node, "status", NULL);
-    if (status && !strcmp(status, "okay")) {
+    int status_len = 0;
+    const char *status = fdt_getprop(dt, node, "status", &status_len);
+    if (status && status_len == sizeof("okay") && !memcmp(status, "okay", status_len)) {
         printf("FDT: J514S DCPEXT%u already enabled; leaving it alone\n", n);
         return 0;
     }
+    if (status && (status_len != sizeof("disabled") ||
+                   memcmp(status, "disabled", status_len)))
+        return -1;
+    if (!status && status_len != -FDT_ERR_NOTFOUND)
+        return status_len;
 
     snprintf(nub_path, sizeof(nub_path), "/arm-io/%s/iop-%s-nub", alias, alias);
     if (dt_t6030_dcpext_validate(n, nub_path, uuid))
