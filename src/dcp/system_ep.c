@@ -142,9 +142,11 @@ err_free:
 
 int dcp_system_shutdown(dcp_system_if_t *system)
 {
+    int ret = 0;
+
     if (system) {
-        afk_epic_shutdown_ep(system->epic);
+        ret = afk_epic_shutdown_ep(system->epic);
         free(system);
     }
-    return 0;
+    return ret;
 }

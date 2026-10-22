@@ -710,9 +710,11 @@ err_free:
 
 int dcp_dptx_shutdown(dcp_dptx_if_t *dptx)
 {
+    int ret = 0;
+
     if (dptx) {
-        afk_epic_shutdown_ep(dptx->epic);
+        ret = afk_epic_shutdown_ep(dptx->epic);
         free(dptx);
     }
-    return 0;
+    return ret;
 }

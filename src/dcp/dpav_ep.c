@@ -73,9 +73,11 @@ err_free:
 
 int dcp_dpav_shutdown(dcp_dpav_if_t *dpav)
 {
+    int ret = 0;
+
     if (dpav) {
-        afk_epic_shutdown_ep(dpav->epic);
+        ret = afk_epic_shutdown_ep(dpav->epic);
         free(dpav);
     }
-    return 0;
+    return ret;
 }
