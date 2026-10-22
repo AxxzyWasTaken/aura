@@ -2,9 +2,12 @@ name: test
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, integration/aurora, integration/neo ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, integration/aurora, integration/neo ]
+
+permissions:
+  contents: read
 
 jobs:
   test:
