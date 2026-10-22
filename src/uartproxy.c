@@ -7,6 +7,7 @@
 #include "proxy.h"
 #include "string.h"
 #include "types.h"
+#include "usb.h"
 #include "usb_cdc.h"
 #include "utils.h"
 
@@ -108,7 +109,13 @@ enum stage1_proxy_result uartproxy_wait_stage1(unsigned int timeout_ms)
 {
     struct stage1_proxy_window window;
     stage1_proxy_window_init(&window, timeout_ms);
-    bool schedule_failed = usb_cdc_schedule(1000, 0, BIT(1) | BIT(2));
+    bool schedule_failed = false;
+    if (chip_id == T8140) {
+        schedule_failed = usb_cdc_schedule(1000, 0, BIT(1) | BIT(2));
+    } else {
+        usb_init();
+        usb_iodev_init();
+    }
     u64 start = ticks_to_msecs(get_ticks());
 
     while (true) {
@@ -116,20 +123,39 @@ enum stage1_proxy_result uartproxy_wait_stage1(unsigned int timeout_ms)
         u64 now = ticks_to_msecs(get_ticks());
         u64 elapsed = now - start;
         bool carrier_owned = usb_cdc_owns_carrier();
-        bool cdc_sync = usb_cdc_ready() && uartproxy_sync_iodev(IODEV_USB0);
-        bool kis_sync = !carrier_owned && uartproxy_sync_iodev(IODEV_DOCKCHANNEL_UART);
+        iodev_id_t usb_port = IODEV_MAX;
+        for (iodev_id_t i = IODEV_USB0; i < IODEV_USB0 + USB_IODEV_COUNT; i++) {
+            if (uartproxy_sync_iodev(i)) {
+                usb_port = i;
+                break;
+            }
+        }
+        bool cdc_sync = usb_port != IODEV_MAX;
+        iodev_id_t serial_port = IODEV_MAX;
+        for (iodev_id_t i = 0; i < IODEV_MAX; i++) {
+            if (i >= IODEV_USB0 && i < IODEV_USB0 + USB_IODEV_COUNT)
+                continue;
+            if (carrier_owned && i == IODEV_DOCKCHANNEL_UART)
+                continue;
+            if (uartproxy_sync_iodev(i)) {
+                serial_port = i;
+                break;
+            }
+        }
+        bool kis_sync = serial_port != IODEV_MAX;
         enum stage1_proxy_result result = stage1_proxy_window_step(
-            &window, elapsed > 0xffffffffu ? 0xffffffffu : elapsed, usb_cdc_ready(),
-            schedule_failed || usb_cdc_failed(), carrier_owned, cdc_sync, kis_sync);
+            &window, elapsed > 0xffffffffu ? 0xffffffffu : elapsed,
+            chip_id != T8140 || usb_cdc_ready(), schedule_failed || usb_cdc_failed(), carrier_owned,
+            cdc_sync, kis_sync);
 
         if (result == STAGE1_PROXY_CDC) {
-            presynced_iodev = IODEV_USB0;
+            presynced_iodev = usb_port;
             return result;
         }
         if (result == STAGE1_PROXY_KIS) {
-            if (!schedule_failed && usb_cdc_cancel())
+            if (chip_id == T8140 && !schedule_failed && usb_cdc_cancel())
                 return STAGE1_PROXY_CDC_FAILED;
-            presynced_iodev = IODEV_DOCKCHANNEL_UART;
+            presynced_iodev = serial_port;
             return result;
         }
         if (result != STAGE1_PROXY_WAIT)
@@ -138,9 +164,9 @@ enum stage1_proxy_result uartproxy_wait_stage1(unsigned int timeout_ms)
     }
 }
 
-int uartproxy_run_presynced(iodev_id_t iodev)
+int uartproxy_run_presynced(void)
 {
-    if (presynced_iodev != iodev)
+    if (presynced_iodev == IODEV_MAX)
         return -1;
     return uartproxy_run(NULL);
 }

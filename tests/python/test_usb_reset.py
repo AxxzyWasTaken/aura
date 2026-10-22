@@ -17,7 +17,7 @@ def function(source, name):
 
 def test_usb_reset(tmp_path):
     repo = Path(__file__).resolve().parents[2]
-    source = Path(os.environ.get("USB_RESET_SOURCE", repo / "src/usb_dwc3.c")).read_text()
+    source = Path(os.environ.get("USB_RESET_SOURCE", repo / "src/usb_dwc3_impl.inc")).read_text()
     reset = function(source, "usb_dwc3_handle_event_usbrst")
     dma = function((repo / "src/usb_cdc_state.c").read_text(), "usb_cdc_dma_may_release")
     harness = r'''#include <assert.h>
@@ -64,7 +64,7 @@ static void setup(void){
  for(int i=0;i<6;i++){memset(d.endpoints[i].xfer_buffer,0x55,16);d.endpoints[i].resource_index=17;}
 }
 int main(void){
-#ifdef J700_CDC_PROXY
+#if USB_DWC3_SUPERSPEED
  setup();d.endpoints[2].xfer_in_progress=true;d.endpoints[3].stalled=true;usb_dwc3_handle_event_usbrst(&d,true);
  assert(ends==1 && stalls==1 && setups==1 && !d.failed && !d.reset_in_progress && d.cdc_reconfigure);
  for(int i=2;i<6;i++)assert(!d.endpoints[i].xfer_in_progress && !d.endpoints[i].resource_index && !d.endpoints[i].xfer_buffer[0]);
@@ -94,6 +94,6 @@ int main(void){
         code.write_text(harness)
         binary = tmp_path / ("usb-reset-" + mode)
         args = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", str(code), "-o", str(binary)]
-        if mode == "cdc": args.insert(1, "-DJ700_CDC_PROXY")
+        args.insert(1, "-DUSB_DWC3_SUPERSPEED=" + ("1" if mode == "cdc" else "0"))
         subprocess.run(args, check=True)
         subprocess.run([str(binary)], check=True)

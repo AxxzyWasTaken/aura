@@ -2,16 +2,16 @@
 
 #include "../build/build_cfg.h"
 
-#include "usb_cdc.h"
+#include "boot_options.h"
 #include "string.h"
 #include "tps6598x.h"
 #include "usb.h"
+#include "usb_cdc.h"
 #include "usb_cdc_state.h"
 #include "utils.h"
 #include "wdt.h"
 
 static struct usb_cdc_state cdc;
-#ifdef J700_CDC_PROXY
 static tps6598x_irq_state_t cdc_irq_state;
 static bool watchdog_armed;
 static bool carrier_owned;
@@ -42,20 +42,19 @@ static void cdc_set_step(unsigned step)
 {
     cdc.step = step;
 }
-#endif
 
 int usb_cdc_schedule(u32 delay_ms, u32 reserved, u32 flags)
 {
-#ifndef J700_CDC_PROXY
-    (void)delay_ms;
-    (void)reserved;
-    (void)flags;
-    return -1;
-#else
+    if (m1n1_debug_enabled())
+        return -1;
     if (chip_id != T8140)
         return -1;
-    return usb_cdc_state_schedule(&cdc, delay_ms, reserved, flags, ticks_to_msecs(get_ticks()));
-#endif
+    int ret = usb_cdc_state_schedule(&cdc, delay_ms, reserved, flags, ticks_to_msecs(get_ticks()));
+    if (!ret && usb_cdc_arm_watchdog()) {
+        cdc.state = USB_CDC_IDLE;
+        return -1;
+    }
+    return ret;
 }
 
 u32 usb_cdc_status(void)
@@ -65,7 +64,6 @@ u32 usb_cdc_status(void)
 
 void usb_cdc_poll(void)
 {
-#ifdef J700_CDC_PROXY
     if (!usb_cdc_state_due(&cdc, ticks_to_msecs(get_ticks())))
         return;
 
@@ -92,16 +90,13 @@ void usb_cdc_poll(void)
 failed:
     cdc.state = USB_CDC_FAILED;
     printf("CDC transition failed at step %u; VDM recovery required\n", cdc.step);
-#endif
 }
 
 int usb_cdc_arm_watchdog(void)
 {
-#if defined(J700_CDC_PROXY) && !defined(J700_CDC_NO_WATCHDOG)
     if (chip_id != T8140 || wdt_arm_seconds(170))
         return -1;
     watchdog_armed = true;
-#endif
     return 0;
 }
 
@@ -117,52 +112,42 @@ bool usb_cdc_failed(void)
 
 bool usb_cdc_owns_carrier(void)
 {
-#ifdef J700_CDC_PROXY
     return carrier_owned;
-#else
-    return false;
-#endif
 }
 
 int usb_cdc_cancel(void)
 {
-#ifdef J700_CDC_PROXY
     if (carrier_owned || cdc.state != USB_CDC_SCHEDULED)
         return -1;
     cdc.state = USB_CDC_IDLE;
+    if (watchdog_armed) {
+        wdt_disable();
+        watchdog_armed = false;
+    }
     return 0;
-#else
-    return -1;
-#endif
 }
 
 void usb_cdc_cleanup(void)
 {
-#ifdef J700_CDC_PROXY
     usb_iodev_shutdown();
     if (watchdog_armed) {
         wdt_disable();
         watchdog_armed = false;
     }
-#endif
 }
 
 void usb_cdc_primary_opened(void)
 {
-#ifdef J700_CDC_PROXY
     if (cdc.state == USB_CDC_DWC_READY && watchdog_armed) {
         wdt_disable();
         watchdog_armed = false;
         printf("CDC primary open; watchdog disabled\n");
     }
-#endif
 }
 
 void usb_cdc_link_failed(void)
 {
-#ifdef J700_CDC_PROXY
     cdc.state = USB_CDC_FAILED;
     cdc.step = 5;
     printf("CDC link mode mismatch; device stopped for VDM recovery\n");
-#endif
 }

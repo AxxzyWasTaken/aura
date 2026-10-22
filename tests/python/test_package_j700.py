@@ -18,10 +18,10 @@ def test_package_includes_fatfs_license(tmp_path, monkeypatch):
         (folder / "BUILD-INFO.txt").write_text(
             f"kind: m1n1\ncommit: {commit}\ndirty-files: 0\n"
             "build_tag: package-test\n"
-            "make-vars: RELEASE=1 CHAINLOADING=1 T8140_KIS_PROXY=1 BUILTIN_LOGO=aurora\n"
+            "make-vars: RELEASE=1 CHAINLOADING=1 BUILTIN_LOGO=aurora\n"
         )
-        (folder / "build_cfg.h").write_text(cfg)
-        (folder / "m1n1.bin").write_bytes(b"AURORA-S1-CFG01\0STACKBOT")
+        (folder / "build_cfg.h").write_text(cfg + ("#define ESP_STAGE2\n" if name == "stage2" else ""))
+        (folder / "m1n1.bin").write_bytes((b"AURORA-S1-CFG01\0" if name == "stage1" else b"") + b"STACKBOT")
         (folder / "m1n1-raw.elf").write_bytes(b"test raw ELF")
 
     output = tmp_path / "package"
