@@ -78,8 +78,12 @@ PREFIX = r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64;
-typedef int64_t s64;
+typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32;
+/* Match the freestanding aarch64-linux-gnu LP64 aliases. Darwin's native
+ * uint64_t is unsigned long long, unlike the target's unsigned long. */
+typedef unsigned long u64;
+typedef long s64;
+_Static_assert(sizeof(u64) == 8 && sizeof(s64) == 8, "target LP64 integer sizes");
 #define PACKED __attribute__((packed))
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
 #define SZ_16K (1 << 14)
