@@ -171,9 +171,8 @@ static int dcp_ib_cmd(dcp_iboot_if_t *iboot, int op, size_t in_size)
     /* The 26A428 AFKEPV2 handlers return only transport status for these
      * setters. Supplying a reply buffer makes firmware try to copy an empty
      * message and assert while queueing the response. */
-    bool status_only = afk_epic_is_v2(iboot->epic) &&
-                       (op == IBOOT_SET_POWER || op == IBOOT_SET_MODE ||
-                        op == IBOOT_SET_SURFACE);
+    bool setter = op == IBOOT_SET_POWER || op == IBOOT_SET_MODE || op == IBOOT_SET_SURFACE;
+    bool status_only = afk_epic_is_v2(iboot->epic) && setter;
     assert(in_size <= TXBUF_LEN - sizeof(struct txcmd));
 
     iboot->txcmd.op = op;
@@ -186,6 +185,13 @@ static int dcp_ib_cmd(dcp_iboot_if_t *iboot, int op, size_t in_size)
     if (ret)
         return ret;
     if (status_only)
+        return 0;
+    /* AFKEPV1 setters can also answer with transport status alone. J293
+     * SET_POWER was observed replying with no bytes at all. SET_MODE and
+     * SET_SURFACE carry no reply payload either (by the iBoot command
+     * contract), so their empty reply is admitted the same way; a non-empty
+     * reply must still be a well-formed header. */
+    if (setter && !rxsize)
         return 0;
     if (rxsize < sizeof(struct rxcmd) || iboot->rxcmd.len < sizeof(struct rxcmd) ||
         iboot->rxcmd.len > rxsize) {
