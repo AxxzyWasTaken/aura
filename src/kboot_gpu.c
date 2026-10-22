@@ -581,12 +581,11 @@ struct g15_soc {
     /* Add the ADT's power-management values to the gpu node, see g15_power_props[] */
     bool power_props;
     /*
-     * T6031: armed unless chosen.<optin>=0; the firmware is admitted by its family
-     * (dt_t6031_gpu_image()); the identity and core masks come from the bounded probe that ran
-     * before, so the setup itself accesses no GPU hardware; the node takes the CS and AFR states;
-     * the ADT's firmware nub is fw_nub (NULL: /arm-io/gfx-asc/iop-gfx-nub).
+     * T6031: the firmware is admitted by its family (dt_t6031_gpu_image()); the identity and core
+     * masks come from the bounded probe that ran before, so the setup itself accesses no GPU
+     * hardware; the node takes the CS and AFR states; the ADT's firmware nub is fw_nub (NULL:
+     * /arm-io/gfx-asc/iop-gfx-nub).
      */
-    bool armed_default;
     bool family_fw;
     bool probed;
     bool csafr;
@@ -2074,7 +2073,6 @@ static const struct g15_soc g15_soc_t6031 = {
     .dies = 1,
     .mask2_bits = 32,
     .power_props = true,
-    .armed_default = false,
     .family_fw = true,
     .probed = true,
     .csafr = true,
@@ -2438,8 +2436,7 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
      * checks run and are logged, then the gpu node is left disabled. T6031 also
      * requires an explicit opt-in before its powered identity probe.
      */
-    bool armed =
-        soc->armed_default ? !t6031_switched_off(dt, soc->optin) : g15_optin(dt, soc->optin);
+    bool armed = g15_optin(dt, soc->optin);
 
     g15_powered = false;
     int ret = dt_set_gpu_g15_inner(dt, soc, armed);
@@ -2569,8 +2566,8 @@ static int t8122_identity_power_disable(void *context)
 }
 
 /*
- * T6031: the bounded powered identity read, on every boot of a J514C or J516C unless
- * chosen.asahi,t6031-gpu=0. Unlike the T8122 probe it cannot require the GPU power closure to be
+ * T6031: the bounded powered identity read, on a J514C or J516C booted with
+ * chosen.asahi,t6031-gpu=1. Unlike the T8122 probe it cannot require the GPU power closure to be
  * off (GFX's parent AFR is always on), so it records every power state register of the closure,
  * powers the GPU on through PMGR (each step a bounded poll), checks that every device of the
  * closure is on before any GPU register is read, reads the ID, topology and core mask registers

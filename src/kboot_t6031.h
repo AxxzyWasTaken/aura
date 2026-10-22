@@ -13,12 +13,6 @@
 bool t6031_board(const void *dt);
 
 /*
- * The T6031 display and GPU handoffs run on every boot of such a Mac. The boot.bin config line
- * chosen.<name>=0 (chosen.asahi,t6031-dcp=0 or chosen.asahi,t6031-gpu=0) switches one off.
- */
-bool t6031_switched_off(const void *dt, const char *name);
-
-/*
  * /chosen/asahi,t6031-fw-uuids: one "<owner>=<uuid>" string per firmware image iBoot loaded, for
  * gfx, dcp, dcpext0..3 and pmp, read from the ADT's iop nubs (<uuid> is "absent" or "invalid"
  * when the ADT has no well-formed one). ADT memory only.

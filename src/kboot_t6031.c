@@ -18,14 +18,6 @@ bool t6031_board(const void *dt)
             !fdt_node_check_compatible(dt, 0, "apple,j516c"));
 }
 
-bool t6031_switched_off(const void *dt, const char *name)
-{
-    int chosen = fdt_path_offset(dt, "/chosen"), len = 0;
-    const char *value = chosen < 0 ? NULL : fdt_getprop(dt, chosen, name, &len);
-
-    return value && len == 2 && value[0] == '0' && value[1] == '\0';
-}
-
 /* The ADT's uuid string: 8-4-4-4-12 hexadecimal digits and a NUL, exactly */
 static bool fw_uuid_ok(const char *s, u32 len)
 {

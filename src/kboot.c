@@ -2854,7 +2854,8 @@ static int dt_set_display(void)
          * Fail-soft handoff (kboot_display_handoff.c): it always returns 0, never uses the
          * helpers above (they bail out of kboot or enable nodes) and never enables a node.
          * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1. On T6031 it does nothing
-         * unless the board is a J514C or J516C.
+         * unless the board is a J514C or J516C, and reserves only __OS_LOG unless
+         * chosen.asahi,t6031-dcp=1.
          */
         ret = dt_set_display_handoff(dt);
         if (!fdt_node_check_compatible(dt, 0, "apple,t8122"))

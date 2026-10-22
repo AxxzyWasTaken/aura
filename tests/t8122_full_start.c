@@ -213,11 +213,6 @@ static int g15_get_fw_segs_nub(void *dt, int gpu, const struct g15_region *regio
 
 /* The T6031 hooks of the setup: a T8122 setup never takes them */
 static const struct fw_version_info *g15_t6031_fw;
-static bool t6031_switched_off(const void *dt, const char *name)
-{
-    assert(0);
-    return false;
-}
 static int g15_get_aux(void *dt, int gpu, int sgx, u32 dies, struct g15_aux *aux)
 {
     assert(0);
