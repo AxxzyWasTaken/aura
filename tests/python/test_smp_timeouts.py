@@ -114,7 +114,6 @@ typedef uint64_t u64;
 #define sysop(op) ((void)0)
 #define mrs(reg) 1000
 #define WDT_TIMEOUT 1
-#define mmu_secondary_setup mmu_init_secondary_local
 #define smp_call0(cpu, fn) smp_call4(cpu, fn, 0, 0, 0, 0)
 static int calls, waits, fail_call, fail_wait, dispatch_error = -1;
 static int boot_cpu_idx;
@@ -288,9 +287,9 @@ int main(void)
 
 def test_stop_attempts_all_cpus_and_tracks_late_sleep(tmp_path):
     smp = (REPO / "src/smp.c").read_text()
-    stop = smp[smp.index("static int smp_stop_cpu("):smp.index("int smp_init(")]
+    stop = smp[smp.index("static int smp_stop_cpu("):smp.index("static int smp_init_t8152(")]
     all_cpus = smp[smp.index("int smp_stop_secondaries("):smp.index("void smp_send_ipi(")]
-    state = smp[smp.index("static struct {\n    bool pending;"):smp.index("// Used from start.S")]
+    state = smp[smp.index("static struct {\n    bool pending;"):smp.index("u64 smp_started_mask;")]
     harness = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -309,7 +308,7 @@ static struct spin_table spin_table[MAX_CPUS];
 struct cpu_info { bool valid; int die, cluster, core; u64 impl_reg; };
 static struct cpu_info cpu_info[MAX_CPUS];
 static u64 cpu_start_base;
-static int boot_cpu_idx, calls[MAX_CPUS], writes, pending_failure = -1;
+static int boot_cpu_idx, chip_id, calls[MAX_CPUS], writes, pending_failure = -1;
 static int ack_failure = -1, shutdown_failure = -1;
 static bool smp_initialized = true;
 static void cpu_sleep(bool deep) {}
@@ -429,7 +428,6 @@ def test_mmu_rejected_dispatch_does_not_wait(tmp_path):
 #include <stddef.h>
 typedef uint64_t u64;
 static int calls, waits;
-#define mmu_secondary_setup mmu_init_secondary_local
 static void mmu_init_secondary_local(void) {}
 static int smp_call4(int cpu, void *fn, u64 a, u64 b, u64 c, u64 d)
 { calls++; return -1; }

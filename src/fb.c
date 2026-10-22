@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h"
+
 #include "fb.h"
 #include "assert.h"
 #include "iodev.h"
@@ -47,9 +49,15 @@ static struct {
     bool active;
 } console;
 
+/* The 128 and 256 logos come from data/$(BUILTIN_LOGO)_*.bin, see the Makefile */
+#define LOGO_GZ_START_(name, size) _binary_build_##name##_##size##_bin_gz_start
+#define LOGO_GZ_START(name, size)  LOGO_GZ_START_(name, size)
+#define LOGO_GZ_END_(name, size)   _binary_build_##name##_##size##_bin_gz_end
+#define LOGO_GZ_END(name, size)    LOGO_GZ_END_(name, size)
+
 extern u8 _binary_build_bootlogo_48_bin_gz_start[], _binary_build_bootlogo_48_bin_gz_end[];
-extern u8 _binary_build_bootlogo_128_bin_gz_start[], _binary_build_bootlogo_128_bin_gz_end[];
-extern u8 _binary_build_bootlogo_256_bin_gz_start[], _binary_build_bootlogo_256_bin_gz_end[];
+extern u8 LOGO_GZ_START(BUILTIN_LOGO, 128)[], LOGO_GZ_END(BUILTIN_LOGO, 128)[];
+extern u8 LOGO_GZ_START(BUILTIN_LOGO, 256)[], LOGO_GZ_END(BUILTIN_LOGO, 256)[];
 
 extern u8 _binary_build_font_bin_start[];
 extern u8 _binary_build_font_retina_bin_start[];
@@ -78,15 +86,15 @@ static struct builtin_logo logo_48 = {
 
 static struct builtin_logo logo_128 = {
     {logo_128_px, 128, 128},
-    _binary_build_bootlogo_128_bin_gz_start,
-    _binary_build_bootlogo_128_bin_gz_end,
+    LOGO_GZ_START(BUILTIN_LOGO, 128),
+    LOGO_GZ_END(BUILTIN_LOGO, 128),
     false,
 };
 
 static struct builtin_logo logo_256 = {
     {logo_256_px, 256, 256},
-    _binary_build_bootlogo_256_bin_gz_start,
-    _binary_build_bootlogo_256_bin_gz_end,
+    LOGO_GZ_START(BUILTIN_LOGO, 256),
+    LOGO_GZ_END(BUILTIN_LOGO, 256),
     false,
 };
 
@@ -556,7 +564,10 @@ void fb_reinit(void)
     if (!console.initialized)
         return;
 
+    bool active = console.active;
     fb_shutdown(false);
     fb_init(true);
     fb_display_logo();
+    iodev_console_rewind(IODEV_FB);
+    fb_set_active(active);
 }

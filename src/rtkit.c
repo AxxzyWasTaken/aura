@@ -43,6 +43,11 @@
 #define MSG_OSLOG_INIT 0x10
 #define MSG_OSLOG_ACK  0x30
 
+#define OSLOG_TYPE GENMASK(63, 56)
+#define OSLOG_TYPE_BUFFER_REQUEST 1
+#define OSLOG_SIZE GENMASK(55, 36)
+#define OSLOG_IOVA GENMASK(35, 0)
+
 #define MGMT_MSG_HELLO        1
 #define MGMT_MSG_HELLO_ACK    2
 #define MGMT_MSG_HELLO_MINVER GENMASK(15, 0)
@@ -90,6 +95,8 @@ struct rtkit_dev {
     bool sram;
 
     u64 dva_base;
+    u32 timeout_usec;
+    struct rtkit_buffer oslog_bfr;
 
     enum rtkit_power_state iop_power;
     enum rtkit_power_state ap_power;
@@ -178,6 +185,7 @@ void rtkit_free(rtkit_dev_t *rtk)
     rtkit_free_buffer(rtk, &rtk->syslog_bfr);
     rtkit_free_buffer(rtk, &rtk->crashlog_bfr);
     rtkit_free_buffer(rtk, &rtk->ioreport_bfr);
+    rtkit_free_buffer(rtk, &rtk->oslog_bfr);
     free(rtk->name);
     free(rtk);
 }
@@ -198,7 +206,7 @@ bool rtkit_map(rtkit_dev_t *rtk, void *phys, size_t sz, u64 *dva)
 
     if (rtk->sart) {
         if (!sart_add_allowed_region(rtk->sart, phys, sz)) {
-            rtkit_printf("sart_add_allowed_region failed (%p, 0x%lx)\n", phys, sz);
+            rtkit_printf("sart_add_allowed_region failed (size 0x%lx)\n", sz);
             return false;
         }
         *dva = (u64)phys;
@@ -211,7 +219,7 @@ bool rtkit_map(rtkit_dev_t *rtk, void *phys, size_t sz, u64 *dva)
         }
 
         if (dart_map(rtk->dart, iova, phys, sz) < 0) {
-            rtkit_printf("failed to DART map %p -> 0x%lx (0x%lx)\n", phys, iova, sz);
+            rtkit_printf("failed to DART map (size 0x%lx)\n", sz);
             iova_free(rtk->dart_iovad, iova, sz);
             return false;
         }
@@ -227,13 +235,15 @@ bool rtkit_map(rtkit_dev_t *rtk, void *phys, size_t sz, u64 *dva)
 bool rtkit_unmap(rtkit_dev_t *rtk, u64 dva, size_t sz)
 {
     if (rtk->sart) {
-        if (!sart_remove_allowed_region(rtk->sart, (void *)dva, sz))
-            rtkit_printf("sart_remove_allowed_region failed (0x%lx, 0x%lx)\n", dva, sz);
+        if (!sart_remove_allowed_region(rtk->sart, (void *)dva, sz)) {
+            rtkit_printf("sart_remove_allowed_region failed (size 0x%lx)\n", sz);
+            return false;
+        }
         return true;
     } else if (rtk->dart) {
         dva &= ~rtk->dva_base;
         dart_unmap(rtk->dart, dva & IOVA_MASK, sz);
-        iova_free(rtk->dart_iovad, dva & IOVA_MASK, sz);
+        iova_free(rtk->dart_iovad, dva, sz);
         return true;
     } else {
         rtkit_printf("TODO: implement no IOMMU buffers\n");
@@ -243,37 +253,43 @@ bool rtkit_unmap(rtkit_dev_t *rtk, u64 dva, size_t sz)
 
 bool rtkit_alloc_buffer(rtkit_dev_t *rtk, struct rtkit_buffer *bfr, size_t sz)
 {
-    bfr->bfr = memalign(SZ_16K, sz);
+    if (!sz || sz > (size_t)-1 - (SZ_16K - 1))
+        return false;
+
+    size_t alloc_sz = ALIGN_UP(sz, SZ_16K);
+    bfr->bfr = memalign(SZ_16K, alloc_sz);
     if (!bfr->bfr) {
         rtkit_printf("unable to allocate %zu buffer\n", sz);
         return false;
     }
 
-    sz = ALIGN_UP(sz, 16384);
-
-    bfr->sz = sz;
-    if (!rtkit_map(rtk, bfr->bfr, sz, &bfr->dva))
+    memset(bfr->bfr, 0, alloc_sz);
+    bfr->sz = alloc_sz;
+    if (!rtkit_map(rtk, bfr->bfr, alloc_sz, &bfr->dva))
         goto error;
 
+    bfr->owned = true;
     return true;
 
 error:
     free(bfr->bfr);
-    bfr->bfr = NULL;
+    memset(bfr, 0, sizeof(*bfr));
     return false;
 }
 
 bool rtkit_free_buffer(rtkit_dev_t *rtk, struct rtkit_buffer *bfr)
 {
-    if (!bfr->bfr || !is_heap(bfr->bfr))
+    if (!bfr->bfr || !bfr->owned) {
+        memset(bfr, 0, sizeof(*bfr));
         return true;
+    }
 
     if (!rtkit_unmap(rtk, bfr->dva, bfr->sz))
         return false;
 
     free(bfr->bfr);
-
-    return false;
+    memset(bfr, 0, sizeof(*bfr));
+    return true;
 }
 
 static bool rtkit_handle_buffer_request(rtkit_dev_t *rtk, struct rtkit_message *msg,
@@ -291,18 +307,18 @@ static bool rtkit_handle_buffer_request(rtkit_dev_t *rtk, struct rtkit_message *
         bfr->dva = addr;
         bfr->bfr = (void *)addr;
         bfr->sz = sz;
+        bfr->owned = false;
         return true;
     } else if (addr) {
+        if (!rtk->dart)
+            return false;
         bfr->dva = addr & ~rtk->dva_base;
         bfr->sz = sz;
+        bfr->owned = false;
         bfr->bfr = dart_translate(rtk->dart, bfr->dva & IOVA_MASK);
         if (!bfr->bfr) {
-            rtkit_printf("failed to translate pre-allocated buffer (ep 0x%x, buf 0x%lx)\n", msg->ep,
-                         addr);
+            rtkit_printf("failed to translate pre-allocated buffer (ep 0x%x)\n", msg->ep);
             return false;
-        } else {
-            rtkit_printf("pre-allocated buffer (ep 0x%x, dva 0x%lx, phys %p)\n", msg->ep, addr,
-                         bfr->bfr);
         }
         return true;
 
@@ -317,19 +333,76 @@ static bool rtkit_handle_buffer_request(rtkit_dev_t *rtk, struct rtkit_message *
     reply.msg1 = msg->ep;
     reply.msg0 = FIELD_PREP(MGMT_TYPE, MSG_BUFFER_REQUEST);
     reply.msg0 |= FIELD_PREP(MSG_BUFFER_REQUEST_SIZE, n_4kpages);
-    if (!addr)
-        reply.msg0 |= FIELD_PREP(MSG_BUFFER_REQUEST_IOVA, bfr->dva | rtk->dva_base);
+    reply.msg0 |= FIELD_PREP(MSG_BUFFER_REQUEST_IOVA, bfr->dva | rtk->dva_base);
 
     if (!asc_send(rtk->asc, &reply)) {
         rtkit_printf("unable to send buffer reply\n");
-        rtkit_free_buffer(rtk, bfr);
-        goto error;
+        return false;
     }
 
     return true;
+}
 
-error:
-    return false;
+static bool rtkit_handle_oslog_request(rtkit_dev_t *rtk, struct rtkit_message *msg)
+{
+    size_t sz = FIELD_GET(OSLOG_SIZE, msg->msg);
+    u64 addr = FIELD_GET(OSLOG_IOVA, msg->msg) << 12;
+    struct rtkit_buffer *bfr = &rtk->oslog_bfr;
+
+    if (bfr->bfr) {
+        rtkit_printf("duplicate oslog buffer request %lx\n", msg->msg);
+        return false;
+    }
+
+    if (addr) {
+        if (rtk->dart && sz && addr <= UINT64_MAX - sz) {
+            u64 dva = addr & ~rtk->dva_base;
+            u64 page = ALIGN_DOWN(dva, SZ_16K);
+            u64 end = ALIGN_UP(dva + sz, SZ_16K);
+            void *phys = dart_translate(rtk->dart, page & IOVA_MASK);
+            if (!phys)
+                return false;
+            /* The RTKit buffer API requires one contiguous host mapping. */
+            for (u64 next = page + SZ_16K; next < end; next += SZ_16K) {
+                if (dart_translate(rtk->dart, next & IOVA_MASK) != phys + (next - page)) {
+                    rtkit_printf("oslog DART buffer is not contiguous\n");
+                    return false;
+                }
+            }
+            bfr->dva = dva;
+            bfr->bfr = phys + (dva - page);
+            bfr->sz = sz;
+            rtkit_printf("pre-allocated oslog buffer (dva %#lx, phys %p, size %#zx)\n",
+                         dva, bfr->bfr, sz);
+            return true;
+        }
+        rtkit_printf("oslog buffer request outside mapped DART (%#lx, %#zx)\n", addr, sz);
+        return false;
+    }
+
+    if (!sz) {
+        rtkit_printf("empty oslog buffer request %lx\n", msg->msg);
+        return false;
+    }
+
+    if (!rtkit_alloc_buffer(rtk, bfr, sz)) {
+        rtkit_printf("unable to allocate oslog buffer\n");
+        return false;
+    }
+
+    struct asc_message reply;
+    reply.msg1 = RTKIT_EP_OSLOG;
+    reply.msg0 = FIELD_PREP(OSLOG_TYPE, OSLOG_TYPE_BUFFER_REQUEST);
+    reply.msg0 |= FIELD_PREP(OSLOG_SIZE, sz);
+    reply.msg0 |= FIELD_PREP(OSLOG_IOVA, bfr->dva >> 12);
+    if (!asc_send(rtk->asc, &reply)) {
+        rtkit_printf("unable to send oslog buffer reply\n");
+        rtkit_free_buffer(rtk, bfr);
+        return false;
+    }
+
+    rtkit_printf("oslog buffer (dva %#lx, phys %p, size %#zx)\n", bfr->dva, bfr->bfr, sz);
+    return true;
 }
 
 static void rtkit_crashed(rtkit_dev_t *rtk)
@@ -461,6 +534,10 @@ int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
                 }
                 break;
             case RTKIT_EP_OSLOG:
+                if (asc_is_v8(rtk->asc) && FIELD_GET(OSLOG_TYPE, msg->msg) == OSLOG_TYPE_BUFFER_REQUEST) {
+                    ok = ok && rtkit_handle_oslog_request(rtk, msg);
+                    break;
+                }
                 rtkit_printf("unknown oslog message %lx\n", msg->msg);
                 break;
             default:
@@ -493,7 +570,32 @@ bool rtkit_start_ep(rtkit_dev_t *rtk, u8 ep)
     return true;
 }
 
-bool rtkit_boot(rtkit_dev_t *rtk)
+static bool rtkit_wait_for_power(rtkit_dev_t *rtk, enum rtkit_power_state *state,
+                                 enum rtkit_power_state target, u32 timeout_usec,
+                                 const char *name)
+{
+    u64 timeout = timeout_usec ? timeout_calculate(timeout_usec) : 0;
+
+    while (*state != target) {
+        struct rtkit_message rtk_msg;
+        int ret = rtkit_recv(rtk, &rtk_msg);
+        if (ret == 1)
+            rtkit_printf("unexpected message to non-system endpoint 0x%02x "
+                         "while waiting for %s power: %lx\n",
+                         rtk_msg.ep, name, rtk_msg.msg);
+        else if (ret < 0)
+            return false;
+
+        if (timeout && timeout_expired(timeout)) {
+            rtkit_printf("timed out waiting for %s power state %#x\n", name, target);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool rtkit_boot_internal(rtkit_dev_t *rtk, u32 timeout_usec)
 {
     struct asc_message msg;
 
@@ -634,15 +736,8 @@ bool rtkit_boot(rtkit_dev_t *rtk)
     if (has_oslog && !rtkit_start_ep(rtk, RTKIT_EP_OSLOG))
         return false;
 
-    while (rtk->iop_power != RTKIT_POWER_ON) {
-        struct rtkit_message rtk_msg;
-        int ret = rtkit_recv(rtk, &rtk_msg);
-        if (ret == 1)
-            rtkit_printf("unexpected message to non-system endpoint 0x%02x during boot: %lx\n",
-                         rtk_msg.ep, rtk_msg.msg);
-        else if (ret < 0)
-            return false;
-    }
+    if (!rtkit_wait_for_power(rtk, &rtk->iop_power, RTKIT_POWER_ON, timeout_usec, "IOP"))
+        return false;
 
     /* this enables syslog */
     msg.msg0 =
@@ -653,7 +748,32 @@ bool rtkit_boot(rtkit_dev_t *rtk)
         return false;
     }
 
+    if (timeout_usec &&
+        !rtkit_wait_for_power(rtk, &rtk->ap_power, RTKIT_POWER_ON, timeout_usec, "AP"))
+        return false;
+
     return true;
+}
+
+bool rtkit_boot(rtkit_dev_t *rtk)
+{
+    return rtkit_boot_internal(rtk, 0);
+}
+
+bool rtkit_boot_timed(rtkit_dev_t *rtk, u32 timeout_usec)
+{
+    if (!timeout_usec) {
+        rtkit_printf("timed boot requires a nonzero timeout\n");
+        return false;
+    }
+
+    rtk->timeout_usec = timeout_usec;
+    return rtkit_boot_internal(rtk, timeout_usec);
+}
+
+u32 rtkit_get_timeout(rtkit_dev_t *rtk)
+{
+    return rtk->timeout_usec;
 }
 
 static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state target)
@@ -672,7 +792,12 @@ static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state ta
         return false;
     }
 
+    u64 timeout = timeout_calculate(rtk->timeout_usec ? rtk->timeout_usec : 1000000);
     while (rtk->ap_power != RTKIT_POWER_QUIESCED) {
+        if (timeout_expired(timeout)) {
+            rtkit_printf("AP power transition timed out\n");
+            return false;
+        }
         struct rtkit_message rtk_msg;
         int ret = rtkit_recv(rtk, &rtk_msg);
 
@@ -692,7 +817,12 @@ static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state ta
         return false;
     }
 
+    timeout = timeout_calculate(rtk->timeout_usec ? rtk->timeout_usec : 1000000);
     while (rtk->iop_power != target) {
+        if (timeout_expired(timeout)) {
+            rtkit_printf("IOP power transition timed out\n");
+            return false;
+        }
         struct rtkit_message rtk_msg;
         int ret = rtkit_recv(rtk, &rtk_msg);
 
@@ -709,6 +839,37 @@ static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state ta
     return true;
 }
 
+static bool rtkit_inherited_quiesce_state(asc_dev_t *asc, u32 command, u32 ack)
+{
+    struct asc_message msg = {
+        .msg0 = FIELD_PREP(MGMT_TYPE, command) |
+                FIELD_PREP(MGMT_PWR_STATE, RTKIT_POWER_QUIESCED),
+        .msg1 = RTKIT_EP_MGMT,
+    };
+
+    if (!asc_send(asc, &msg) || !asc_recv_timeout(asc, &msg, 1000000))
+        return false;
+    if (msg.msg1 != RTKIT_EP_MGMT ||
+        msg.msg0 != (FIELD_PREP(MGMT_TYPE, ack) |
+                     FIELD_PREP(MGMT_PWR_STATE, RTKIT_POWER_QUIESCED)))
+        return false;
+    return asc_cpu_running(asc);
+}
+
+bool rtkit_quiesce_inherited(asc_dev_t *asc)
+{
+    /* Preserve inherited mappings and keep the CPU running for INIT/HELLO. */
+    if (!asc || !asc_cpu_running(asc) || asc_can_recv(asc))
+        return false;
+    if (!rtkit_inherited_quiesce_state(asc, MGMT_MSG_AP_PWR_STATE,
+                                     MGMT_MSG_AP_PWR_STATE_ACK))
+        return false;
+    if (!rtkit_inherited_quiesce_state(asc, MGMT_MSG_IOP_PWR_STATE,
+                                     MGMT_MSG_IOP_PWR_STATE_ACK))
+        return false;
+    return asc_cpu_running(asc) && !asc_can_recv(asc);
+}
+
 bool rtkit_quiesce(rtkit_dev_t *rtk)
 {
     return rtkit_switch_power_state(rtk, RTKIT_POWER_QUIESCED);
@@ -716,10 +877,9 @@ bool rtkit_quiesce(rtkit_dev_t *rtk)
 
 bool rtkit_sleep(rtkit_dev_t *rtk)
 {
-    int ret = rtkit_switch_power_state(rtk, RTKIT_POWER_SLEEP);
-    if (ret < 0)
-        return ret;
+    if (!rtkit_switch_power_state(rtk, RTKIT_POWER_SLEEP))
+        return false;
 
     asc_cpu_stop(rtk->asc);
-    return 0;
+    return true;
 }

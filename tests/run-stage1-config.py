@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 root = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location('fill', root / 'tools/fill_stage1_config.py')
+spec = importlib.util.spec_from_file_location('fill', root / 'tools/fill_j613_stage1_config.py')
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 with tempfile.TemporaryDirectory() as tmp:
     tmp = Path(tmp); (tmp / 'src/tinf').mkdir(parents=True); (tmp / 'build').mkdir()

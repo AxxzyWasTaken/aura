@@ -11,6 +11,7 @@ extern u8 secondary_stacks[MAX_CPUS][SECONDARY_STACK_SIZE];
 extern u8 secondary_stacks_el3[MAX_EL3_CPUS][SECONDARY_STACK_SIZE];
 
 void smp_secondary_entry(void);
+int smp_secondary_prepare(void);
 void smp_secondary_prep_el3(void);
 
 int smp_init(void);
@@ -27,6 +28,7 @@ int smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
 #define SMP_TIMEOUT -2
 
 int smp_wait_timed(int cpu, u64 *retval, u32 timeout_ms);
+/* A NULL result discards the callback value, never the completion status. */
 int smp_wait(int cpu, u64 *retval);
 
 bool smp_is_alive(int cpu);

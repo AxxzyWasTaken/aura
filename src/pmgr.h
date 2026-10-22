@@ -28,6 +28,19 @@ int pmgr_adt_power_disable(const char *path);
 int pmgr_adt_power_disable_recursive(const char *path);
 /* 1: all real devices in this path's parent closure are power-gated; 0: active; -1: unknown. */
 int pmgr_adt_power_is_off(const char *path);
+int pmgr_adt_power_enable_traced(const char *path);
+struct pmgr_saved_mode {
+    uintptr_t addr;
+    u8 target;
+};
+
+struct pmgr_saved_modes {
+    struct pmgr_saved_mode modes[64];
+    size_t count;
+};
+
+int pmgr_adt_power_enable_traced_saved(const char *path, struct pmgr_saved_modes *saved);
+void pmgr_restore_modes(struct pmgr_saved_modes *saved);
 int pmgr_adt_power_enable_index(const char *path, u32 index);
 int pmgr_adt_power_disable_index(const char *path, u32 index);
 int pmgr_adt_reset(const char *path);
@@ -49,6 +62,7 @@ int pmgr_device_gate(u8 die, u16 id, struct pmgr_gate *gate);
 
 int pmgr_reset(int die, const char *name);
 int pmgr_power_on(int die, const char *name);
+int pmgr_power_is_on(int die, const char *name);
 
 int pmgr_set_mode(uintptr_t addr, u8 target_mode);
 

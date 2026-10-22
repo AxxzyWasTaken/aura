@@ -9,6 +9,8 @@
 #include "string.h"
 #include "utils.h"
 
+#include "libfdt/libfdt.h"
+
 struct dapf_t8020_config {
     u64 start;
     u64 end;
@@ -101,14 +103,23 @@ static int dapf_init_t8110b(u64 base, struct dapf_t8110b_config *config, u32 len
 
 static int dapf_init_t8110(const char *path, u64 base, int node)
 {
-    u32 length;
-    const char *prop = "dapf-instance-0";
-    const void *config = adt_getprop(adt, node, prop, &length);
+    u32 length = 0;
+    char prop[32];
+    const void *config = NULL;
+    int instance;
 
-    if (!config || !length) {
-        printf("dapf: Error getting ADT node %s property %s.\n", path, prop);
+    for (instance = 0; instance < 8; instance++) {
+        snprintf(prop, sizeof(prop), "dapf-instance-%d", instance);
+        config = adt_getprop(adt, node, prop, &length);
+        if (config && length)
+            break;
+    }
+
+    if (instance == 8) {
+        printf("dapf: no non-empty dapf-instance property on %s\n", path);
         return -1;
     }
+    printf("dapf: %s uses dapf-instance-%d\n", path, instance);
 
     // The least common multiple of 52 and 56 is 728 which is in the range of
     // the observed lengthe for "dapf-instance-0". The 52 byte variant is more
@@ -125,7 +136,7 @@ static int dapf_init_t8110(const char *path, u64 base, int node)
 
 int dapf_init(const char *path, int index)
 {
-    int ret;
+    int ret = -1;
     int dart_path[8];
     int node = adt_path_offset_trace(adt, path, dart_path);
     if (node < 0) {
@@ -142,7 +153,7 @@ int dapf_init(const char *path, int index)
     u64 base;
     if (adt_get_reg(adt, dart_path, "reg", index, &base, NULL) < 0) {
         printf("dapf: Error getting DAPF %s base address.\n", path);
-        return -1;
+        goto out;
     }
 
     if (adt_is_compatible(adt, node, "dart,t8020")) {
@@ -153,11 +164,14 @@ int dapf_init(const char *path, int index)
         ret = dapf_init_t8110(path, base, node);
     } else {
         printf("dapf: DAPF %s at 0x%lx is of an unknown type\n", path, base);
-        return -1;
+        goto out;
     }
 
-    if (pwr)
-        pmgr_adt_power_disable(path);
+out:
+    if (pwr && pmgr_adt_power_disable(path)) {
+        printf("dapf: failed to power down %s\n", path);
+        ret = -1;
+    }
 
     if (!ret)
         printf("dapf: Initialized %s\n", path);
@@ -168,20 +182,44 @@ int dapf_init(const char *path, int index)
 struct entry {
     const char *path;
     int index;
+    const char *alias;
 };
 
 struct entry dapf_entries[] = {
-    {"/arm-io/dart-aop", 1}, {"/arm-io/dart-mtp", 1},  {"/arm-io/dart-pmp", 1},
-    {"/arm-io/dart-isp", 5}, {"/arm-io/dart-isp0", 5}, {NULL, -1},
+    /* Keep dart-ane out: its Linux driver owns that DAPF on T8140. */
+    {"/arm-io/dart-aop", 1, "aop"}, {"/arm-io/dart-mtp", 1, "mtp"},  {"/arm-io/dart-pmp", 1, "pmp"},
+    {"/arm-io/dart-isp", 5, "isp"}, {"/arm-io/dart-isp0", 5, "isp"}, {NULL, -1, NULL},
 };
 
-int dapf_init_all(void)
+int dapf_init_fdt(const void *fdt)
 {
     int ret = 0;
     int count = 0;
     struct entry *entry = dapf_entries;
 
     while (entry->path != NULL) {
+        if (chip_id == T8140 && strcmp(entry->path, "/arm-io/dart-mtp") &&
+            strcmp(entry->path, "/arm-io/dart-pmp")) {
+            printf("dapf: preserving inherited %s state on T8140\n", entry->path);
+            entry++;
+            continue;
+        }
+        /* Only prepare DMA for devices handed to the next stage. In
+         * particular, an initial J813 FDT has no AOP, MTP, PMP or ISP.
+         * Their firmware-owned protection registers must remain intact.
+         */
+        if (fdt) {
+            int node = fdt_path_offset(fdt, entry->alias);
+            if (node < 0) {
+                entry++;
+                continue;
+            }
+            const char *status = fdt_getprop(fdt, node, "status", NULL);
+            if (status && strcmp(status, "okay") && strcmp(status, "ok")) {
+                entry++;
+                continue;
+            }
+        }
         if (adt_path_offset(adt, entry->path) < 0) {
             entry++;
             continue;
@@ -193,4 +231,9 @@ int dapf_init_all(void)
         count += 1;
     }
     return ret ? ret : count;
+}
+
+int dapf_init_all(void)
+{
+    return dapf_init_fdt(NULL);
 }
