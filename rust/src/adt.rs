@@ -1076,7 +1076,10 @@ pub unsafe extern "C" fn adt_get_reg(
     if offsets.is_null() || prop.is_null() || i < 0 {
         return AdtError::BadValue as c_int;
     }
-    let strname: &str = unsafe { CStr::from_ptr(prop).to_str().unwrap() };
+    let strname = match unsafe { CStr::from_ptr(prop) }.to_str() {
+        Ok(name) => name,
+        Err(_) => return AdtError::BadValue as c_int,
+    };
     let mut refs: [Option<&'static ADTNode>; ADT_MAX_DEPTH] = [None; ADT_MAX_DEPTH];
 
     unsafe {

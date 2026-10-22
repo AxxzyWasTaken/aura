@@ -59,29 +59,15 @@ SECTIONS {
         *(.data.smp_shared)
         . = ALIGN(0x10000);
         _smp_shared_end = .;
-        *(EXCLUDE_FILE(*_48.o *_128.o *_256.o *font.o *font_retina.o) .data)
+        *(.data)
         *(.data.*)
         . = ALIGN(8);
         _got_start = .;
         *(.got)
         _got_end = .;
-        /*
-         * Pixel data last: the fonts and logos are only drawn, so they are what may lie where
-         * the DCP __OS_LOG buffers start, 0x120000 after the base stage 1 loaded this image at
-         * (start.S moves the image above that, but only after stage 1 placed it there). The
-         * fonts come first: they draw every console line, the logos once.
-         */
-        _file_vital_end = .;
-        *font.o(.data)
-        *font_retina.o(.data)
-        *_48.o(.data)
-        *_128.o(.data)
-        *_256.o(.data)
         . = ALIGN(0x10000);
         _file_end = .;
     } :data
-    ASSERT(_file_vital_end - _base <= 0x120000,
-           "Code and data reach the DCP log buffers after stage 1!")
     .bss : ALIGN(0x10000) {
         _bss_start = .;
         *(.bss)
@@ -106,6 +92,16 @@ SECTIONS {
     _data_size = . - _data_start;
     _end = .;
     _payload_start = .;
+
+    /*
+     * As stage 2, this image is chainloaded to the base of stage 1, and start.S copies its file
+     * part away from there. On T6030 and T8122 iBoot puts the panel DCP's __OS_LOG buffer, which
+     * the running DCP keeps writing, 0x120000 after the base of the installed stage 1. A file
+     * part that reaches that buffer is loaded onto it, and the DCP can overwrite it before
+     * start.S has copied it. Past _file_end the image is only zeros (.bss), as before.
+     */
+    _file_limit = 0x120000;
+    ASSERT(_file_end - _base <= _file_limit, "File part reaches the DCP log buffer after stage 1!")
 
     .symtab 0 : { *(.symtab) }
     .strtab 0 : { *(.strtab) }

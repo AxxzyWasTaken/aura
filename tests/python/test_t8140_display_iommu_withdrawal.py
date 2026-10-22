@@ -20,7 +20,7 @@ class ExternalScanoutWithdrawal(unittest.TestCase):
         cc = shlex.split(os.environ.get("CC", "cc"))
         flags = shlex.split(os.environ.get("CPPFLAGS", ""))
         link = shlex.split(os.environ.get("LDFLAGS", ""))
-        # Exercise Aura's production libfdt rather than a host-installed version.
+        # Exercise the production libfdt rather than a host-installed version.
         library = root / "src/libfdt"
         sources = [library / name for name in (
             "fdt.c", "fdt_ro.c", "fdt_rw.c", "fdt_sw.c", "fdt_wip.c",

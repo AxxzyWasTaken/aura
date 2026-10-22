@@ -26,11 +26,15 @@ typedef uint8_t u8;
 #define T6000 0x6000
 #define T6001 0x6001
 #define T6002 0x6002
+#define T8140 0x8140
+#define bail(...) return -1
 static unsigned char blob[4096];
 static void *dt = blob, *adt = blob;
 static int chip_id, uuid_len, sep_calls, adt_calls, sep_error, adt_error;
 static const void *uuid;
 static bool fallback;
+/* The M4 WFx bootargs in the same tail are not under test here. */
+static const struct { bool apple_sysregs_unlocked; } features = {true}, *cpu_features = &features;
 static int adt_path_offset(void *tree, const char *path)
 { return !strcmp(path, "/chosen") ? 1 : -1; }
 static const void *adt_getprop(void *tree, int node, const char *name, u32 *len)
@@ -105,7 +109,7 @@ int main(void)
     binary = tmp_path / "chosen-sep-policy"
     subprocess.run(
         ["cc", "-D_GNU_SOURCE", "-std=c11", "-Wall", "-Wextra", "-Werror",
-         "-Wno-unused-parameter", "-I", str(libfdt), "-x", "c", "-",
+         "-Wno-unused-parameter", "-Wno-sizeof-pointer-memaccess", "-I", str(libfdt), "-x", "c", "-",
          *map(str, sources), "-o", str(binary)],
         input=harness, text=True, check=True,
     )

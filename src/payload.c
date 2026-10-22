@@ -8,8 +8,10 @@
 #include "assert.h"
 #include "boot_storage.h"
 #include "chainload.h"
+#include "stage1_config.h"
 #include "cpufreq.h"
 #include "display.h"
+#include "firmware.h"
 #include "heapblock.h"
 #include "kboot.h"
 #include "mitigations.h"
@@ -19,6 +21,7 @@
 #include "utils.h"
 
 #include "libfdt/libfdt.h"
+#include "payload_profile.h"
 #include "minilzlib/minlzma.h"
 #include "tinf/tinf.h"
 
@@ -45,6 +48,7 @@ static const u8 custom_logo_magic[] = {'m', '1', 'n', '1', '_', 'l', 'o', 'g',
 static char expect_compatible[256];
 static struct kernel_header *kernel = NULL;
 static void *fdt = NULL;
+static int fdt_rank;
 static char *chainload_spec = NULL;
 static char *boot_spec = NULL;
 static bool payload_scanned = false;
@@ -120,9 +124,11 @@ static void *decompress_xz(void *p, size_t size)
 
 static void *load_fdt(void *p, size_t size)
 {
-    if (fdt_node_check_compatible(p, 0, expect_compatible) == 0) {
+    int rank = payload_profile_rank(p, os_firmware.version == V26_6_2);
+    if (rank && rank >= fdt_rank && fdt_node_check_compatible(p, 0, expect_compatible) == 0) {
         printf("Found a devicetree for %s at %p\n", expect_compatible, p);
         fdt = p;
+        fdt_rank = rank;
     }
     assert(!size || size == fdt_totalsize(p));
     return ((u8 *)p) + fdt_totalsize(p);
@@ -294,8 +300,8 @@ void do_enable_tso(void)
 u64 relocated_from __attribute__((section(".data"))) = 0;
 
 /*
- * Read by start.S before anything else runs: only an ESP stage 2 moves, and only on M1, M2 and
- * M3 (start.S checks the CPU part), where a stage 1 chainloads it to stage 1's own base.
+ * Read by start.S before anything else runs: only an ESP stage 2 moves, and only on M3 (start.S
+ * checks the CPU part), where a stage 1 chainloads it to stage 1's own base.
  */
 #ifdef ESP_STAGE2
 const u32 stage2_relocates = 1;
@@ -347,8 +353,10 @@ int payload_run(void)
 
     if (!payload_scanned) {
         void *p = payload_start();
+        cpufreq_payload_boost(true);
         while (p)
             p = load_one_payload(p, 0);
+        cpufreq_payload_boost(false);
         payload_scanned = true;
     }
 
@@ -377,6 +385,14 @@ int payload_run(void)
         return -1;
     }
 
+#ifdef J613_ESP_STAGE1
+    /* main.c admits only J613/26.6.2 before invoking payload_run. */
+    const char *configured = stage1_config_target();
+    if (configured) {
+        chainload_spec = (char *)configured;
+    }
+#endif
+
     if (chainload_spec) {
         next_stage.entry = NULL;
         int ret = chainload_load(chainload_spec, chosen, &chosen_cnt, ARRAY_SIZE(chosen));
@@ -387,9 +403,14 @@ int payload_run(void)
         return ret;
     }
 
-    if (boot_spec && boot_storage_load(boot_spec, &kernel, &fdt)) {
-        next_stage.entry = NULL;
-        return -1;
+    if (boot_spec) {
+        cpufreq_payload_boost(true);
+        int ret = boot_storage_load(boot_spec, &kernel, &fdt);
+        cpufreq_payload_boost(false);
+        if (ret) {
+            next_stage.entry = NULL;
+            return -1;
+        }
     }
 
     if (kernel && fdt) {
@@ -398,21 +419,24 @@ int payload_run(void)
             printf("SMP: refusing payload handoff with missing T8140 CPUs\n");
             goto boot_failed;
         }
-        if (mitigations_perform()) {
-            if (chip_id == T8140)
+        int mitigation_ret = mitigations_perform();
+        if (mitigation_ret) {
+            if (mitigation_ret == SMP_TIMEOUT || chip_id == T8140)
                 goto boot_failed;
             printf("Mitigations: continuing payload handoff with incomplete CPU initialization\n");
         }
         if (enable_tso) {
+            kboot_delete_chosen("apple,tso");
             bool tso_failed = false;
             do_enable_tso();
             for (int i = 0; i < MAX_CPUS; i++) {
                 if (i == boot_cpu_idx)
                     continue;
                 if (smp_is_alive(i)) {
-                    if (smp_call0(i, do_enable_tso) || smp_wait(i, NULL)) {
+                    int ret = smp_call_sync0(i, do_enable_tso);
+                    if (ret) {
                         printf("TSO: CPU %d initialization failed\n", i);
-                        if (chip_id == T8140)
+                        if (ret == SMP_TIMEOUT || chip_id == T8140)
                             goto boot_failed;
                         tso_failed = true;
                     }

@@ -8,6 +8,7 @@
 #include "dockchannel_uart.h"
 #include "exception.h"
 #include "firmware.h"
+#include "midr.h"
 #include "smp.h"
 #include "string.h"
 #include "types.h"
@@ -16,10 +17,18 @@
 #include "xnuboot.h"
 
 /* start.S reads these fields before C runs */
-_Static_assert(__builtin_offsetof(struct boot_args, phys_base) == 16, "BOOTARGS_PHYS_BASE");
-_Static_assert(__builtin_offsetof(struct boot_args, mem_size) == 24, "BOOTARGS_MEM_SIZE");
-_Static_assert(__builtin_offsetof(struct boot_args, top_of_kernel_data) == 32,
-               "BOOTARGS_TOP_OF_KDATA");
+_Static_assert(offsetof(struct boot_args, phys_base) == 16, "BOOTARGS_PHYS_BASE");
+_Static_assert(offsetof(struct boot_args, mem_size) == 24, "BOOTARGS_MEM_SIZE");
+_Static_assert(offsetof(struct boot_args, top_of_kernel_data) == 32, "BOOTARGS_TOP_OF_KDATA");
+
+/* start.S moves the image only on these cores: the M3 part range, T8122 to T6031 */
+_Static_assert(MIDR_PART_T8122_SAWTOOTH == 0x42, "MIDR_PART_M3_FIRST");
+_Static_assert(MIDR_PART_T8122_EVEREST == 0x43 && MIDR_PART_T6030_SAWTOOTH == 0x44 &&
+                   MIDR_PART_T6030_EVEREST == 0x45 && MIDR_PART_T6031_SAWTOOTH == 0x48,
+               "M3 MIDR parts");
+_Static_assert(MIDR_PART_T6031_EVEREST == 0x49, "MIDR_PART_M3_LAST");
+
+extern u64 relocated_from;
 
 u64 boot_args_addr;
 struct boot_args cur_boot_args;

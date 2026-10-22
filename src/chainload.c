@@ -60,6 +60,20 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
         return -1;
 
     u64 fw_bootargs_off = ALIGN_UP(sepfw[1], SZ_16K);
+#ifdef J613_ESP_STAGE1
+    /* Match the qualified proxy loader's optional preoslog preservation. */
+    u64 preoslog[2] = {0};
+    const void *log_prop = adt_getprop(adt, anode, "preoslog", NULL);
+    if (log_prop && ADT_GETPROP_ARRAY(adt, anode, "preoslog", preoslog) < 0)
+        return -1;
+    if (preoslog[1] &&
+        (preoslog[0] < cur_boot_args.phys_base || preoslog[1] > cur_boot_args.mem_size ||
+         preoslog[0] - cur_boot_args.phys_base > cur_boot_args.mem_size - preoslog[1] ||
+         preoslog[1] > UINT64_MAX - fw_bootargs_off - (SZ_16K - 1)))
+        return -1;
+    u64 fw_preoslog_off = fw_bootargs_off;
+    fw_bootargs_off = ALIGN_UP(fw_bootargs_off + preoslog[1], SZ_16K);
+#endif
     if (fw_bootargs_off > UINT64_MAX - SZ_16K)
         return -1;
     u64 fw_size = fw_bootargs_off + SZ_16K;
@@ -118,6 +132,10 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
     u8 *fw_data = parked ? parked : new_image + image_size;
     memset(fw_data, 0, fw_size);
     memcpy(fw_data, (void *)sepfw[0], sepfw[1]);
+#ifdef J613_ESP_STAGE1
+    if (preoslog[1])
+        memcpy(fw_data + fw_preoslog_off, (void *)preoslog[0], preoslog[1]);
+#endif
     struct boot_args *new_boot_args = (struct boot_args *)(fw_data + fw_bootargs_off);
     *new_boot_args = cur_boot_args;
     u64 high_water = max(image_end, fw_base + fw_size);
@@ -133,6 +151,22 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
         free(parked);
         return -1;
     }
+#ifdef J613_ESP_STAGE1
+    if (preoslog[1]) {
+        preoslog[0] = fw_base + fw_preoslog_off;
+        if (adt_setprop(adt, anode, "preoslog", preoslog, sizeof(preoslog)) < 0) {
+            free(new_image);
+            free(parked);
+            return -1;
+        }
+    }
+    u64 bootargs_map[2] = {fw_base + fw_bootargs_off, SZ_16K};
+    if (adt_setprop(adt, anode, "BootArgs", bootargs_map, sizeof(bootargs_map)) < 0) {
+        free(new_image);
+        free(parked);
+        return -1;
+    }
+#endif
     if (parked) {
         dc_cvac_range(parked, fw_size);
         sysop("dsb sy");

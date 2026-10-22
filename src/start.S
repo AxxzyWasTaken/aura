@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT AND GPL-2.0-only */
 
+#include "../build/build_cfg.h"
 #include "smp_asm.h"
 #include "soc.h"
 
@@ -10,6 +11,11 @@
 #define BOOTARGS_PHYS_BASE     16
 #define BOOTARGS_MEM_SIZE      24
 #define BOOTARGS_TOP_OF_KDATA  32
+
+/* MIDR_EL1 implementer and the part range of the M3 cores (midr.h) */
+#define MIDR_IMPL_APPLE        0x61
+#define MIDR_PART_M3_FIRST     0x42 /* MIDR_PART_T8122_SAWTOOTH */
+#define MIDR_PART_M3_LAST      0x49 /* MIDR_PART_T6031_EVEREST */
 
 .extern _start_c
 .extern _stack_bot
@@ -75,33 +81,40 @@ _start:
     mov x19, x0
 
     /*
-     * Run from above the image we were chainloaded in (from m1n1-aurora 8bd67a82). Stage 1
-     * copies this stage, its payload and the boot_args to its own base and sets
-     * top_of_kernel_data to the end of that image. Its own footprint ended where iBoot placed
-     * live buffers of its own (on T8122 and T6030 the DCP __OS_LOG buffers start at that base +
-     * 0x120000), so a stage whose .data, .bss and stacks reach past that line shares memory with
-     * a running coprocessor. Copy the file part of this image to top_of_kernel_data, before any
-     * stack or .bss is touched, and continue there. The payload stays where stage 1 put it
-     * (relocated_from records the old base), and the heap starts after the moved image. Cores
-     * whose RVBAR iBoot locked to the old base still reset there, so the old reset vector is
-     * then rewritten to forward them to the new one (kboot keeps that page reserved).
-     *
-     * Only an ESP stage 2 (stage2_relocates) on an M1, M2 or M3 (Apple CPU parts 0x20-0x4f),
-     * the Macs m1n1-aurora moves on. Stay put if top_of_kernel_data is not above us or the moved
+     * Run from above the image we were chainloaded in. Stage 1 copies this
+     * stage, its payload and the boot_args to its own base and sets
+     * top_of_kernel_data to the end of that image. Its own footprint ended
+     * where iBoot placed live buffers of its own (on T8122 and T6030 the DCP
+     * __OS_LOG buffers start at that base + 0x120000), so a stage whose .bss
+     * and stacks reach past that line would share memory with a running
+     * coprocessor. Copy the file part of this image to top_of_kernel_data,
+     * before any stack or .bss is touched, and continue there. The payload
+     * stays where stage 1 put it (relocated_from records the old base), and
+     * the heap starts after the moved image. Cores whose RVBAR iBoot locked
+     * to the old base still reset there, so the old reset vector is then
+     * rewritten to forward them to the new one (kboot keeps that page
+     * reserved). Stay put if top_of_kernel_data is not above us or the moved
      * image would not fit in RAM.
+     *
+     * Only an ESP stage 2 (stage2_relocates) moves, since a stage 1 runs
+     * where iBoot placed it, and only on M3 SoCs (T8122, T6030, T6031: Apple
+     * MIDR parts 0x42-0x49), where iBoot puts those buffers there. Every
+     * other SoC runs where stage 1 put it, as before this move existed.
      */
+
+#ifndef J613_ESP_STAGE1
     adrp x1, stage2_relocates
     ldr w1, [x1, :lo12:stage2_relocates]
     cbz w1, 3f
+    adrp x20, _base
     mrs x1, midr_el1
     ubfx x2, x1, #24, #8
-    cmp x2, #0x61
+    cmp x2, #MIDR_IMPL_APPLE
     b.ne 3f
     ubfx x2, x1, #4, #12
-    sub x2, x2, #0x20
-    cmp x2, #0x30
-    b.hs 3f
-    adrp x20, _base
+    sub x2, x2, #MIDR_PART_M3_FIRST
+    cmp x2, #(MIDR_PART_M3_LAST - MIDR_PART_M3_FIRST)
+    b.hi 3f
     ldr x21, [x19, #BOOTARGS_TOP_OF_KDATA]
     mov x1, #0xffff
     add x21, x21, x1
@@ -159,6 +172,7 @@ _start:
     sub x1, x1, x20
     add x1, x1, x21
     br x1
+#endif
 3:
     mov w0, 'm'
     bl debug_putc

@@ -22,7 +22,10 @@ struct kernel_header {
 
 void kboot_set_initrd(void *start, size_t size);
 int kboot_set_chosen(const char *name, const char *value);
+void kboot_delete_chosen(const char *name);
 int kboot_set_uboot(const char *name, const char *value);
+int dt_gpu_t8122_26_calibrate(void *dt);
+int dt_set_gpu_t8122_26(void *dt);
 int kboot_prepare_dt(void *fdt);
 int kboot_boot(void *kernel);
 

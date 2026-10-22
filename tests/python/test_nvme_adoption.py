@@ -2,11 +2,12 @@
 """Exercise queue lifetime on failures in the production ANS adoption path."""
 
 from pathlib import Path
+import os
 import subprocess
 
 
 def test_adopted_queue_lifetime(tmp_path):
-    source = (Path(__file__).resolve().parents[2] / "src/nvme.c").read_text()
+    source = Path(os.environ.get("NVME_SOURCE", Path(__file__).resolve().parents[2] / "src/nvme.c")).read_text()
     declarations = source[source.index("#define NVME_TIMEOUT"):source.index("static u64 nvme_read64_lo_hi")]
     init = source[source.index("bool nvme_init(void)"):source.index("void nvme_ensure_shutdown(void)")]
     shutdown = source[source.index("bool nvme_has_live_post_m4_session(void)"):
@@ -37,6 +38,7 @@ static u32 chip_id = T8140;
 static void *adt;
 ''' + declarations + r'''
 static int failure, queue_frees, asc_frees, publications, commands;
+static int shutdown_fault, disable_calls, shutdown_calls, cleared_ioq;
 static void *allocations[12];
 static unsigned allocated;
 static int asc, rtkit, sart, resets;
@@ -84,7 +86,12 @@ static u32 read32(u64 addr)
 }
 static void write32(u64 addr, u32 value) {}
 static void set32(u64 addr, u32 value) {}
-static void write64_lo_hi(u64 addr, u64 value) { publications++; }
+static void write64_lo_hi(u64 addr, u64 value)
+{
+    publications++;
+    if (!value && (addr == nvme_base + NVME_IOQ_CMDS || addr == nvme_base + NVME_IOQ_CQES))
+        cleared_ioq++;
+}
 static void nvme_log_entry_state(bool running) {}
 static sart_dev_t *sart_init(const char *path) { return &sart; }
 static void sart_free(sart_dev_t *s) {}
@@ -95,13 +102,18 @@ static bool rtkit_sleep(rtkit_dev_t *r) { return true; }
 static void rtkit_free(rtkit_dev_t *r) {}
 static void pmgr_reset(u8 die, const char *name) { resets++; }
 static int poll32(u64 a, u32 mask, u32 value, unsigned timeout) { return 0; }
-static bool nvme_ctrl_disable(void) { return failure != 2; }
+static bool nvme_ctrl_disable(void)
+{ disable_calls++; return failure != 2 && !(shutdown_fault == 4 && disable_calls == 2); }
 static bool nvme_ctrl_enable(void) { return failure != 3; }
-static bool nvme_ctrl_shutdown(void) { return true; }
+static bool nvme_ctrl_shutdown(void) { shutdown_calls++; return shutdown_fault != 3; }
 static void nvme_poll_syslog(void) {}
 static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, void *result)
 {
     commands++;
+    if ((shutdown_fault == 1 && commands == 3) || (shutdown_fault == 2 && commands == 4)) {
+        q->failed = true;
+        return false;
+    }
     return !((failure == 4 && commands == 1) || (failure == 5 && commands == 2));
 }
 ''' + init + shutdown + r'''
@@ -109,6 +121,36 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     failure = atoi(argv[1]);
+    if (failure >= 15) {
+        shutdown_fault = failure - 14;
+        failure = 0;
+        nvme_adopt_live_session = true;
+        assert(nvme_init());
+        if (shutdown_fault == 5 || shutdown_fault == 7)
+            adminq.failed = true;
+        if (shutdown_fault == 6 || shutdown_fault == 8)
+            ioq.failed = true;
+        nvme_keep_running_for_linux = shutdown_fault >= 7;
+        int saved_publications = publications;
+        assert(!nvme_shutdown());
+        assert(nvme_reboot_required);
+        assert(!nvme_adopt_live_session && nvme_has_live_post_m4_session());
+        assert(!queue_frees && !asc_frees && !resets);
+        assert(!cleared_ioq && publications == saved_publications);
+        assert(commands == (shutdown_fault == 1 ? 3 : shutdown_fault <= 4 ? 4 : 2));
+        assert(shutdown_calls == (shutdown_fault == 3 || shutdown_fault == 4));
+        assert(disable_calls == (shutdown_fault == 4 ? 2 : 1));
+        int saved_commands = commands, saved_disable = disable_calls;
+        shutdown_fault = 0;
+        adminq.failed = ioq.failed = false;
+        nvme_keep_running_for_linux = !nvme_keep_running_for_linux;
+        assert(!nvme_init() && !nvme_shutdown());
+        assert(commands == saved_commands && disable_calls == saved_disable);
+        assert(!queue_frees && !asc_frees && !resets);
+        for (unsigned i = 0; i < allocated; i++)
+            free(allocations[i]);
+        return 0;
+    }
     if (failure == 11)
         chip_id = 0x8132;
     nvme_adopt_live_session = failure != 8;
@@ -163,5 +205,5 @@ int main(int argc, char **argv)
          "-Wno-unused-variable", "-Wno-format", "-x", "c", "-", "-o", str(binary)],
         input=harness, text=True, check=True,
     )
-    for failure in range(15):
+    for failure in range(23):
         subprocess.run([str(binary), str(failure)], check=True)

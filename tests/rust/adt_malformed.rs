@@ -41,7 +41,14 @@ fn register_paths() {
         property(&mut blob, "name", b"node\0");
         property(&mut blob, "#address-cells", &1u32.to_le_bytes());
         property(&mut blob, "#size-cells", &1u32.to_le_bytes());
-        property(&mut blob, "reg", &[0, 0x10, 0, 0, 0, 1, 0, 0]);
+        let (addr, size): (u32, u32) = if depth == 8 {
+            (0x8000, 0x800)
+        } else {
+            (0x1000, 0x100)
+        };
+        let mut reg = addr.to_le_bytes().to_vec();
+        reg.extend_from_slice(&size.to_le_bytes());
+        property(&mut blob, "reg", &reg);
     }
     let reg = CString::new("reg").unwrap();
     let mut addr = 0;
@@ -61,7 +68,7 @@ fn register_paths() {
             ),
             0
         );
-        assert_eq!((addr, size), (0x1000, 0x100));
+        assert_eq!((addr, size), (0x8000, 0x800));
         offsets[1..].fill(0);
         assert_eq!(
             parser::adt_get_reg(
@@ -179,6 +186,30 @@ fn main() {
                 adt,
                 std::ptr::null_mut(),
                 reg.as_ptr(),
+                0,
+                &mut addr,
+                &mut size
+            ),
+            -15
+        );
+        assert_eq!((addr, size), (0xa5a5, 0x5a5a));
+        assert_eq!(
+            parser::adt_get_reg(
+                adt,
+                path.as_mut_ptr(),
+                std::ptr::null(),
+                0,
+                &mut addr,
+                &mut size
+            ),
+            -15
+        );
+        let invalid_name = [0xffu8, 0];
+        assert_eq!(
+            parser::adt_get_reg(
+                adt,
+                path.as_mut_ptr(),
+                invalid_name.as_ptr().cast(),
                 0,
                 &mut addr,
                 &mut size

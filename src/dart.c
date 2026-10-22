@@ -579,6 +579,62 @@ dart_dev_t *dart_init_fdt_locked(void *dt, u32 phandle, int device)
     return dart_init_fdt(dt, phandle, device, true);
 }
 
+static bool dart_table_in_dram(u64 page, u64 base, u64 size)
+{
+    return page && !(page & (SZ_16K - 1)) && size >= SZ_16K &&
+           base <= UINT64_MAX - size && page >= base && page - base <= size - SZ_16K;
+}
+
+int dart_collect_locked_tables(dart_dev_t *dart, u64 dram_base, u64 dram_size,
+                               u64 *pages, size_t capacity, size_t *count)
+{
+    const u64 address_mask = GENMASK(37, 10);
+    u64 entries[SZ_16K / sizeof(u64)];
+    size_t used = 0;
+    if (!count)
+        return -1;
+    *count = 0;
+    if (!dart || dart->type != DART_T8110 || !dart->locked || !dart->keep ||
+        !pages || !capacity || dart->params->ttbr_count != 1 ||
+        !dart_table_in_dram((u64)dart->l1[0], dram_base, dram_size))
+        return -1;
+    u32 tcr = read32(DART_TCR(dart));
+    u32 ttbr = read32(DART_TTBR(dart, 0));
+    if (tcr != DART_T8110_TCR_TRANSLATE_ENABLE ||
+        !(ttbr & DART_T8110_TTBR_VALID) ||
+        (FIELD_GET(DART_T8110_TTBR_ADDR, ttbr) << DART_T8110_TTBR_SHIFT) !=
+            (u64)dart->l1[0])
+        return -1;
+
+    /* Read table descriptors only after the complete root page is in DRAM. */
+    memcpy(entries, dart->l1[0], sizeof(entries));
+    pages[used++] = (u64)dart->l1[0];
+    for (size_t i = 0; i < ARRAY_SIZE(entries); i++) {
+        u64 entry = entries[i];
+        if (!entry)
+            continue;
+        if (!(entry & DART_PTE_VALID) || (entry & ~(address_mask | DART_PTE_VALID)))
+            return -1;
+        u64 page = FIELD_GET(address_mask, entry) << DART_PTE_OFFSET_SHIFT;
+        if (!dart_table_in_dram(page, dram_base, dram_size) || page == (u64)dart->l1[0])
+            return -1;
+        size_t j;
+        for (j = 0; j < used && pages[j] != page; j++)
+            ;
+        if (j != used)
+            continue;
+        if (used == capacity)
+            return -1;
+        pages[used++] = page;
+    }
+    /* A changed root needs a new lifetime reservation before publication. */
+    if (memcmp(entries, dart->l1[0], sizeof(entries)) || read32(DART_TCR(dart)) != tcr ||
+        read32(DART_TTBR(dart, 0)) != ttbr)
+        return -1;
+    *count = used;
+    return 0;
+}
+
 int dart_setup_pt_region(dart_dev_t *dart, const char *path, int device, u64 vm_base)
 {
     if (dart->locked)
@@ -873,6 +929,59 @@ void *dart_translate(dart_dev_t *dart, uintptr_t iova)
 void *dart_translate_silent(dart_dev_t *dart, uintptr_t iova)
 {
     return dart_translate_internal(dart, iova, 1);
+}
+
+/*
+ * Walk the page tables of a locked T8110 DART stream without touching its
+ * state: no stream is enabled, reset or invalidated. The stream must translate
+ * through its tables (DAPF bypass and a remap selector without remap enable do
+ * not change that); a bypassed or remapping stream, an invalid TTBR or tables
+ * outside DRAM are refused. @visit is called for every valid L2 entry and stops
+ * the walk by returning non-zero.
+ */
+int dart_walk_locked_t8110(uintptr_t base, u8 sid, u64 dram_base, u64 dram_size,
+                           int (*visit)(u64 iova, u64 paddr, void *opaque), void *opaque)
+{
+    u64 dram_end = dram_base + dram_size;
+
+    if (!visit || sid >= 16 || dram_size < SZ_16K || dram_end <= dram_base)
+        return -1;
+
+    u32 tcr = read32(base + DART_T8110_TCR_OFF + 4 * sid);
+    u32 ttbr = read32(base + DART_T8110_TTBR_OFF + 4 * sid);
+
+    if (!(read32(base + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR) ||
+        !(tcr & DART_T8110_TCR_TRANSLATE_ENABLE) ||
+        (tcr & (DART_T8110_TCR_BYPASS_DART | DART_T8110_TCR_REMAP_EN)) ||
+        !(ttbr & DART_T8110_TTBR_VALID))
+        return -1;
+
+    u64 l1 = (u64)FIELD_GET(DART_T8110_TTBR_ADDR, ttbr) << DART_T8110_TTBR_SHIFT;
+    if (l1 < dram_base || l1 > dram_end - SZ_16K)
+        return -1;
+
+    for (u32 i = 0; i < SZ_16K / sizeof(u64); i++) {
+        u64 pte = ((const volatile u64 *)l1)[i];
+        if (!(pte & DART_PTE_VALID))
+            continue;
+
+        u64 l2 = FIELD_GET(DART_T6000_PTE_OFFSET, pte) << DART_PTE_OFFSET_SHIFT;
+        if (l2 < dram_base || l2 > dram_end - SZ_16K)
+            return -1;
+
+        for (u32 j = 0; j < SZ_16K / sizeof(u64); j++) {
+            pte = ((const volatile u64 *)l2)[j];
+            if (!(pte & DART_PTE_VALID))
+                continue;
+
+            u64 paddr = FIELD_GET(DART_T6000_PTE_OFFSET, pte) << DART_PTE_OFFSET_SHIFT;
+            int ret = visit(((u64)i << 25) | ((u64)j << 14), paddr, opaque);
+            if (ret)
+                return ret;
+        }
+    }
+
+    return 0;
 }
 
 u64 dart_search(dart_dev_t *dart, void *paddr)
