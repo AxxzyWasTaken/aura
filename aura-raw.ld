@@ -59,12 +59,23 @@ SECTIONS {
         *(.data.smp_shared)
         . = ALIGN(0x10000);
         _smp_shared_end = .;
-        *(.data)
+        *(EXCLUDE_FILE(*_48.o *_128.o *_256.o *font.o *font_retina.o) .data)
         *(.data.*)
         . = ALIGN(8);
         _got_start = .;
         *(.got)
         _got_end = .;
+        /*
+         * Pixel data last: the fonts and the compressed logos are only drawn, so they are all
+         * that may lie where the DCP __OS_LOG buffer starts (see _file_limit). A logo that the DCP
+         * overwrites fails its gzip check and is left blank.
+         */
+        _file_vital_end = .;
+        *font.o(.data)
+        *font_retina.o(.data)
+        *_48.o(.data)
+        *_128.o(.data)
+        *_256.o(.data)
         . = ALIGN(0x10000);
         _file_end = .;
     } :data
@@ -98,10 +109,12 @@ SECTIONS {
      * part away from there. On T6030 and T8122 iBoot puts the panel DCP's __OS_LOG buffer, which
      * the running DCP keeps writing, 0x120000 after the base of the installed stage 1. A file
      * part that reaches that buffer is loaded onto it, and the DCP can overwrite it before
-     * start.S has copied it. Past _file_end the image is only zeros (.bss), as before.
+     * start.S has copied it, so everything before the pixel data must end below it. Past
+     * _file_end the image is only zeros (.bss), as before.
      */
     _file_limit = 0x120000;
-    ASSERT(_file_end - _base <= _file_limit, "File part reaches the DCP log buffer after stage 1!")
+    ASSERT(_file_vital_end - _base <= _file_limit,
+           "Code and data reach the DCP log buffer after stage 1!")
 
     .symtab 0 : { *(.symtab) }
     .strtab 0 : { *(.strtab) }
