@@ -8,7 +8,7 @@ No sign-off was added for an author who did not supply one.
 ## Source and license record
 
 The original MIT license and copyright notice remain unchanged in `LICENSE`.
-`MIT AND GPL-2.0-or-later` on the five mixed files below means that their
+`MIT AND GPL-2.0-or-later` on the mixed files below means that their
 original MIT portions retain their MIT notice and the imported GPL portions
 retain their GPL terms; it does not offer the GPL contributions under MIT.
 It does not change the license of unrelated upstream files. The GPL version-2
@@ -31,6 +31,7 @@ SiliconForest `aca1258c2d7daad7db7079d4f89bb8217659f7ac`, SHA256
 | Transactional T8122 marker and ASC-list validation | siliconforest-m1n1 `1ecaa8c59d55e0b51275f6ebc063808c2c70bd21` | GPL-2.0-or-later: src/kboot.c and its Python regression tests. |
 | T600x route admission and legacy fallback | siliconforest-m1n1 `24a133ffae06d2b8598173329953ba802a82ca46`, `99817310f70204e3dc469c3ec0c53f94a008a292`, `a28c2231045abc6695e6d8302bcdb5100805d202` | GPL-2.0-or-later: src/kboot.c and its Python regression tests. The commit records Andreas Fernandez's public PR33 design as its basis; the adaptation is credited to Chris Kearney. |
 | M1/M2-only Sequoia display power cycle | AsahiLinux/m1n1 `1795c4abbd795145b737835436dfc9cb31aaf285` | GPL-2.0-or-later: the SoC admission conjunct in src/display.c; Janne Grunau's authorship/sign-off retained. |
+| Rust 1.99 freestanding build workaround | AsahiLinux/m1n1 `7f208771` | GPL-2.0-or-later: Makefile Cargo LLVM option. The conditional LLVM-version guard is a local adaptation; LLVM 20 does not recognize the option, while the locally tested LLVM 21 and 23 Rust toolchains do. |
 
 Repository links for these source revisions are
 [Omacom](https://github.com/omacom/m1n1),
