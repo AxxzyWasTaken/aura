@@ -50,6 +50,9 @@ SECTIONS {
         *(.rela.rodata*)
         *(.rela.dyn)
         _rela_end = .;
+        /* The load header's footprint (start.S) leaves an R_AARCH64_NONE here; keep it inside the
+         * padding and out of the range apply_rela() walks, which only accepts relative entries. */
+        *(.rela.init)
         . = ALIGN(0x10000);
     } :rodata
     _rodata_end = .;
