@@ -159,11 +159,14 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
         return -1;
     }
     if (run_base) {
-        /* The staged copy is the destination: the stub copies it onto itself. */
+        /*
+         * The staged copy is the destination: the stub copies it onto itself. The stub runs from
+         * just after it, so the whole allocation must stay in RAM and clear of firmware RO.
+         */
         new_base = (u64)new_image;
         if (new_base < run_base + footprint || new_base > ram_end ||
-            copy_size > ram_end - new_base ||
-            (new_base < ro_end && new_base + copy_size > ro_start)) {
+            copy_size + stub_size > ram_end - new_base ||
+            (new_base < ro_end && new_base + copy_size + stub_size > ro_start)) {
             printf("chainload: no room to stage the image above firmware RO\n");
             free(new_image);
             return -1;

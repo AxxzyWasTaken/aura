@@ -479,6 +479,10 @@ static void no_room_is_refused(void)
     setup(T8140, HEAP_USED);
     force_alloc = ram + RAM_SIZE - copy + SZ_16K;
     refused(T8140, image, big, "no room to stage");
+    /* ... with the stub that follows it */
+    setup(T8140, HEAP_USED);
+    force_alloc = ram + RAM_SIZE - copy;
+    refused(T8140, image, big, "no room to stage");
     /* ... or has no memory at all */
     setup(T8140, HEAP_USED);
     alloc_fail = 1;
