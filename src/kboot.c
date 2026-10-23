@@ -6235,8 +6235,10 @@ int kboot_prepare_dt(void *fdt)
     if (fdt_add_mem_rsv(dt, (u64)_base, image_end - (u64)_base))
         bail("FDT: couldn't add reservation for m1n1 and inherited high-water\n");
 
-    // m1n1 moved itself above the chainloaded image (start.S); cores with a
-    // locked RVBAR still reset into the forwarding vector at the old base.
+    // m1n1 moved itself (start.S). On M3 it moved above the chainloaded image,
+    // and cores with a locked RVBAR still reset into the forwarding vector at
+    // the old base. On T8140 it moved down to the run base stage 1 gave it;
+    // the old base is the staged copy, already inside the extent above.
     if (relocated_from && fdt_add_mem_rsv(dt, relocated_from, SZ_16K))
         bail("FDT: couldn't add reservation for m1n1's old reset vector\n");
 
