@@ -740,8 +740,24 @@ static int dt_set_cpus(void)
         if (dt_mpidr == (mrs(MPIDR_EL1) & 0xFFFFFF))
             goto next_cpu;
 
-        if (!smp_is_alive(cpu)) {
-            printf("FDT: CPU %d is not alive, disabling...\n", cpu);
+        /*
+         * DT and ADT CPU numbering can differ: J616s has no ADT cpu9, while
+         * its DT numbers the cores contiguously. Match by MPIDR when the
+         * positional CPU is absent or is a different core.
+         */
+        int idx = cpu;
+        if (!smp_is_alive(idx) || smp_get_mpidr(idx) != dt_mpidr) {
+            idx = -1;
+            for (int i = 0; i < MAX_CPUS; i++) {
+                if (smp_is_alive(i) && smp_get_mpidr(i) == dt_mpidr) {
+                    idx = i;
+                    break;
+                }
+            }
+        }
+
+        if (idx < 0) {
+            printf("FDT: CPU %d (MPIDR 0x%lx) is not alive, disabling...\n", cpu, dt_mpidr);
             pruned_phandles[pruned++] = fdt_get_phandle(dt, node);
 
             int next = fdt_next_subnode(dt, node);
@@ -751,12 +767,8 @@ static int dt_set_cpus(void)
             continue;
         }
 
-        u64 mpidr = smp_get_mpidr(cpu);
-
-        if (dt_mpidr != mpidr)
-            bail_cleanup("FDT: DT CPU %d MPIDR mismatch: 0x%lx != 0x%lx\n", cpu, dt_mpidr, mpidr);
-
-        u64 release_addr = smp_get_release_addr(cpu);
+        u64 mpidr = smp_get_mpidr(idx);
+        u64 release_addr = smp_get_release_addr(idx);
         if (fdt_setprop_inplace_u64(dt, node, "cpu-release-addr", release_addr))
             bail_cleanup("FDT: couldn't set cpu-release-addr property\n");
 
@@ -4749,6 +4761,11 @@ static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix
         }
 
         int soc = fdt_path_offset(dt, path);
+        if (soc < 0 && die_count == 1) {
+            /* Newer trees (e.g. T6040) place their devices at the root. */
+            soc = fdt_path_offset(dt, "/");
+            snprintf(path, sizeof(path), "/");
+        }
         if (soc < 0)
             bail("FDT: %s node not found in devtree\n", path);
 
@@ -5219,6 +5236,13 @@ int kboot_prepare_dt(void *fdt)
         if (fdt_setprop(dt, node, "reg", reg, sizeof(reg)) || fdt_setprop_empty(dt, node, "no-map"))
             bail("FDT: couldn't describe firmware RO node\n");
         printf("FDT: reserved firmware RO [0x%lx, 0x%lx)\n", ro_start, ro_end);
+    } else if (!cpu_features->apple_sysregs_unlocked && !in_el2()) {
+        /*
+         * A guest under the m1n1 hypervisor runs at EL1 and cannot read the
+         * EL2 CTRR bounds; the host keeps that range and starts no
+         * secondaries for the guest from it.
+         */
+        printf("FDT: running at EL1, leaving the M4+ SMP-RO range to the host\n");
     } else if (!cpu_features->apple_sysregs_unlocked) {
         // On M4* / A18 Pro / M5*, there is a CTRR instance left enabled only
         // on the secondary (non-boot) cores. Add a reserved-memory region to

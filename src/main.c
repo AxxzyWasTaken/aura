@@ -22,6 +22,7 @@
 #include "pcie.h"
 #include "pmgr.h"
 #include "sep.h"
+#include "pmu_counter.h"
 #include "smp.h"
 #include "stage1_config.h"
 #include "stage1_proxy.h"
@@ -103,12 +104,12 @@ void run_actions(void)
     }
 
     if (chip_id != T8140 && !cur_boot_args.video.display && lp_sip0 == 127) {
-        printf("Bringing up USB for early debug...\n");
-
-        usb_init();
-        usb_iodev_init();
-
-        usb_up = true;
+        if (!usb_up) {
+            printf("Bringing up USB for early debug...\n");
+            usb_init();
+            usb_iodev_init();
+            usb_up = true;
+        }
 
         printf("Waiting for proxy connection... ");
         for (int i = 0; i < EARLY_PROXY_TIMEOUT * 100; i++) {
@@ -174,8 +175,8 @@ static void j873g_run_proxy(void)
     const char *target = adt_getprop(adt, 0, "target-type", &target_len);
 
     if (board_id != 0x24 || !model || model_len != sizeof("Mac18,5") ||
-        memcmp(model, "Mac18,5", sizeof("Mac18,5")) || !target ||
-        target_len != sizeof("J873g") || memcmp(target, "J873g", sizeof("J873g")))
+        memcmp(model, "Mac18,5", sizeof("Mac18,5")) || !target || target_len != sizeof("J873g") ||
+        memcmp(target, "J873g", sizeof("J873g")))
         panic("Unsupported T8152 board\n");
 
     /* Adopt firmware power and USB state. Only the qualified display route
@@ -216,8 +217,8 @@ void m1n1_main(void)
 #ifndef BRINGUP
     if (supports_gxf())
         gxf_init();
-    if (mcc_init() && chip_id == T8140)
-        panic("T8140 MCC initialization failed\n");
+    if (mcc_init() && (chip_id == T8140 || chip_id == T6040))
+        panic("MCC initialization failed\n");
     mmu_init();
     aic_init();
     smp_init();
@@ -249,6 +250,10 @@ void m1n1_main(void)
 
     cpufreq_fixup();
 #endif
+
+    /* T6040: nothing else in an m1n1 tether chain clears iBoot's failed-boot count. */
+    if (chip_id == T6040)
+        pmu_clear_panic_counter();
 
     printf("Initialization complete.\n");
 

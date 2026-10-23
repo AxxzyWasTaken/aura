@@ -9,6 +9,7 @@
 #include "malloc.h"
 #include "mcc.h"
 #include "smp.h"
+#include "soc.h"
 #include "string.h"
 #include "utils.h"
 #include "xnuboot.h"
@@ -222,7 +223,12 @@ static u64 *mmu_pt_L0;
 static void mmu_publish_translation(void)
 {
     sysop("dsb ishst");
-    sysop("tlbi vmalle1is");
+    /* With TGE clear, VHE's EL1 invalidation targets guest translations. */
+    if (chip_id == T6040 && mrs(CurrentEL) == 8 &&
+        (mrs(HCR_EL2) & HCR_E2H) && !(mrs(HCR_EL2) & HCR_TGE))
+        sysop("tlbi alle2is");
+    else
+        sysop("tlbi vmalle1is");
     sysop("dsb ish");
     sysop("isb");
 }
@@ -596,8 +602,8 @@ static void mmu_add_default_mappings(void)
     mmu_add_mapping(ram_base, ram_base, mem_size_actual, MAIR_IDX_NORMAL, PERM_RWX);
 
     /* Unmap carveout regions */
-    if (mcc_unmap_carveouts() && chip_id == T8140)
-        panic("MMU: T8140 firmware carveouts are unavailable\n");
+    if (mcc_unmap_carveouts() && (chip_id == T8140 || chip_id == T6040))
+        panic("MMU: Firmware carveouts are unavailable\n");
 
     /*
      * Remap m1n1 executable code as RX.

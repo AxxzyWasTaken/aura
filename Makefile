@@ -163,6 +163,7 @@ OBJECTS := \
 	chickens.o \
 	clk.o \
 	cpufreq.o \
+	cpufreq_t6040.o \
 	dapf.o \
 	dart.o \
 	dcp.o \
@@ -199,7 +200,7 @@ OBJECTS := \
 	sio.o \
 	smc.o \
 	smp.o \
-	spmi.o ace3.o \
+	spmi.o pmu_counter.o ace3.o \
 	start.o \
 	startup.o \
 	string.o \

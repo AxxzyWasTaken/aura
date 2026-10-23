@@ -27,6 +27,8 @@ typedef enum {
     P_EL3_CALL,
     P_GET_CHIPID,
     P_GET_CPU_FEATURES,
+    P_WDT_ARM,
+    P_WDT_DISABLE,
 
     P_WRITE64 = 0x100, // Generic register functions
     P_WRITE32,
@@ -181,6 +183,8 @@ typedef enum {
     P_DAPF_INIT,
 
     P_CPUFREQ_INIT = 0x1300,
+    P_CPUFREQ_GET_CLUSTER_HZ,
+    P_CPUFREQ_SET_CLUSTER_PSTATE,
 
     P_READ_GIGALOCKER = 0x1400,
     P_FREE_GIGALOCKER,
