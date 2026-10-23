@@ -157,11 +157,11 @@ int dapf_init(const char *path, int index)
      * than a fixed index: T6040's dart-pmp has only DART and PS_PROT entries,
      * and programming its second reg as a DAPF raises an SError.
      */
-    int inst_len;
+    u32 inst_len;
     const char *inst = adt_getprop(adt, node, "instance", &inst_len);
     if (inst && inst_len >= 16 && !(inst_len % 16)) {
         int found = -1;
-        for (int i = 0; i < inst_len / 16; i++) {
+        for (u32 i = 0; i < inst_len / 16; i++) {
             if (!memcmp(inst + i * 16, "FPAD", 4)) {
                 found = i;
                 break;
