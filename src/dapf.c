@@ -134,6 +134,85 @@ static int dapf_init_t8110(const char *path, u64 base, int node)
     }
 }
 
+enum dapf_instance_type {
+    DAPF_INSTANCE_DART = 0x44415254,
+    DAPF_INSTANCE_DAPF = 0x44415046,
+    DAPF_INSTANCE_GAPF = 0x47415046,
+};
+
+struct dapf_instance {
+    u32 type;
+    u32 instance;
+    char name[8];
+} PACKED;
+
+static_assert(sizeof(struct dapf_instance) == 16, "Invalid DAPF instance size");
+
+static int dapf_preserve_t8132(const char *path, int index, int node, int *dart_path)
+{
+    u32 length;
+    const struct dapf_instance *instances = adt_getprop(adt, node, "instance", &length);
+
+    if (!instances || !length || length % sizeof(*instances) || index < 0 ||
+        (u32)index >= length / sizeof(*instances)) {
+        printf("dapf: Invalid T8132 instance metadata for %s\n", path);
+        return -1;
+    }
+
+    bool has_dart = false, has_dapf = false;
+    u32 count = length / sizeof(*instances);
+    for (u32 i = 0; i < count; i++) {
+        switch (instances[i].type) {
+            case DAPF_INSTANCE_DART:
+                has_dart = true;
+                break;
+            case DAPF_INSTANCE_DAPF:
+                has_dapf = true;
+                break;
+            case DAPF_INSTANCE_GAPF:
+                break;
+            default:
+                printf("dapf: Unknown T8132 instance type for %s\n", path);
+                return -1;
+        }
+        for (u32 j = 0; j < i; j++) {
+            if (instances[i].type == instances[j].type &&
+                instances[i].instance == instances[j].instance) {
+                printf("dapf: Duplicate T8132 instance for %s\n", path);
+                return -1;
+            }
+        }
+        u64 base, size;
+        if (adt_get_reg(adt, dart_path, "reg", i, &base, &size) < 0 || !size ||
+            base + size < base ||
+            (instances[i].type != DAPF_INSTANCE_DART &&
+             ((base & 0x3fff) || size != 0x4000))) {
+            printf("dapf: Invalid T8132 instance resource for %s\n", path);
+            return -1;
+        }
+    }
+
+    if (!has_dart) {
+        printf("dapf: Missing T8132 DART instance for %s\n", path);
+        return -1;
+    }
+
+    if (!has_dapf && instances[index].type == DAPF_INSTANCE_GAPF) {
+        /* Native PMP has GAPF only; its DAPF property does not create an APF. */
+        printf("dapf: No T8132 DAPF instance for %s; preserving filter state\n", path);
+        return 0;
+    }
+
+    if (instances[index].type != DAPF_INSTANCE_DAPF) {
+        printf("dapf: Selected T8132 resource is not DAPF for %s\n", path);
+        return -1;
+    }
+
+    /* Do not admit the legacy writer, even for a genuine T8132 DAPF bank. */
+    printf("dapf: T8132 DAPF programming is unsupported for %s; preserving filter state\n", path);
+    return -1;
+}
+
 int dapf_init(const char *path, int index)
 {
     int ret = -1;
@@ -143,6 +222,9 @@ int dapf_init(const char *path, int index)
         printf("dapf: Error getting DAPF %s node.\n", path);
         return -1;
     }
+
+    if (chip_id == T8132)
+        return dapf_preserve_t8132(path, index, node, dart_path);
 
     u32 pwr;
     if (!adt_getprop(adt, node, "clock-gates", &pwr))
@@ -225,8 +307,85 @@ struct entry dapf_entries[] = {
     {"/arm-io/dart-isp", 5, "isp"}, {"/arm-io/dart-isp0", 5, "isp"}, {NULL, -1, NULL},
 };
 
+static int dapf_init_j713(void *dt)
+{
+    int ret = 0;
+    int count = 0;
+    static const struct {
+        const char *path;
+        const char *consumer;
+        int index;
+    } entries[] = {
+        {"/arm-io/dart-aop", "/arm-io/aop", 1},
+        {"/arm-io/dart-mtp", "/arm-io/mtp", 1},
+        {"/arm-io/dart-pmp", "/arm-io/pmp", 1},
+        {"/arm-io/dart-isp", "/arm-io/isp", 5},
+        {"/arm-io/dart-isp0", "/arm-io/isp0", 5},
+        {NULL, NULL, -1},
+    };
+    const typeof(entries[0]) *entry = entries;
+    int chosen = dt ? fdt_path_offset(dt, "/chosen") : -1;
+    bool described =
+        chosen >= 0 && fdt_getprop(dt, chosen, "linux-enablement-mac,dapf-handoff", NULL);
+
+    if (!described) {
+        printf("dapf: No J713 consumer handoff requested; preserving firmware state\n");
+        return 0;
+    }
+
+    while (entry->path != NULL) {
+        if (adt_path_offset(adt, entry->path) < 0) {
+            entry++;
+            continue;
+        }
+
+        if (described) {
+            if (fdt_stringlist_search(dt, chosen, "linux-enablement-mac,dapf-handoff",
+                                      entry->consumer) < 0) {
+                printf("dapf: Skipping %s; consumer %s is not requested for handoff\n", entry->path,
+                       entry->consumer);
+                entry++;
+                continue;
+            }
+
+            if (fdt_stringlist_search(dt, chosen, "linux-enablement-mac,dapf-power-on-handoff",
+                                      entry->consumer) >= 0) {
+                if (pmgr_adt_power_enable(entry->consumer) < 0) {
+                    printf("dapf: Failed to power requested consumer %s\n", entry->consumer);
+                    ret = -1;
+                    entry++;
+                    continue;
+                }
+                printf("dapf: Preserving requested consumer %s in the active state\n",
+                       entry->consumer);
+            }
+
+            int powered = pmgr_adt_is_powered(entry->consumer);
+            if (powered <= 0) {
+                printf("dapf: Skipping %s; consumer %s is inactive or its state is unknown\n", entry->path,
+                       entry->consumer);
+                entry++;
+                continue;
+            }
+        }
+
+        if (dapf_init(entry->path, entry->index) < 0) {
+            ret = -1;
+        }
+        entry++;
+        count += 1;
+    }
+    return ret ? ret : count;
+}
+
 int dapf_init_fdt(const void *fdt)
 {
+    if (chip_id == T8132) {
+        if (!fdt || fdt_node_check_compatible(fdt, 0, "apple,j713"))
+            return 0; /* No other M4 board's power/DAPF contract is qualified. */
+        return dapf_init_j713((void *)fdt);
+    }
+
     int ret = 0;
     int count = 0;
     struct entry *entry = dapf_entries;

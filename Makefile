@@ -188,7 +188,7 @@ OBJECTS := \
 	memory.o memory_asm.o \
 	nvme.o \
 	payload.o \
-	pcie.o \
+	pcie.o pcie_fdt.o \
 	pmgr.o \
 	proxy.o \
 	ringbuffer.o \
@@ -218,7 +218,7 @@ OBJECTS := \
 	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS)
 
 FP_OBJECTS := \
-	kboot_gpu.o \
+	kboot_gpu.o kboot_gpu_m4.o \
 	math/expf.o \
 	math/exp2f_data.o \
 	math/powf.o \
