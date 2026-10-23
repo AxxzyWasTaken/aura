@@ -717,6 +717,15 @@ bool nvme_shutdown(void)
     }
 
     if (nvme_type == NVME_T8132) {
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+        /* Stage 2 and U-Boot adopt this session without servicing its mailbox
+         * (only Linux takes RTKit ownership again), so stop the IOP pushing
+         * log traffic at the AP before handing it on. */
+        if (nvme_rtkit && rtkit_quiesce_ap(nvme_rtkit))
+            printf("nvme: ANS AP power quiesced for the next stage\n");
+        else
+            printf("nvme: could not quiesce ANS AP power; later stages may stall\n");
+#endif
         nvme_adopt_live_session = true;
         nvme_initialized = false;
         printf("nvme: controller disabled; preserving live RTKit session\n");
