@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h"
+
 #include "adt.h"
 #include "assert.h"
 #include "malloc.h"
@@ -452,9 +454,16 @@ bool nvme_init(void)
     if (nvme_type == NVME_T8132) {
         bool running = asc_cpu_running(nvme_asc);
         nvme_log_entry_state(running);
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+        /* Stage 1 runs straight after iBoot: a running ANS here is iBoot's
+         * session, which still needs the RTKit handshake. Only an earlier
+         * m1n1 stage (nvme.adopt) leaves a session that can be adopted. */
+        adopting = nvme_adopt_live_session;
+#else
         /* Older stage 1 shuts ANS down; newer stage 1 leaves a live session.
          * Never replay RTKit's one-time handshake on the latter. */
         adopting = nvme_adopt_live_session || (chip_id == T8132 && running);
+#endif
         if (adopting) {
             u32 boot_status = read32(nvme_base + NVME_BOOT_STATUS);
             u32 csts = read32(nvme_base + NVME_CSTS);
