@@ -2592,11 +2592,31 @@ static int dt_reserve_t8122_dcpext_one(unsigned int n)
 }
 
 /*
+ * T8122: reserve the external DCP firmware for the kernel's gate only with the boot.bin config
+ * line chosen.asahi,t8122-dcpext=1, and only when the internal display was handed over
+ * (apple,t8122-handoff on dcp), the one case where the kernel would enable it. Off by default:
+ * on an M3 Air with 14.x firmware, a published marker lets the kernel enable dcpext, and the
+ * internal DCP then crashes after disp0 DART faults, leaving the panel dark.
+ */
+static bool dt_t8122_dcpext_armed(void)
+{
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int len = 0;
+    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t8122-dcpext", &len);
+
+    if (!opt || len != 2 || opt[0] != '1' || opt[1] != '\0')
+        return false;
+    int dcp = fdt_path_offset(dt, "dcp");
+    return dcp >= 0 && fdt_getprop(dt, dcp, "apple,t8122-handoff", NULL);
+}
+
+/*
  * T8122 firmware-ready handoff adapted from Marius Gehrmann's public patch.
  * Copyright (c) 2026 Marius Gehrmann; additional MIT notice:
  * 3rdparty_licenses/LICENSE.Marius-Gehrmann.
  *
- * With enable=false, leave the controller disabled for the kernel's gate.
+ * With enable=false, leave the controller disabled for the kernel's gate, and reserve its
+ * firmware only when dt_t8122_dcpext_armed(). A previous promise is withdrawn either way.
  */
 static int dt_reserve_dcpext_firmware(bool enable)
 {
@@ -2623,6 +2643,12 @@ static int dt_reserve_dcpext_firmware(bool enable)
             int ret = fdt_delprop(dt, dcpext_node, T8122_DCPEXT_READY);
             if (ret && ret != -FDT_ERR_NOTFOUND)
                 return ret;
+            if (!dt_t8122_dcpext_armed()) {
+                printf("FDT: '%s' firmware not reserved (needs chosen.asahi,t8122-dcpext=1 "
+                       "and the internal display handoff); kernel gate remains closed\n",
+                       dcpext_alias);
+                continue;
+            }
             dcpext_node = fdt_path_offset(dt, dcpext_alias);
             int len = 0;
             const char *status = fdt_getprop(dt, dcpext_node, "status", &len);
@@ -5107,7 +5133,8 @@ static int dt_set_display(void)
         /*
          * Fail-soft handoff (kboot_display_handoff.c): it always returns 0, never uses the
          * helpers above (they bail out of kboot or enable nodes) and never enables a node.
-         * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1. On T6031 it does nothing
+         * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1; the external DCP firmware is
+         * reserved only with chosen.asahi,t8122-dcpext=1 and that handoff. On T6031 it does nothing
          * unless the board is a J514C or J516C, and reserves only __OS_LOG unless
          * chosen.asahi,t6031-dcp=1.
          */
