@@ -6430,7 +6430,7 @@ int kboot_boot(void *kernel)
         if (dt_remain < SZ_16K)
             printf("FDT: free dt buffer space low, %u bytes left\n", dt_remain);
     }
-    ret = chip_id == T8142 ? dapf_init_fdt(dt) : dapf_init_all();
+    ret = (chip_id == T8142 || chip_id == T6041) ? dapf_init_fdt(dt) : dapf_init_all();
     if (ret < 0 && chip_id == T8140) {
         printf("kboot: refusing T8140 handoff after DAPF failure\n");
         pcie_shutdown();
