@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_firmware_ready_requires_complete_reservations_and_keeps_suppliers_disabled(tmp_path):
     source = (ROOT / "src/kboot.c").read_text()
 
-    def function(name):
-        start = source.index("static int " + name + "(")
+    def function(name, kind="static int "):
+        start = source.index(kind + name + "(")
         return source[start:source.index("\n}", start) + 2] + "\n"
 
     start = source.index("static const char dcpext_aliases")
@@ -106,6 +106,7 @@ static int set_u32(void *tree, int node, const char *name, uint32_t value)
         function("dt_device_set_reserved_mem") + function("dt_device_add_mem_region") +
         function("dt_reserve_asc_firmware") + aliases + "\n" +
         function("dt_display_transaction") + function("dt_reserve_t8122_dcpext_one") +
+        function("dt_t8122_dcpext_armed", "static bool ") +
         function("dt_reserve_dcpext_firmware") + r'''
 static void world(void)
 {
@@ -126,8 +127,14 @@ static void world(void)
         assert(node >= 0 && !fdt_setprop_string(dt, node, "status", "disabled"));
         if (!i) assert(!fdt_setprop_string(dt, node, "compatible", "apple,t8122-dcpext"));
     }
-    int node = fdt_add_subnode(dt, 0, "aliases");
+    int node = fdt_add_subnode(dt, fdt_path_offset(dt, "/soc"), "dcp");
+    assert(node >= 0 && !fdt_setprop_u32(dt, node, "apple,t8122-handoff", 1));
+    node = fdt_add_subnode(dt, 0, "aliases");
     assert(node >= 0 && !fdt_setprop_string(dt, node, "dcpext", "/soc/dcpext"));
+    assert(!fdt_setprop_string(dt, node, "dcp", "/soc/dcp"));
+    /* Armed: chosen.asahi,t8122-dcpext=1 and the internal display handoff. */
+    node = fdt_add_subnode(dt, 0, "chosen");
+    assert(node >= 0 && !fdt_setprop_string(dt, node, "asahi,t8122-dcpext", "1"));
 }
 static bool ready(void)
 {
@@ -144,6 +151,13 @@ static void still_disabled(void)
         const char *status = fdt_getprop(dt, node, "status", NULL);
         assert(status && !strcmp(status, "disabled"));
     }
+}
+/* Without the opt-in (or the handoff), nothing is reserved and a stale promise is withdrawn. */
+static void unarmed(void)
+{
+    assert(!fdt_setprop_u32(dt, fdt_path_offset(dt, "dcpext"), T8122_DCPEXT_READY, 1));
+    assert(!dt_reserve_dcpext_firmware(false) && !ready() && !reservations);
+    still_disabled();
 }
 int main(void)
 {
@@ -177,6 +191,25 @@ int main(void)
     fault = 5; /* A stale marker may not survive missing firmware metadata. */
     assert(!dt_reserve_dcpext_firmware(false) && !ready());
     still_disabled();
+    /* The reservation is opt-in. */
+    world(); assert(!fdt_delprop(dt, fdt_path_offset(dt, "/chosen"), "asahi,t8122-dcpext"));
+    unarmed();
+    const char *values[] = {"0", "", "11", "yes"};
+    for (unsigned i = 0; i < ARRAY_SIZE(values); i++) {
+        world();
+        assert(!fdt_setprop_string(dt, fdt_path_offset(dt, "/chosen"), "asahi,t8122-dcpext",
+                                   values[i]));
+        unarmed();
+    }
+    world(); assert(!fdt_setprop(dt, fdt_path_offset(dt, "/chosen"), "asahi,t8122-dcpext", "1", 1));
+    unarmed(); /* "1" without its NUL */
+    world(); assert(!fdt_del_node(dt, fdt_path_offset(dt, "/chosen")));
+    unarmed();
+    /* Armed but the internal display was not handed over: the kernel would refuse dcpext. */
+    world(); assert(!fdt_delprop(dt, fdt_path_offset(dt, "/soc/dcp"), "apple,t8122-handoff"));
+    unarmed();
+    world(); assert(!fdt_delprop(dt, fdt_path_offset(dt, "/aliases"), "dcp"));
+    unarmed();
     world(); chip_id = 0x8103;
     assert(!dt_reserve_dcpext_firmware(false) && !ready() && !reservations);
     world(); assert(!fdt_setprop_string(dt, 0, "compatible", "apple,t8103"));
