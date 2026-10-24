@@ -2234,8 +2234,14 @@ static int dt_vram_reserved_region(const char *dcp_alias, const char *disp_alias
                                    disp_reserved_regions_vram, &region, 1);
 }
 
-static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_alt,
-                                   const char *fdt_path, bool remap, u64 base)
+/*
+ * Reserve the firmware segments of an ASC coprocessor from its ADT
+ * segment-ranges and attach them to its FDT node. With dram_only, segments
+ * outside DRAM (such as the coprocessor's own SRAM, which the OS maps as MMIO)
+ * are left out.
+ */
+static int dt_reserve_asc_segments(const char *adt_path, const char *adt_path_alt,
+                                   const char *fdt_path, bool remap, u64 base, bool dram_only)
 {
     int ret = 0;
 
@@ -2250,6 +2256,18 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
         node = adt_path_offset(adt, adt_path_alt);
     if (node < 0)
         bail("ADT: '%s' not found\n", adt_path);
+
+    u64 dram_base = 0, dram_end = 0;
+    if (dram_only) {
+        int chosen = adt_path_offset(adt, "/chosen");
+        u64 dram_size;
+
+        if (chosen < 0 || ADT_GETPROP(adt, chosen, "dram-base", &dram_base) != sizeof(dram_base) ||
+            ADT_GETPROP(adt, chosen, "dram-size", &dram_size) != sizeof(dram_size) || !dram_size ||
+            dram_base > UINT64_MAX - dram_size)
+            bail("ADT: no DRAM range for '%s'\n", adt_path);
+        dram_end = dram_base + dram_size;
+    }
 
     uint32_t dev_phandle = fdt_get_phandle(dt, fdt_node);
     if (!dev_phandle) {
@@ -2266,7 +2284,17 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
     seg = adt_getprop(adt, node, "segment-ranges", &segments_len);
     unsigned int num_maps = segments_len / sizeof(*seg);
 
-    for (unsigned i = 0; i < num_maps; i++) {
+    for (unsigned i = 0; i < num_maps; i++, seg++) {
+        if (dram_only) {
+            u64 span = ALIGN_UP((u64)seg->size, SZ_16K);
+
+            if (seg->phys < dram_base || seg->phys >= dram_end || span > dram_end - seg->phys) {
+                printf("FDT: %s: segment at 0x%lx is outside DRAM, not reserved\n", fdt_path,
+                       seg->phys);
+                continue;
+            }
+        }
+
         u64 iova = (remap ? seg->remap : seg->iova) | base;
 
         char node_name[64];
@@ -2300,11 +2328,15 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
         ret = dt_device_add_mem_region(fdt_path, mem_phandle, NULL);
         if (ret < 0)
             return ret;
-
-        seg++;
     }
 
     return 0;
+}
+
+static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_alt,
+                                   const char *fdt_path, bool remap, u64 base)
+{
+    return dt_reserve_asc_segments(adt_path, adt_path_alt, fdt_path, remap, base, false);
 }
 
 static int dt_set_ave(void)
@@ -4809,6 +4841,48 @@ static int dt_setup_sio(void)
     return 0;
 }
 
+/*
+ * The T6040/T6041 AOP runs its __TEXT and __DATA from its own SRAM, but iBoot
+ * leaves its external code (__ETEXT) and its log (__OS_LOG) in DRAM. Reserve
+ * those segments with the IOVAs the firmware uses for them (their remap
+ * addresses), so that the OS maps them in the AOP's DART before it starts the
+ * firmware.
+ */
+static int dt_set_aop_firmware(void)
+{
+    if (chip_id != T6040 && chip_id != T6041)
+        return 0;
+
+    int node = fdt_node_offset_by_compatible(dt, -1, "apple,t6041-aop");
+    if (node < 0)
+        return 0;
+
+    const char *status = fdt_getprop(dt, node, "status", NULL);
+    if (status && strcmp(status, "okay") && strcmp(status, "ok"))
+        return 0;
+
+    char path[64];
+    if (fdt_get_path(dt, node, path, sizeof(path))) {
+        printf("FDT: AOP node path too long\n");
+        return 0;
+    }
+
+    u32 len = 0;
+    int anode = adt_path_offset(adt, "/arm-io/aop");
+    if (anode < 0 || !adt_getprop(adt, anode, "segment-ranges", &len) || !len ||
+        len % sizeof(struct adt_segment_ranges)) {
+        printf("ADT: /arm-io/aop has no firmware segments, %s left without them\n", path);
+        return 0;
+    }
+
+    if (dt_reserve_asc_segments("/arm-io/aop", NULL, path, true, 0, true))
+        printf("FDT: %s: reserving the AOP firmware segments failed\n", path);
+    else
+        printf("FDT: %s: AOP firmware segments reserved\n", path);
+
+    return 0;
+}
+
 struct isp_segment_ranges {
     u64 phys;
     u64 iova;
@@ -5766,6 +5840,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_disable_missing_j700_touch_id())
         return -1;
     if (dt_setup_sio())
+        return -1;
+    if (dt_set_aop_firmware())
         return -1;
     u64 isp_heap_phys, isp_heap_iova, isp_heap_size;
     if ((chip_id != T8140 || !isp_get_heap(&isp_heap_phys, &isp_heap_iova, &isp_heap_size)) &&
