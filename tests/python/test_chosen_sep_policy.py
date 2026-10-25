@@ -32,6 +32,7 @@ typedef uint8_t u8;
 #define T6041 0x6041
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
 static struct { bool apple_sysregs_unlocked; } features = {true}, *cpu_features = &features;
+#define T8152 0x8152
 static unsigned char blob[4096];
 static void *dt = blob, *adt = blob;
 static int chip_id, uuid_len, sep_calls, adt_calls, sep_error, adt_error;
