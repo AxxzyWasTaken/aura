@@ -14,7 +14,8 @@ def test_isp_reservation_no_space(tmp_path):
         start = source.index(signature)
         return source[start:source.index("\n}", start) + 2]
 
-    firmware = definition("static int dt_reserve_asc_firmware(")
+    firmware = definition("static int dt_reserve_asc_segments(") + "\n" + \
+        definition("static int dt_reserve_asc_firmware(")
     heap = definition("static int dt_set_isp_fwdata(void)")
     harness = r'''
 #include <assert.h>
@@ -26,6 +27,9 @@ typedef unsigned long u64;
 typedef uint32_t u32;
 #define SZ_16K 0x4000
 #define T6030 0x6030
+#define T8132 0x8132
+/* Only the dram_only segment filter reads properties this way. */
+#define ADT_GETPROP(a, n, k, v) ((size_t)0)
 static u32 chip_id;
 static unsigned int mappings, links;
 #define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))

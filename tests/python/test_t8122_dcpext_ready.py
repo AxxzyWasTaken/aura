@@ -34,6 +34,7 @@ typedef uint32_t u32;
 #define PACKED __attribute__((packed))
 #define T8122 0x8122
 #define T6030 0x6030
+#define T8132 0x8132
 #define T6000 0x6000
 #define T6001 0x6001
 #define T6002 0x6002
@@ -104,7 +105,7 @@ static int set_u32(void *tree, int node, const char *name, uint32_t value)
 #define fdt_setprop_u32 set_u32
 ''' + function("dt_enable_dcp_with_typec_routes") +
         function("dt_device_set_reserved_mem") + function("dt_device_add_mem_region") +
-        function("dt_reserve_asc_firmware") + aliases + "\n" +
+        function("dt_reserve_asc_segments") + function("dt_reserve_asc_firmware") + aliases + "\n" +
         function("dt_display_transaction") + function("dt_reserve_t8122_dcpext_one") +
         function("dt_t8122_dcpext_armed", "static bool ") +
         function("dt_reserve_dcpext_firmware") + r'''

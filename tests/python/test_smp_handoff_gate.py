@@ -29,6 +29,7 @@ typedef uint64_t u64; typedef uint32_t u32;
 #define MAX_CPUS 4
 #define T8140 0x8140
 #define T8142 0x8142
+#define T8132 0x8132
 #define SZ_16K 16384
 #define sysop(op) ((void)0)
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
@@ -45,6 +46,10 @@ static void tunables_apply_static(void) {}
 static void clk_init(void) { if (mode == 2) spin_table[1].target = 0x1234; }
 static void usb_init(void) {}
 static int pcie_init(void) { return 0; }
+static int pcie_prepare_fdt(void *p) { return 0; }
+static int pcie_handoff_fdt(void *p) { return 0; }
+static int fdt_node_check_compatible(void *p, int node, const char *compatible) { return 1; }
+static int dt_disable_j713_pcie(void) { return 0; }
 static int dt_disable_t8140_pcie(void) { return 0; }
 static int fdt_pack(void *p) { return 0; }
 static u32 fdt_totalsize(void *p) { return 0x8000; }

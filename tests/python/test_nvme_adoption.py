@@ -34,6 +34,8 @@ typedef int sart_dev_t;
 #define ADT_GETPROP(...) (-1)
 #define T8140 0x8140
 #define T8132 0x8132
+#define T6040 0x6040
+#define T6041 0x6041
 static u32 chip_id = T8140;
 static void *adt;
 ''' + declarations + r'''

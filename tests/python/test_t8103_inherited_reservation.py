@@ -18,7 +18,8 @@ SOURCE = Path(os.environ.get("DART_DISPLAY_SOURCE", Path(__file__).resolve().par
 def test_inherited_reservation(tmp_path):
     text = (SOURCE / "src/kboot.c").read_text()
     start = text.index("    u64 image_end = (u64)_end;", text.index("int kboot_prepare_dt("))
-    end = text.index("    if (chip_id == T8140)", start)
+    # The T8140 block may also cover other chips ("if (chip_id == T8140 ||").
+    end = text.index("    if (chip_id == T8140", start)
     block = text[start:end]
     call = re.search(
         r"    if \(fdt_add_mem_rsv\(dt, \(u64\)_base, image_end - \(u64\)_base\)\)\n"

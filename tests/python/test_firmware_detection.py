@@ -19,7 +19,16 @@ def test_j616s_boot_firmware_detection(tmp_path):
     detector = source[start:end]
     harness = """
 #include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
+/* Host types instead of m1n1's freestanding types.h, whose uintptr_t and
+ * ssize_t typedefs clash with the macOS SDK's. */
+#define TYPES_H
+typedef uint8_t u8;
+typedef uint32_t u32;
+typedef uint64_t u64;
 #include "firmware.h"
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 """ + table + "\n" + detector + """
