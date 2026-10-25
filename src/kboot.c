@@ -28,6 +28,7 @@
 #include "pcie.h"
 #include "pmgr.h"
 #include "rtkit.h"
+#include "sart.h"
 #include "sep.h"
 #include "sio.h"
 #include "smp.h"
@@ -6205,7 +6206,12 @@ int kboot_prepare_dt(void *fdt)
             image_end < (u64)_base || image_end > ram_end)
             bail("FDT: invalid T8103 inherited memory extent\n");
     }
-    if (chip_id == T8140) {
+    /*
+     * T6041 hands the live ANS over the same way (nvme.adopt=live-rtkit-v1): its RTKit buffers
+     * sit in this stage's heap and must stay out of Linux's allocator (J616C: ANS syslog lines
+     * in page-cache pages at the SART-allowed heap addresses).
+     */
+    if (chip_id == T8140 || chip_id == T6041) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;
         u64 high_water = heapblock_high_water();
 
@@ -6216,7 +6222,7 @@ int kboot_prepare_dt(void *fdt)
         image_end = max(image_end, inherited);
         if ((u64)_base < cur_boot_args.phys_base || image_end < (u64)_base || image_end > ram_end ||
             high_water > ram_end)
-            bail("FDT: invalid T8140 retained memory extent\n");
+            bail("FDT: invalid retained memory extent\n");
 
         u64 heap_top = max(inherited, high_water);
         if (heap_top > (u64)_end) {
@@ -6231,6 +6237,35 @@ int kboot_prepare_dt(void *fdt)
     }
     if (fdt_add_mem_rsv(dt, (u64)_base, image_end - (u64)_base))
         bail("FDT: couldn't add reservation for m1n1 and inherited high-water\n");
+
+    /*
+     * A live ANS handed to Linux keeps every buffer an earlier stage gave it (on a normal boot
+     * Stage 1 read the ESP, so the buffers are in Stage 1's heap, not this one's). Reserve each
+     * SART-allowed range inside RAM; the nvme-apple adoption requires them reserved anyway.
+     */
+    if (chip_id == T6041) {
+        sart_dev_t *sart = sart_init("/arm-io/sart-ans");
+        u64 ram_start = cur_boot_args.phys_base;
+        u64 ram_end = ram_start + cur_boot_args.mem_size;
+
+        if (!sart)
+            bail("FDT: cannot read the ANS SART\n");
+        for (int i = 0; i < 16; i++) {
+            u64 paddr;
+            size_t sz;
+
+            if (!sart_get_allowed(sart, i, &paddr, &sz) || paddr < ram_start || paddr >= ram_end)
+                continue;
+            u64 start = ALIGN_DOWN(paddr, SZ_16K);
+            u64 end = ALIGN_UP(min(paddr + sz, ram_end), SZ_16K);
+            if (fdt_add_mem_rsv(dt, start, end - start)) {
+                sart_release(sart);
+                bail("FDT: couldn't reserve ANS buffer\n");
+            }
+            printf("FDT: ANS buffer [0x%lx, 0x%lx) reserved\n", start, end);
+        }
+        sart_release(sart);
+    }
 
     // m1n1 moved itself above the chainloaded image (start.S); cores with a
     // locked RVBAR still reset into the forwarding vector at the old base.
