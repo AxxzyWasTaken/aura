@@ -6759,23 +6759,25 @@ int kboot_prepare_dt(void *fdt)
         bail("FDT: couldn't add reservation for the devtree\n");
 
     if (dart_reserve_legacy_tables(dt, cur_boot_args.phys_base, cur_boot_args.mem_size))
-        bail("FDT: couldn't reserve legacy DCP translation tables\n");
+        bail("FDT: couldn't reserve inherited display translation tables\n");
 
     u64 image_end = (u64)_end;
-    if (chip_id == T8103) {
+    if (display_dart_tables_inherited()) {
         /* chainload_image carries the previous stage's live heap in this
-         * high-water mark. Its retained DCP tables no longer have a local
-         * record, so keep the inherited prefix as well as our own image.
-         * This excludes allocations made by the current stage. */
+         * high-water mark. Tables that stage published into a locked display
+         * DART's inherited roots have no local record here, so keep the
+         * inherited prefix as well as our own image. This excludes
+         * allocations made by the current stage. A mark below our own base
+         * covers nothing of this image, which then keeps only itself. */
         u64 inherited = cur_boot_args.top_of_kernel_data;
         if (!cur_boot_args.mem_size ||
             cur_boot_args.phys_base > UINT64_MAX - cur_boot_args.mem_size)
-            bail("FDT: invalid T8103 inherited RAM extent\n");
+            bail("FDT: invalid inherited RAM extent\n");
         u64 ram_end = cur_boot_args.phys_base + cur_boot_args.mem_size;
-        image_end = max(image_end, inherited);
-        if ((u64)_base < cur_boot_args.phys_base || inherited < (u64)_base ||
-            image_end < (u64)_base || image_end > ram_end)
-            bail("FDT: invalid T8103 inherited memory extent\n");
+        if ((u64)_base < cur_boot_args.phys_base || image_end > ram_end || inherited > ram_end)
+            bail("FDT: invalid inherited memory extent\n");
+        if (inherited >= (u64)_base)
+            image_end = max(image_end, inherited);
     }
     /* Both post-M4 storage paths retain firmware buffers in the m1n1 heap. */
     if (chip_id == T8140 ||

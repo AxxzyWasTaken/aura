@@ -199,7 +199,7 @@ dcp_dev_t *dcp_init(const display_config_t *cfg)
     u64 vm_base = dart_vm_base(dcp->dart_dcp);
     dart_setup_pt_region(dcp->dart_dcp, cfg->dcp_dart, sid, vm_base);
 
-    dcp->dart_disp = dart_init_adt(cfg->disp_dart, 0, 0, true);
+    dcp->dart_disp = dart_init_adt_display(cfg->disp_dart, 0, 0);
     if (!dcp->dart_disp) {
         printf("dcp: failed to initialize DISP DART\n");
         goto out_dart_dcp;

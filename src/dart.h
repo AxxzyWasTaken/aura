@@ -21,6 +21,7 @@ dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t
 dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_pts);
 int dart_set_bypass_fdt(void *dt, u32 phandle, u8 device);
 dart_dev_t *dart_init_adt_display(const char *path, int instance, int device);
+bool dart_adt_locked(const char *path, int instance);
 void dart_lock_adt(const char *path, int instance);
 dart_dev_t *dart_init_fdt(void *dt, u32 phandle, int device, bool keep_pts);
 dart_dev_t *dart_init_fdt_locked(void *dt, u32 phandle, int device);

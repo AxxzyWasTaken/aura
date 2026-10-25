@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: MIT
-"""T8103 legacy display DART view: admission, mapping and root lifetime.
+"""Display DART view of a locked DART: admission, mapping and root lifetime.
+
+The rule is the same on every chip and every non-Gen3 DART format: the lock
+covers TTBR/TCR, and the view maps into the inherited tables. The fixtures are
+the T8103 (J293) DCP DART where this was first found, the same layout under
+other chip IDs and the DISP path, and a T6000-format DCP DART (M1 Pro/Max).
 
 The C unit is compiled from the production sources named by DART_DISPLAY_SOURCE
 (default the repository containing this test): src/types.h, the chip IDs of src/soc.h,
@@ -382,17 +387,21 @@ static void admit_locked_translating(void)
     dart_shutdown(dart);
     assert(!live_objects);
 }
-static void refuse_device(int device)
+static void refuse_device(int device, bool before_lookup)
 {
     locked_view();
     assert(!dart_init_adt_display(DCP_PATH, 0, device));
-    assert(!adt_lookups && !reg_reads && !nwrites && !heap_used && !live_objects);
+    /* Out of any DART's range: refused before the ADT. Past this format's
+     * stream count: refused by the constructor before any register access. */
+    assert(before_lookup ? !adt_lookups : adt_lookups > 0);
+    assert(!reg_reads && !nwrites && !heap_used && !live_objects);
 }
 static void refuse_device_range(void)
 {
-    refuse_device(-1);
-    refuse_device(32);
-    refuse_device(255);
+    refuse_device(-1, true);
+    refuse_device(256, true);
+    refuse_device(32, false);
+    refuse_device(255, false);
 }
 static void refuse_stream(u32 tcr, bool enabled)
 {
@@ -425,16 +434,20 @@ static void stock_unlocked_view(void)
     dart_shutdown(dart);
     assert(!live_objects);
 }
-static void other_chip_unchanged(void)
+static void other_chip_same_rule(void)
 {
-    /* Any other chip gets the generic keep-PTs handle: no invalidation, immutable. */
-    locked_view();
-    chip_id = T8112;
-    dart_dev_t *dart = dart_init_adt_display(DCP_PATH, 0, SID);
-    assert(dart && !tlbis && !nwrites);
-    assert_immutable(dart);
-    dart_shutdown(dart);
-    assert(!live_objects);
+    /* No chip-specific branch: another chip ID gets the same view. */
+    static const u32 chips[] = {T8112, T6000, T6020, T8122};
+    for (unsigned int i = 0; i < ARRAY_SIZE(chips); i++) {
+        locked_view();
+        chip_id = chips[i];
+        dart_dev_t *dart = open_view();
+        assert(tlbis == 1 && nwrites == 2 && !protected_writes());
+        assert(dart_map(dart, iova(0, 5, 7), (void *)PAGE(DATA), SZ_16K) == 0);
+        assert(at(L2)[7] == leaf(DATA) && !protected_writes() && !heap_used);
+        dart_shutdown(dart);
+        assert(!live_objects);
+    }
 }
 static void gen3_unchanged(void)
 {
@@ -635,15 +648,96 @@ static void setup_stock_unlocked(void)
     dart_shutdown(dart);
 }
 
-static void disp_path_generic(void)
+static void disp_path_same_rule(void)
 {
-    /* Only the DCP DART gets the view: the DISP DART stays a generic locked handle. */
+    /* The DISP DART dcp_init() opens gets the same view as the DCP DART. */
     locked_view();
     dart_dev_t *dart = dart_init_adt_display("/arm-io/dart-disp0", 0, SID);
-    assert(dart && !tlbis && !nwrites);
-    assert_immutable(dart);
+    assert(dart && tlbis == 1 && nwrites == 2 && !protected_writes());
+    assert(dart_map(dart, iova(0, 5, 7), (void *)PAGE(DATA), SZ_16K) == 0);
+    assert(at(L2)[7] == leaf(DATA) && !heap_used);
     dart_shutdown(dart);
     assert(!live_objects && !legacy_l2_count);
+}
+
+/* ---- T6000-format DCP DART (M1 Pro/Max): locked by firmware, same view ---- */
+static u64 table6(unsigned int page) { return FIELD_PREP(DART_T6000_PTE_OFFSET, PAGE(page) >> DART_PTE_OFFSET_SHIFT) | DART_PTE_VALID; }
+static u64 leaf6(unsigned int page) { return FIELD_PREP(DART_T6000_PTE_OFFSET, PAGE(page) >> DART_PTE_OFFSET_SHIFT) | dart_t6000.pte_flags; }
+static void t6000_view(unsigned int roots)
+{
+    /* As on the panel-less M1 Pro: CONFIG lock set, TCR 0x80, stream enabled. */
+    reset(true, 0, DART_T8020_TCR_TRANSLATE_ENABLE, true);
+    chip_id = T6000;
+    nodes[DART_NODE].compat = "dart,t6000";
+    for (int i = 0; i < 4; i++) {
+        if (!(roots & BIT(i)))
+            continue;
+        *reg(ttbr_addr(i)) = DART_T8020_TTBR_VALID |
+                             FIELD_PREP(DART_T8020_TTBR_ADDR, PAGE(ROOT + i) >> DART_T8020_TTBR_SHIFT);
+        at(ROOT + i)[5] = table6(L2 + i);
+    }
+}
+static void t6000_locked_dcp(void)
+{
+    t6000_view(0x1);
+    dart_dev_t *dart = open_view();
+    assert(dart->type == DART_T6000 && dart->locked && dart->l1[0] == at(ROOT) && !dart->l1[1]);
+    assert(tlbis == 1 && nwrites == 2 && !protected_writes() && !heap_used);
+    take_snapshot();
+    /* An RTKit grant into the inherited L2, in the T6000 PTE format. */
+    assert(dart_map(dart, iova(0, 5, 7), (void *)PAGE(DATA), SZ_16K) == 0);
+    assert(at(L2)[7] == leaf6(DATA) && !protected_writes());
+    assert(dart_translate(dart, iova(0, 5, 7) + 0x20) == (void *)(PAGE(DATA) + 0x20));
+    /* A new L2 in the inherited root is published, recorded for handoff, and
+     * the absent roots stay absent: no TTBR is written. */
+    assert(dart_map(dart, iova(0, 9, 3), (void *)PAGE(DATA + 1), SZ_16K) == 0);
+    assert(at(ROOT)[9] == table6(HEAP) && at(HEAP)[3] == leaf6(DATA + 1));
+    assert(legacy_l2_count == 1 && legacy_l2_pages[0] == PAGE(HEAP));
+    assert(dart_map(dart, iova(1, 5, 7), (void *)PAGE(DATA + 2), SZ_16K) == -1);
+    assert(!*reg(ttbr_addr(1)) && !protected_writes());
+    dart_unmap(dart, iova(0, 5, 7), SZ_16K);
+    assert(!at(L2)[7]);
+    dart_shutdown(dart);
+    assert(!live_objects && !heap_frees && legacy_l2_count == 1);
+}
+static void t6000_device_range(void)
+{
+    /* A T6000-format DART has 32 streams: an out-of-range stream gets no handle,
+     * and nothing reads or writes a register for it. */
+    static const int sids[] = {32, 33, 255};
+    for (unsigned int i = 0; i < ARRAY_SIZE(sids); i++) {
+        t6000_view(0x1);
+        unsigned int reads = reg_reads, before = nwrites;
+        assert(!dart_init_adt_display(DCP_PATH, 0, sids[i]));
+        assert(reg_reads == reads && nwrites == before && !heap_used && !live_objects);
+    }
+    /* Stream 31 is in range: its registers are read, and it is refused only
+     * because this fixture leaves that stream locked but not translating. */
+    t6000_view(0x1);
+    unsigned int reads = reg_reads;
+    assert(!dart_init_adt_display(DCP_PATH, 0, 31));
+    assert(reg_reads > reads && !nwrites && !heap_used && !live_objects);
+}
+static void t6000_locked_refusals(void)
+{
+    /* Locked without an inherited root, or not translating: no handle at all. */
+    t6000_view(0);
+    take_snapshot();
+    assert(!dart_init_adt_display(DCP_PATH, 0, SID));
+    assert(!nwrites && !tlbis && !heap_used && !live_objects && memory_unchanged());
+    t6000_view(0x1);
+    *reg(tcr_addr()) = DART_T8020_TCR_TRANSLATE_ENABLE | DART_T8020_TCR_BYPASS_DART;
+    assert(!dart_init_adt_display(DCP_PATH, 0, SID));
+    assert(!nwrites && !tlbis && !heap_used && !live_objects);
+    /* The generic handle of the same locked DART stays read-only. */
+    t6000_view(0x1);
+    dart_dev_t *dart = dart_init_adt(DCP_PATH, 0, SID, true);
+    assert(dart && !nwrites);
+    take_snapshot();
+    assert(dart_map(dart, iova(0, 5, 7), (void *)PAGE(DATA), SZ_16K) == -1);
+    assert(memory_unchanged() && !nwrites);
+    dart_shutdown(dart);
+    assert(!live_objects);
 }
 static void record_list_full(void)
 {
@@ -682,9 +776,12 @@ static const struct { const char *name; void (*run)(void); } cases[] = {
     {"refuse-disabled-stream", refuse_disabled_stream},
     {"refuse-untranslated-stream", refuse_untranslated_stream},
     {"stock-unlocked-view", stock_unlocked_view},
-    {"other-chip-unchanged", other_chip_unchanged},
+    {"other-chip-same-rule", other_chip_same_rule},
     {"gen3-unchanged", gen3_unchanged},
-    {"disp-path-generic", disp_path_generic},
+    {"disp-path-same-rule", disp_path_same_rule},
+    {"t6000-locked-dcp", t6000_locked_dcp},
+    {"t6000-locked-refusals", t6000_locked_refusals},
+    {"t6000-device-range", t6000_device_range},
     {"generic-locked-immutable", generic_locked_immutable},
     {"fdt-locked-immutable", fdt_locked_immutable},
     {"map-selected-root", map_selected_root},
@@ -741,8 +838,10 @@ PRELUDE = r'''
 
 CASES = (
     "admit-locked-translating", "refuse-device-range", "refuse-disabled-stream",
-    "refuse-untranslated-stream", "stock-unlocked-view", "other-chip-unchanged",
-    "gen3-unchanged", "disp-path-generic", "generic-locked-immutable", "fdt-locked-immutable",
+    "refuse-untranslated-stream", "stock-unlocked-view", "other-chip-same-rule",
+    "gen3-unchanged", "disp-path-same-rule", "t6000-locked-dcp", "t6000-locked-refusals",
+    "t6000-device-range",
+    "generic-locked-immutable", "fdt-locked-immutable",
     "map-selected-root", "unmap-selected-root", "unmap-absent-allocates-nothing",
     "map-absent-root-refused", "map-new-l2-in-present-root", "map-conflict-rolls-back",
     "map-misaligned-refused", "shutdown-retains-roots", "setup-refused-on-locked-view",
@@ -752,10 +851,10 @@ CASES = (
 
 @pytest.fixture(scope="module")
 def binary(tmp_path_factory):
-    work = tmp_path_factory.mktemp("t8103-display-dart")
-    code = work / "t8103-display-dart.c"
+    work = tmp_path_factory.mktemp("display-dart-view")
+    code = work / "display-dart-view.c"
     code.write_text(PRELUDE + production_unit() + HARNESS)
-    program = work / "t8103-display-dart"
+    program = work / "display-dart-view"
     command = [os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                "-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-fno-omit-frame-pointer",
                str(code), "-o", str(program)]
