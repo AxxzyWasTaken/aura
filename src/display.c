@@ -266,6 +266,21 @@ const display_config_t *display_get_config(void)
 }
 
 /*
+ * Whether this stage or an earlier one may have mapped into the inherited tables
+ * of a locked display DART (dart_init_adt_display()). T8140 and T8132 never get
+ * that far: display_init() returns before any DCP or DART work on them, in every
+ * stage, and kboot keeps their retained heap separately.
+ */
+bool display_dart_tables_inherited(void)
+{
+    if (chip_id == T8140 || chip_id == T8132)
+        return false;
+
+    const display_config_t *conf = display_get_config();
+    return conf && (dart_adt_locked(conf->dcp_dart, 0) || dart_adt_locked(conf->disp_dart, 0));
+}
+
+/*
  * On T6030 the internal DCP is left exactly as iBoot started it (see kboot_display_handoff.c). The
  * modeset below is untested there, and its fallback config names a power domain T6030 does not
  * have, so it must never run (display= variable, non-retina heuristic, proxy).

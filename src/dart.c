@@ -6,7 +6,6 @@
 #include "devicetree.h"
 #include "malloc.h"
 #include "memory.h"
-#include "soc.h"
 #include "string.h"
 #include "utils.h"
 
@@ -131,8 +130,9 @@ struct dart_dev {
     u64 *l1[DART_MAX_TTBR_COUNT];
 };
 
-/* A retained DCP root can outlive its software handle. Record every table
- * published by the legacy view before publication, and reserve it at handoff. */
+/* A retained display root can outlive its software handle. Record every table
+ * the display view publishes into an inherited root before publication, and
+ * reserve it at handoff. */
 #define LEGACY_L2_MAX_PAGES 32
 static u64 legacy_l2_pages[LEGACY_L2_MAX_PAGES];
 static size_t legacy_l2_count;
@@ -519,35 +519,72 @@ int dart_set_bypass_fdt(void *dt, u32 phandle, u8 device)
     return 0;
 }
 
-/* Legacy display firmware uses existing RAM tables even when configuration is
- * protected. This view never replaces a root or unlocks configuration, and is
- * not available through the FDT inspection or proxy constructors. */
+/* Display firmware keeps using the inherited tables of a locked DART. The lock
+ * covers the TTBR and TCR registers, not the tables, which are ordinary RAM, so
+ * map into them as upstream m1n1 has done since it learned to handle locked
+ * DARTs. The view never replaces a root or writes stream configuration, and is
+ * not available through the FDT inspection or proxy constructors, which stay
+ * read-only. Gen3 DARTs keep their own adoption. */
 dart_dev_t *dart_init_adt_display(const char *path, int instance, int device)
 {
-    if (chip_id == T8103 && (device < 0 || device >= 32))
+    if (device < 0 || device > 255)
         return NULL;
 
     dart_dev_t *dart = dart_init_adt(path, instance, device, true);
-    if (!dart || chip_id != T8103 || dart->type != DART_T8020 || strcmp(path, "/arm-io/dart-dcp"))
+    if (!dart || dart->type == DART_GEN3)
         return dart;
 
-    if (dart->locked) {
-        u32 tcr = read32(DART_TCR(dart));
+    u32 tcr = read32(DART_TCR(dart));
+    bool enabled, translating;
+    if (dart->type == DART_T8110) {
+        u32 mode = DART_T8110_TCR_TRANSLATE_ENABLE | DART_T8110_TCR_BYPASS_DART |
+                   DART_T8110_TCR_BYPASS_DAPF | DART_T8110_TCR_REMAP_EN;
+        enabled = read32(dart->regs + DART_T8110_ENABLE_STREAMS + 4 * (dart->device >> 5)) &
+                  BIT(dart->device & 31);
+        translating = (tcr & mode) == DART_T8110_TCR_TRANSLATE_ENABLE;
+    } else {
         u32 mode = DART_T8020_TCR_TRANSLATE_ENABLE | DART_T8020_TCR_BYPASS_DART |
                    DART_T8020_TCR_BYPASS_DAPF;
-        if (!(read32(dart->regs + DART_T8020_ENABLED_STREAMS) & BIT(dart->device)) ||
-            (tcr & mode) != DART_T8020_TCR_TRANSLATE_ENABLE) {
-            printf("dart: legacy display stream is not translating\n");
+        enabled = read32(dart->regs + DART_T8020_ENABLED_STREAMS) & BIT(dart->device);
+        translating = (tcr & mode) == DART_T8020_TCR_TRANSLATE_ENABLE;
+    }
+    int roots = 0;
+    for (int i = 0; i < dart->params->ttbr_count; i++)
+        roots += !!dart->l1[i];
+    printf("dart: %s sid %d %slocked, tcr 0x%x, stream %s, %d inherited root(s)\n", path,
+           device, dart->locked ? "" : "not ", tcr, enabled ? "enabled" : "disabled", roots);
+
+    if (dart->locked) {
+        if (!enabled || !translating || !roots) {
+            printf("dart: %s: locked stream does not translate through inherited tables\n",
+                   path);
             dart_shutdown(dart);
             return NULL;
         }
         dart->legacy_mutable = true;
     }
 
-    /* Match the legacy display constructor's invalidation before RTKit starts.
-     * The locked/keep paths still retain every root throughout handoff. */
+    /* The display constructor's initial invalidation of this stream, before
+     * RTKit starts. The locked and keep paths retain every root. */
     dart->params->tlb_invalidate(dart);
     return dart;
+}
+
+/* Whether firmware locked this DART's configuration (read only). Gen3 DARTs
+ * and unknown types report false: the display view never maps into them. */
+bool dart_adt_locked(const char *path, int instance)
+{
+    int dart_path[8];
+    int node = adt_path_offset_trace(adt, path, dart_path);
+    u64 base;
+    if (node < 0 || adt_get_reg(adt, dart_path, "reg", instance, &base, NULL) < 0)
+        return false;
+
+    if (adt_is_compatible(adt, node, "dart,t8020") || adt_is_compatible(adt, node, "dart,t6000"))
+        return read32(base + DART_T8020_CONFIG) & DART_T8020_CONFIG_LOCK;
+    if (adt_is_compatible(adt, node, "dart,t8110"))
+        return read32(base + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR;
+    return false;
 }
 
 void dart_lock_adt(const char *path, int instance)
@@ -1177,7 +1214,7 @@ void dart_shutdown(dart_dev_t *dart)
  * after its handle has gone away, including when initialization is retried. */
 int dart_reserve_legacy_tables(void *dt, u64 dram_base, u64 dram_size)
 {
-    if (chip_id != T8103 || !legacy_l2_count)
+    if (!legacy_l2_count)
         return 0;
     if (!dt || legacy_l2_count > LEGACY_L2_MAX_PAGES || dram_size < SZ_16K ||
         dram_base > UINT64_MAX - dram_size)
