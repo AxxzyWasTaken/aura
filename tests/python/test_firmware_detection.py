@@ -1,4 +1,8 @@
-"""Recognize the boot firmware captured from J616s without prefix matching."""
+"""Recognize the boot firmware captured from J616s without prefix matching.
+
+The J616s units on macOS 26.6.1 report mBoot-18000.161.9, the same boot
+firmware that the table lists for 26.6, so they are identified as V26_6.
+"""
 
 from pathlib import Path
 import subprocess
@@ -23,15 +27,15 @@ int main(void)
 {
     struct fw_version_info info;
     detect_firmware(&info, "mBoot-18000.161.9");
-    assert(info.version == V26_6_1);
-    assert(!strcmp(info.string, "26.6.1"));
+    assert(info.version == V26_6);
+    assert(!strcmp(info.string, "26.6"));
     assert(info.num_length == 3);
-    assert(info.num[0] == 26 && info.num[1] == 6 && info.num[2] == 1);
+    assert(info.num[0] == 26 && info.num[1] == 6 && info.num[2] == 0);
     assert(info.version > V15_0B1);
 
     detect_firmware(&info, "mBoot-18000.161.10");
     assert(info.version == V26_6_2);
-    assert(V26_4 < V26_6_1 && V26_6_1 < V26_6_2);
+    assert(V26_4 < V26_6 && V26_6 < V26_6_2);
 
     detect_firmware(&info, "mBoot-18000.161.91");
     assert(info.version == V_UNKNOWN);
