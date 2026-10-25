@@ -3076,6 +3076,11 @@ static double t6040_f64(u64 w)
 }
 
 /*
+ * Numeric model provenance: Jonathan Goyvaerts' public T6040 GPU work,
+ * https://github.com/aurora-silicon/linux/pull/408, based on Gravity Linux
+ * work by Cody Ho and Niklas Sheth. This C implementation reproduces those
+ * numerical tables with the running chip's calibration.
+ *
  * The power model below, with its constants and the efuse fields read in dt_set_gpu_t6040(),
  * reproduces the J616s device tree's maximum power (69116 mW), its power ladder and both
  * relative tables exactly.
