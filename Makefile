@@ -325,7 +325,10 @@ build-cfg src/../build/build_cfg.h &:
 	$(QUIET)cmp -s build/build_cfg.h build/build_cfg.tmp 2>/dev/null || \
 	( mv -f build/build_cfg.tmp build/build_cfg.h && echo "  CFG   build/build_cfg.h" )
 
-# The built-in boot logos are linked gzip-compressed; fb.c inflates them on first use
+# The built-in boot logos are linked gzip-compressed; fb.c inflates them on first use.
+# They are only read, so they go in .rodata: its 64 KiB alignment padding has room for them,
+# while .data counts towards the file part limit in m1n1-raw.ld.
+LOGO_OBJCOPY_FLAGS := --rename-section .data=.rodata,alloc,load,readonly,data,contents
 build/bootlogo_%.bin.gz: data/bootlogo_%.bin
 	$(QUIET)echo "  GZIP  $@"
 	$(QUIET)mkdir -p "$(dir $@)"
@@ -334,7 +337,7 @@ build/bootlogo_%.bin.gz: data/bootlogo_%.bin
 build/bootlogo_%.o: build/bootlogo_%.bin.gz
 	$(QUIET)echo "  BIN   $@"
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
+	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $(LOGO_OBJCOPY_FLAGS) $< $@
 
 ifneq ($(BUILTIN_LOGO),bootlogo)
 build/$(BUILTIN_LOGO)_%.bin.gz: data/$(BUILTIN_LOGO)_%.bin
@@ -345,7 +348,7 @@ build/$(BUILTIN_LOGO)_%.bin.gz: data/$(BUILTIN_LOGO)_%.bin
 build/$(BUILTIN_LOGO)_%.o: build/$(BUILTIN_LOGO)_%.bin.gz
 	$(QUIET)echo "  BIN   $@"
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
+	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $(LOGO_OBJCOPY_FLAGS) $< $@
 endif
 
 build/%.bin: data/%.bin
