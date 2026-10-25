@@ -4700,8 +4700,8 @@ static int dt_set_t6030_display_maps(const struct adt_segment_ranges *segments, 
         return t6030_display_handoff_fail("DART base: FDT 0x%lx, ADT 0x%lx", dart_base, adt_base);
 
     for (u32 n = 0; n < 2; n++) {
-        if (dart_walk_locked_t8110(dart_base, streams[n], dram_base, dram_size, t6030_display_page,
-                                   &maps[n])) {
+        if (dart_walk_locked_t8110(dart_base, min(adt_size, dart_size), streams[n], dram_base,
+                                   dram_size, t6030_display_page, &maps[n])) {
             if (maps[n].rejected)
                 return t6030_display_handoff_fail("SID%u: no segment for iova 0x%lx -> 0x%lx",
                                                   streams[n], maps[n].rejected_iova,
@@ -5175,8 +5175,8 @@ static int dt_set_j713_display_maps(const struct adt_segment_ranges *segments, u
 
     /* Exact J713 register block; reading tables must not enable/reset streams. */
     for (u32 n = 0; n < 2; n++) {
-        if (dart_walk_locked_t8110(0x30a300000, streams[n], dram_start, dram_size,
-                                    j713_display_page, &maps[n]))
+        if (dart_walk_locked_t8110(0x30a300000, 0xc000, streams[n], dram_start, dram_size,
+                                   j713_display_page, &maps[n]))
             return -1;
         u32 regions = 0;
         for (u32 i = 0; i < count; i++) {

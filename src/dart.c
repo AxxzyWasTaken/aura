@@ -994,12 +994,14 @@ void *dart_translate_silent(dart_dev_t *dart, uintptr_t iova)
  * outside DRAM are refused. @visit is called for every valid L2 entry and stops
  * the walk by returning non-zero.
  */
-int dart_walk_locked_t8110(uintptr_t base, u8 sid, u64 dram_base, u64 dram_size,
+int dart_walk_locked_t8110(uintptr_t base, u64 size, u8 sid, u64 dram_base, u64 dram_size,
                            int (*visit)(u64 iova, u64 paddr, void *opaque), void *opaque)
 {
     u64 dram_end = dram_base + dram_size;
 
-    if (!visit || sid >= 16 || dram_size < SZ_16K || dram_end <= dram_base)
+    /* The stream's TTBR is the highest register read; the window must cover it. */
+    if (!visit || size < DART_T8110_TTBR_OFF + 4 * ((u64)sid + 1) || dram_size < SZ_16K ||
+        dram_end <= dram_base)
         return -1;
 
     u32 tcr = read32(base + DART_T8110_TCR_OFF + 4 * sid);

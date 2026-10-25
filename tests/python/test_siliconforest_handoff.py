@@ -122,12 +122,17 @@ static u32 read32(uintptr_t address) { reads++; return 0; }
 static int visit(u64 iova, u64 physical, void *context) { assert(0); return -1; }
 int main(void)
 {
-    assert(dart_walk_locked_t8110(0, 16, 0, SZ_16K, visit, NULL) == -1 && !reads);
-    assert(dart_walk_locked_t8110(0, 255, 0, SZ_16K, visit, NULL) == -1 && !reads);
-    assert(dart_walk_locked_t8110(0, 0, 0, 1, visit, NULL) == -1 && !reads);
-    assert(dart_walk_locked_t8110(0, 0, UINT64_MAX - 1, SZ_16K, visit, NULL) == -1 && !reads);
-    assert(dart_walk_locked_t8110(0, 0, 0, SZ_16K, NULL, NULL) == -1 && !reads);
-    assert(dart_walk_locked_t8110(0, 15, 0, SZ_16K, visit, NULL) == -1 && reads == 3);
+    /* A 0x1440 window, as J514S validates, holds the TTBRs of streams 0 to 15. */
+    assert(dart_walk_locked_t8110(0, 0x1440, 16, 0, SZ_16K, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0x1440, 255, 0, SZ_16K, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0x1440, 0, 0, 1, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0x1440, 0, UINT64_MAX - 1, SZ_16K, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0x1440, 0, 0, SZ_16K, NULL, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0, 0, 0, SZ_16K, visit, NULL) == -1 && !reads);
+    assert(dart_walk_locked_t8110(0, 0x1440, 15, 0, SZ_16K, visit, NULL) == -1 && reads == 3);
+    /* J713's 0xc000 window reaches stream 16, which its display handoff walks. */
+    assert(dart_walk_locked_t8110(0, 0xc000, 16, 0, SZ_16K, visit, NULL) == -1 && reads == 6);
+    assert(dart_walk_locked_t8110(0, 0xc000, 255, 0, SZ_16K, visit, NULL) == -1 && reads == 9);
     return 0;
 }
 ''')
