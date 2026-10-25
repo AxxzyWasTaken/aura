@@ -231,6 +231,7 @@ struct dcp_soc {
     bool any_uuid;      /* no image pinned: the running image's ADT uuid is published */
     bool log_streams;   /* log the DART stream registers, without the ADT description */
     bool sids;          /* the stream IDs and stream count below; otherwise SIDs 5/0/4 of 16 */
+    bool oslog_in_rsv;  /* an __OS_LOG wholly inside a /memreserve/ is still given its node */
     u8 sid_dcp, sid_disp, sid_piodma, streams;
     const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only (unless any_uuid) */
     u32 os_fw;          /* enum fw_version the kernel's DCP interface is written for */
@@ -397,6 +398,7 @@ static const struct dcp_soc dcp_soc_t6041 = {
     .any_uuid = true,
     .log_streams = true,
     .sids = true,
+    .oslog_in_rsv = true,
     .sid_dcp = 23,
     .sid_disp = 0,
     .sid_piodma = 16,
@@ -643,6 +645,39 @@ static int dcp6_resv_conflict(void *dt, u64 base, u64 size, const char *what)
     return 0;
 }
 
+/*
+ * As dcp6_resv_conflict(), for an __OS_LOG buffer: with .oslog_in_rsv, a /memreserve/ that
+ * contains it whole is no conflict (the buffer is already kept from the OS; the no-map node only
+ * describes it). On the J616s the buffers sit inside the m1n1 retained range on tether boots.
+ */
+static void *dcp6_scratch(void *dt);
+
+static int dcp6_oslog_conflict(void *dt, u64 base, u64 size)
+{
+    if (!dcp6.soc->oslog_in_rsv)
+        return dcp6_resv_conflict(dt, base, size, "__OS_LOG");
+
+    int n = fdt_num_mem_rsv(dt);
+    for (int i = 0; i < n; i++) {
+        u64 a, s;
+        if (fdt_get_mem_rsv(dt, i, &a, &s) || !dcp6_overlaps(base, size, a, s))
+            continue;
+        if (base < a || base + size > a + s)
+            bail("__OS_LOG 0x%lx+0x%lx straddles /memreserve/ 0x%lx+0x%lx\n", base, size, a, s);
+        dlog("__OS_LOG 0x%lx+0x%lx lies inside /memreserve/ 0x%lx+0x%lx\n", base, size, a, s);
+    }
+
+    /* the /reserved-memory part, with no /memreserve/ entries in the way */
+    void *copy = dcp6_scratch(dt);
+    if (!copy)
+        return -1;
+    while (fdt_num_mem_rsv(copy) > 0)
+        fdt_del_mem_rsv(copy, 0);
+    int ret = dcp6_resv_conflict(copy, base, size, "__OS_LOG");
+    free(copy);
+    return ret;
+}
+
 static int dcp6_carveout_conflict(u64 base, u64 size, const char *what)
 {
     for (size_t j = 0; j < mcc_carveout_count; j++)
@@ -871,7 +906,7 @@ static __attribute__((noinline)) void dcp6_reserve_oslogs(void *dt)
                 dlog("%s: __OS_LOG overlaps %s's\n", dcp6.nubs[i], dcp6.nubs[j]);
                 bad = true;
             }
-        if (bad || dcp6_resv_conflict(dt, logs[i].phys, logs[i].size, "__OS_LOG") ||
+        if (bad || dcp6_oslog_conflict(dt, logs[i].phys, logs[i].size) ||
             dcp6_carveout_conflict(logs[i].phys, logs[i].size, "__OS_LOG"))
             continue;
         logs[i].add = true;
