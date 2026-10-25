@@ -34,7 +34,6 @@
 #include "usb_cdc.h"
 #include "utils.h"
 #include "wdt.h"
-#include "stage1_config.h"
 #include "xnuboot.h"
 
 struct vector_args next_stage;

@@ -6836,9 +6836,9 @@ int kboot_prepare_dt(void *fdt)
         printf("FDT: reserved firmware RO [0x%lx, 0x%lx)\n", ro_start, ro_end);
     } else if (!cpu_features->apple_sysregs_unlocked && !in_el2()) {
         /*
-         * A guest under the m1n1 hypervisor runs at EL1 and cannot read the
-         * EL2 CTRR bounds; the host keeps that range and starts no
-         * secondaries for the guest from it.
+         * A guest under the m1n1 hypervisor runs at EL1. The host keeps the
+         * SMP-RO range and starts the guest's CPUs itself, so the guest
+         * leaves it out. This is how the J616s guest boots.
          */
         printf("FDT: running at EL1, leaving the M4+ SMP-RO range to the host\n");
     } else if (!cpu_features->apple_sysregs_unlocked) {
