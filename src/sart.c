@@ -278,6 +278,24 @@ void sart_free(sart_dev_t *sart)
     free(sart);
 }
 
+bool sart_get_allowed(sart_dev_t *sart, int index, u64 *paddr, size_t *sz)
+{
+    void *e_paddr;
+    u8 e_flags;
+
+    if (index < 0 || index >= APPLE_SART_MAX_ENTRIES)
+        return false;
+    sart->get_entry(sart, index, &e_flags, &e_paddr, sz);
+    *paddr = (u64)e_paddr;
+    return e_flags && *sz;
+}
+
+void sart_release(sart_dev_t *sart)
+{
+    /* Unlike sart_free(), leave every entry as it is: a live owner still uses them. */
+    free(sart);
+}
+
 bool sart_add_allowed_region(sart_dev_t *sart, void *paddr, size_t sz)
 {
     for (unsigned int i = 0; i < APPLE_SART_MAX_ENTRIES; ++i) {

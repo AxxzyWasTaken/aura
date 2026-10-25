@@ -28,6 +28,7 @@
 #include "pcie.h"
 #include "pmgr.h"
 #include "rtkit.h"
+#include "sart.h"
 #include "sep.h"
 #include "sio.h"
 #include "smp.h"
@@ -6236,6 +6237,35 @@ int kboot_prepare_dt(void *fdt)
     }
     if (fdt_add_mem_rsv(dt, (u64)_base, image_end - (u64)_base))
         bail("FDT: couldn't add reservation for m1n1 and inherited high-water\n");
+
+    /*
+     * A live ANS handed to Linux keeps every buffer an earlier stage gave it (on a normal boot
+     * Stage 1 read the ESP, so the buffers are in Stage 1's heap, not this one's). Reserve each
+     * SART-allowed range inside RAM; the nvme-apple adoption requires them reserved anyway.
+     */
+    if (chip_id == T6041) {
+        sart_dev_t *sart = sart_init("/arm-io/sart-ans");
+        u64 ram_start = cur_boot_args.phys_base;
+        u64 ram_end = ram_start + cur_boot_args.mem_size;
+
+        if (!sart)
+            bail("FDT: cannot read the ANS SART\n");
+        for (int i = 0; i < 16; i++) {
+            u64 paddr;
+            size_t sz;
+
+            if (!sart_get_allowed(sart, i, &paddr, &sz) || paddr < ram_start || paddr >= ram_end)
+                continue;
+            u64 start = ALIGN_DOWN(paddr, SZ_16K);
+            u64 end = ALIGN_UP(min(paddr + sz, ram_end), SZ_16K);
+            if (fdt_add_mem_rsv(dt, start, end - start)) {
+                sart_release(sart);
+                bail("FDT: couldn't reserve ANS buffer\n");
+            }
+            printf("FDT: ANS buffer [0x%lx, 0x%lx) reserved\n", start, end);
+        }
+        sart_release(sart);
+    }
 
     // m1n1 moved itself above the chainloaded image (start.S); cores with a
     // locked RVBAR still reset into the forwarding vector at the old base.
