@@ -472,8 +472,14 @@ static int dt_set_chosen(void)
             bail("FDT: couldn't set random seed");
     }
 
-    /* T8140 adds only arm64.nowfxt, in dt_set_wfx_args(). */
-    if (!cpu_features->apple_sysregs_unlocked && chip_id != T8140) {
+    /*
+     * Upstream adds these on every chip with locked Apple system registers,
+     * for kernels that cannot survive WFI state loss. Aurora's kernels for
+     * T8132, T6040 and T6041 boot without them, and idle=nop would keep every
+     * idle CPU spinning. T8140 adds only arm64.nowfxt, in dt_set_wfx_args().
+     */
+    if (!cpu_features->apple_sysregs_unlocked && chip_id != T8140 && chip_id != T8132 &&
+        chip_id != T6040 && chip_id != T6041) {
         /*
          * M4 and later lose architectural state in WFI and WFIT. Add the
          * bootargs to prevent Linux from crashing in the idle loop and delay
