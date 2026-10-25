@@ -5,31 +5,39 @@
 Usage: stage1_probe_t6032.py OUTDIR [--power-gpu]
        stage1_probe_t6032.py --selftest
 
-Reads only, with one exception: --power-gpu turns on the GPU power domain through the loader's
-pmgr call, so the hardware-id words can be read. That setting is lost at the next restart.
-Without --power-gpu a failed read is reported and nothing is changed. Every read is guarded:
-a bus fault is counted and reported, it does not stop the probe. It never writes a GPU register
-and never starts firmware.
+It writes no Mac register and no Mac RAM, apart from the loader's own bookkeeping and the UART baud
+rate on a UART link. One option does write hardware: --power-gpu turns on the GPU power domain through
+the loader's pmgr call so the hardware-id words can be read; that setting is lost at the next restart.
+Reads of the hardware-id words and of the GPU firmware image are guarded: a bus fault is counted and
+reported, it does not stop the probe. It never writes a GPU register and never starts firmware.
 
-Writes under OUTDIR: adt.bin (the device tree as the loader holds it; PRIVATE), adt.txt (same, text; PRIVATE),
-gpu-text.bin (the GPU firmware image iBoot loaded; PRIVATE), probe.txt (the report), SHA256SUMS.
+Output, under OUTDIR:
+  probe.txt, SHA256SUMS   the report and its hash: SEND THESE TWO ONLY.
+  private/                adt.bin, adt.txt (the whole device tree: serial, hardware UUID, chip IDs, MACs),
+                          gpu-text.bin (the GPU firmware image) and their hashes. DO NOT SEND.
 """
 import hashlib
 import os
 import struct
 import sys
 
-HWID = (0xD04000, 0xD04010, 0xD04014, 0xD04018, 0xD0401C)  # sgx offsets, see the layout notes
+# sgx offsets. 0xd04000/10/14 and the core mask 0xe01500 (3 words) are the ones src/kboot_gpu.c reads
+# (G15_SGX_ID_VERSION, ID_COUNTS_1, ID_COUNTS_2, CORE_MASK). 0xd04018/0xd0401c are NOT read by m1n1: they
+# come from the macOS kext reading in the layout notes (section 7); the probe reads them to test that reading.
+HWID = (0xD04000, 0xD04010, 0xD04014, 0xD04018, 0xD0401C, 0xE01500, 0xE01504, 0xE01508)
 TAG = b"GKTS"
 
 
 def decode_hwid(w):
-    """Words at sgx+0xd04000/10/14/18/1c -> readable facts (kext readChipInfo reading; INFERENCE until measured)."""
+    """Words at sgx+0xd04000 and +0xd04010 -> readable facts.
+    ID_COUNTS_1 fields as src/kboot_gpu.c documents them: [7:0] cores per cluster, [15:8] clusters per die,
+    [19:16] dies. The family/variant split of the first word is the kext reading (INFERENCE until measured)."""
     v, c = w[0], w[1]
     return {
         "family": v >> 24,
         "variant": (v >> 16) & 0xFF,
-        "per_die": (c >> 8) & 0xFF,
+        "cores_per_cluster": c & 0xFF,
+        "clusters_per_die": (c >> 8) & 0xFF,
         "dies": (c >> 16) & 0xF,
     }
 
@@ -52,7 +60,8 @@ def segments(raw):
 
 
 def selftest():
-    assert decode_hwid([0x07040000, 0x00021000]) == {"family": 7, "variant": 4, "per_die": 0x10, "dies": 2}
+    assert decode_hwid([0x07040000, 0x0002040A]) == {
+        "family": 7, "variant": 4, "cores_per_cluster": 10, "clusters_per_die": 4, "dies": 2}
     raw = struct.pack("<4Q", 0x1000, 0xFFFFFC0000000000, 0x1000, 0x100060000)
     assert segments(raw)[0][3] & 0xFFFFFFFF == 0x60000
     t = b"a" * 10 + TAG + bytes(range(1, 9)) + b"z"
@@ -62,11 +71,20 @@ def selftest():
     print("selftest ok")
 
 
+def write_sums(directory, names):
+    """SHA256SUMS in `directory` for exactly `names` (no shell, no stale file)."""
+    with open(os.path.join(directory, "SHA256SUMS"), "w") as fh:
+        for n in names:
+            with open(os.path.join(directory, n), "rb") as src:
+                fh.write(f"{hashlib.sha256(src.read()).hexdigest()}  {n}\n")
+
+
 def main():
     if "--selftest" in sys.argv:
         return selftest()
     out = sys.argv[1]
-    os.makedirs(out, exist_ok=True)
+    priv = os.path.join(out, "private")
+    os.makedirs(priv, exist_ok=True)
     sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     from m1n1.proxy import GUARD, M1N1Proxy, UartInterface
     from m1n1.proxyutils import ProxyUtils, bootstrap_port
@@ -83,22 +101,43 @@ def main():
         rep.write(s + "\n")
         rep.flush()
 
-    log("probe: stage1_probe_t6032 v1")
+    def guarded(fn):
+        """Run fn with exceptions guarded; return (value, faulted)."""
+        p.set_exc_guard(GUARD.MARK | GUARD.SILENT)
+        before = p.get_exc_count()
+        try:
+            v = fn()
+        finally:
+            faulted = p.get_exc_count() != before
+            p.set_exc_guard(GUARD.OFF)
+        return v, faulted
+
+    log("probe: stage1_probe_t6032 v2")
     log(f"loader base: {u.base:#x}")
     adt_raw = u.get_adt()
-    open(os.path.join(out, "adt.bin"), "wb").write(adt_raw)
+    with open(os.path.join(priv, "adt.bin"), "wb") as fh:
+        fh.write(adt_raw)
     dt = u.adt
-    open(os.path.join(out, "adt.txt"), "w").write(str(dt))
+    with open(os.path.join(priv, "adt.txt"), "w") as fh:
+        fh.write(str(dt))
     log(f"model: {dt.model}  target: {dt.target_type}  adt bytes: {len(adt_raw)}")
 
-    # 1. GPU firmware image iBoot loaded (plain memory read, no GPU register involved)
+    # 1. GPU firmware image iBoot loaded (a memory read, no GPU register involved)
     asc = dt["/arm-io/gfx-asc"]
-    segs = segments(asc._properties["segment-ranges"])  # set by iBoot at run time; not in the IPSW tree
-    log("gfx-asc segments (phys, iova, size): " + "; ".join(f"{s[0]:#x} {s[1]:#x} {s[3] & 0xFFFFFFFF:#x}" for s in segs))
-    text = iface.readmem(segs[0][0], segs[0][3] & 0xFFFFFFFF)
-    open(os.path.join(out, "gpu-text.bin"), "wb").write(text)
-    for name, dg in text_digests(text):
-        log(f"gpu text {name}: {dg}")
+    raw = asc._properties.get("segment-ranges")  # set by iBoot at run time; not in the IPSW tree
+    if raw is None:
+        log("gpu text: not read (gfx-asc has no segment-ranges property)")
+    else:
+        segs = segments(raw)
+        log("gfx-asc segments (phys, iova, size): " + "; ".join(f"{s[0]:#x} {s[1]:#x} {s[3] & 0xFFFFFFFF:#x}" for s in segs))
+        text, faulted = guarded(lambda: iface.readmem(segs[0][0], segs[0][3] & 0xFFFFFFFF))
+        if faulted or not text:
+            log("gpu text: not readable (bus fault or empty read)")
+        else:
+            with open(os.path.join(priv, "gpu-text.bin"), "wb") as fh:
+                fh.write(text)
+            for name, dg in text_digests(text):
+                log(f"gpu text {name}: {dg}")
 
     # 2. hardware-id words: a bus fault here is reported, not fatal
     base = dt["/arm-io/sgx"].get_reg(0)[0]
@@ -110,21 +149,20 @@ def main():
         except Exception as e:
             log(f"  failed: {e}")
     words = []
-    p.set_exc_guard(GUARD.MARK | GUARD.SILENT)
     for off in HWID:
-        before = p.get_exc_count()
-        v = p.read32(base + off)
-        faulted = p.get_exc_count() != before
+        v, faulted = guarded(lambda off=off: p.read32(base + off))
         words.append(None if faulted else v)
         log(f"sgx+{off:#x}: " + ("BUS FAULT" if faulted else f"{v:#010x}"))
-    p.set_exc_guard(GUARD.OFF)
-    if None not in words:
+    if None not in words[:2]:
         log(f"decoded (inference): {decode_hwid(words)}")
     else:
         log("hardware-id words not read; rerun with --power-gpu if that was not used")
 
+    log("send probe.txt and SHA256SUMS only; never send the private folder")
     rep.close()
-    os.system(f"cd '{out}' && shasum -a 256 * > SHA256SUMS 2>/dev/null || sha256sum * > SHA256SUMS")
+    private = [n for n in ("adt.bin", "adt.txt", "gpu-text.bin") if os.path.exists(os.path.join(priv, n))]
+    write_sums(priv, private)
+    write_sums(out, ["probe.txt"])
 
 
 if __name__ == "__main__":
