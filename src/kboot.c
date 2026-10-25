@@ -6205,7 +6205,12 @@ int kboot_prepare_dt(void *fdt)
             image_end < (u64)_base || image_end > ram_end)
             bail("FDT: invalid T8103 inherited memory extent\n");
     }
-    if (chip_id == T8140) {
+    /*
+     * T6041 hands the live ANS over the same way (nvme.adopt=live-rtkit-v1): its RTKit buffers
+     * sit in this stage's heap and must stay out of Linux's allocator (J616C: ANS syslog lines
+     * in page-cache pages at the SART-allowed heap addresses).
+     */
+    if (chip_id == T8140 || chip_id == T6041) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;
         u64 high_water = heapblock_high_water();
 
@@ -6216,7 +6221,7 @@ int kboot_prepare_dt(void *fdt)
         image_end = max(image_end, inherited);
         if ((u64)_base < cur_boot_args.phys_base || image_end < (u64)_base || image_end > ram_end ||
             high_water > ram_end)
-            bail("FDT: invalid T8140 retained memory extent\n");
+            bail("FDT: invalid retained memory extent\n");
 
         u64 heap_top = max(inherited, high_water);
         if (heap_top > (u64)_end) {
