@@ -200,6 +200,13 @@ bool rtkit_send(rtkit_dev_t *rtk, const struct rtkit_message *msg)
     return asc_send(rtk->asc, &asc_msg);
 }
 
+/* A failed handshake can already have granted host storage to firmware. */
+bool rtkit_has_owned_buffers(const rtkit_dev_t *rtk)
+{
+    return rtk && (rtk->syslog_bfr.owned || rtk->crashlog_bfr.owned || rtk->ioreport_bfr.owned ||
+                   rtk->oslog_bfr.owned);
+}
+
 bool rtkit_map(rtkit_dev_t *rtk, void *phys, size_t sz, u64 *dva)
 {
     sz = ALIGN_UP(sz, 16384);
@@ -776,12 +783,9 @@ u32 rtkit_get_timeout(rtkit_dev_t *rtk)
     return rtk->timeout_usec;
 }
 
-static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state target)
+static bool rtkit_quiesce_ap_power(rtkit_dev_t *rtk)
 {
     struct asc_message msg;
-
-    if (rtk->crashed)
-        return false;
 
     /* AP power should always go to QUIESCED, otherwise rebooting doesn't work */
     msg.msg0 = FIELD_PREP(MGMT_TYPE, MGMT_MSG_AP_PWR_STATE) |
@@ -811,13 +815,27 @@ static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state ta
         }
     }
 
+    return true;
+}
+
+static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state target)
+{
+    struct asc_message msg;
+
+    if (rtk->crashed)
+        return false;
+
+    if (!rtkit_quiesce_ap_power(rtk))
+        return false;
+
     msg.msg0 = FIELD_PREP(MGMT_TYPE, MGMT_MSG_IOP_PWR_STATE) | FIELD_PREP(MGMT_PWR_STATE, target);
+    msg.msg1 = RTKIT_EP_MGMT;
     if (!asc_send(rtk->asc, &msg)) {
         rtkit_printf("unable to send shutdown message\n");
         return false;
     }
 
-    timeout = timeout_calculate(rtk->timeout_usec ? rtk->timeout_usec : 1000000);
+    u64 timeout = timeout_calculate(rtk->timeout_usec ? rtk->timeout_usec : 1000000);
     while (rtk->iop_power != target) {
         if (timeout_expired(timeout)) {
             rtkit_printf("IOP power transition timed out\n");
@@ -834,6 +852,39 @@ static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state ta
             rtkit_printf("IOP died during shutdown\n");
             return false;
         }
+    }
+
+    return true;
+}
+
+/*
+ * Stop the IOP sending syslog, ioreport and oslog traffic to the AP while the
+ * IOP itself keeps running, for a next stage that uses the coprocessor without
+ * servicing its mailbox.
+ */
+bool rtkit_quiesce_ap(rtkit_dev_t *rtk)
+{
+    struct rtkit_message msg;
+    int ret;
+
+    if (rtk->crashed)
+        return false;
+
+    while ((ret = rtkit_recv(rtk, &msg)) > 0)
+        rtkit_printf("dropping message to non-system endpoint 0x%02x before AP quiesce: %lx\n",
+                     msg.ep, msg.msg);
+    if (ret < 0 || !rtkit_quiesce_ap_power(rtk))
+        return false;
+
+    /* Acknowledge anything the IOP sent along with the transition. */
+    u64 timeout = timeout_calculate(50000);
+    while (!timeout_expired(timeout)) {
+        ret = rtkit_recv(rtk, &msg);
+        if (ret < 0)
+            return false;
+        if (ret > 0)
+            rtkit_printf("dropping message to non-system endpoint 0x%02x after AP quiesce: %lx\n",
+                         msg.ep, msg.msg);
     }
 
     return true;

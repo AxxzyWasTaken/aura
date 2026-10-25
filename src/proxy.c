@@ -29,6 +29,7 @@
 #include "usb.h"
 #include "usb_cdc.h"
 #include "utils.h"
+#include "wdt.h"
 #include "xnuboot.h"
 
 #include "minilzlib/minlzma.h"
@@ -126,6 +127,14 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_PUT_SIMD_STATE:
             put_simd_state((void *)request->args[0]);
+            break;
+        case P_WDT_ARM:
+            reply->retval = request->args[0] < 1 || request->args[0] > 178
+                                ? -1
+                                : wdt_arm_seconds(request->args[0]);
+            break;
+        case P_WDT_DISABLE:
+            wdt_disable();
             break;
         case P_REBOOT:
             reboot();
@@ -647,7 +656,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             reply->retval = display_configure((char *)request->args[0]);
             break;
         case P_DISPLAY_SHUTDOWN:
-            display_shutdown(request->args[0]);
+            reply->retval = display_shutdown(request->args[0]);
             break;
         case P_DISPLAY_START_DCP:
             display_start_dcp();
@@ -665,6 +674,15 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
 
         case P_CPUFREQ_INIT:
             reply->retval = cpufreq_init();
+            break;
+        case P_CPUFREQ_GET_CLUSTER_HZ:
+            reply->retval =
+                request->args[0] > UINT32_MAX ? 0 : cpufreq_get_cluster_hz(request->args[0]);
+            break;
+        case P_CPUFREQ_SET_CLUSTER_PSTATE:
+            reply->retval = request->args[0] > UINT32_MAX || request->args[1] > UINT32_MAX
+                                ? -1
+                                : cpufreq_set_cluster_pstate(request->args[0], request->args[1]);
             break;
 
         case P_READ_GIGALOCKER: {

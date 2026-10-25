@@ -67,11 +67,10 @@ static u32 pstate_reg_to_pstate(u64 val)
         case T6020:
         case T6021:
         case T6022:
-        case T6030:
-        case T6031:
-        case T6034:
+        case T6030 ... T6034:
         case T8122:
         case T8142:
+        case T8140:
             return FIELD_GET(CLUSTER_PSTATE_DESIRED1, val);
         default:
             printf("cpufreq: Chip 0x%x is unsupported\n", chip_id);
@@ -115,11 +114,10 @@ static int set_pstate(const struct cluster_t *cluster, uint32_t pstate)
             case T6020:
             case T6021:
             case T6022:
-            case T6030:
-            case T6031:
-            case T6034:
+            case T6030 ... T6034:
             case T8122:
             case T8142:
+            case T8140:
                 val &= ~CLUSTER_PSTATE_DESIRED1;
                 val |= CLUSTER_PSTATE_SET | FIELD_PREP(CLUSTER_PSTATE_DESIRED1, pstate);
                 break;
@@ -197,9 +195,7 @@ int cpufreq_init_cluster(const struct cluster_t *cluster, const struct feat_t *f
             /* APSC Snooze */
             set64(cluster->base + 0x200f8, BIT(40));
             break;
-        case T6030:
-        case T6031:
-        case T6034:
+        case T6030 ... T6034:
         case T8122:
             /* Unknown */
             write64(cluster->base + 0x440f8, 1);
@@ -359,6 +355,16 @@ static const struct cluster_t t6031_clusters[] = {
     {},
 };
 
+static const struct cluster_t t6032_clusters[] = {
+    {"ECPU0", 0x0210e00000, false, 1, 5},
+    {"PCPU0", 0x0211e00000, true, 1, 6},
+    {"PCPU1", 0x0212e00000, true, 1, 6},
+    {"ECPU1", 0x2210e00000, false, 1, 5},
+    {"PCPU2", 0x2211e00000, true, 1, 6},
+    {"PCPU3", 0x2212e00000, true, 1, 6},
+    {},
+};
+
 static const struct cluster_t t6030_clusters[] = {
     {"ECPU0", 0x210e00000, false, 1, 5},
     {"PCPU0", 0x211e00000, true, 1, 6},
@@ -414,6 +420,8 @@ const struct cluster_t *cpufreq_get_clusters(void)
         case T6031:
         case T6034:
             return t6031_clusters;
+        case T6032:
+            return t6032_clusters;
         default:
             printf("cpufreq: Chip 0x%x is unsupported\n", chip_id);
             return NULL;
@@ -532,9 +540,7 @@ const struct feat_t *cpufreq_get_features(void)
         case T6021:
         case T6022:
             return t6020_features;
-        case T6030:
-        case T6031:
-        case T6034:
+        case T6030 ... T6034:
             return t6030_features;
         default:
             printf("cpufreq: Chip 0x%x is unsupported\n", chip_id);
@@ -542,7 +548,7 @@ const struct feat_t *cpufreq_get_features(void)
     }
 }
 
-/* T8152ACC::setPerfState in matching 26A428 firmware uses logical offset
+/* On T8152 (26A428 firmware) a perf-state request uses logical offset
  * 0xe20020. E/P ACC maps resolve that to RegMap 0x20/0x40 + 0x20. The ADT
  * supplies the physical apertures and the hardware-index bias (2 on J873g).
  * Do not apply earlier-generation voltage/PLL/chicken-bit initialization. */
@@ -563,8 +569,8 @@ static int t8152_cpufreq_init(void)
         return 0;
     int path[8];
     int node = adt_path_offset_trace(adt, "/arm-io/pmgr-child", path);
-    if (chip_id != T8152 || board_id != 0x24 || !adt_is_compatible(adt, 0, "J873gAP") ||
-        node < 0 || !adt_is_compatible(adt, node, "pmgr2,t8152"))
+    if (chip_id != T8152 || board_id != 0x24 || !adt_is_compatible(adt, 0, "J873gAP") || node < 0 ||
+        !adt_is_compatible(adt, node, "pmgr2,t8152"))
         return -1;
     u32 len;
     const u16 *maps = adt_getprop(adt, node, "reg-maps", &len);
@@ -590,11 +596,11 @@ static int t8152_cpufreq_init(void)
         if (!opps || !table_len || table_len % 8 || table_len / 8 + t8152_state0 > 32)
             return -1;
         for (u32 i = 0; i < table_len / 8; i++) {
-            if (!opps[2 * i] || opps[2 * i] > 5000000 ||
-                (i && opps[2 * i] <= opps[2 * (i - 1)]))
+            if (!opps[2 * i] || opps[2 * i] > 5000000 || (i && opps[2 * i] <= opps[2 * (i - 1)]))
                 return -1;
         }
-        t8152_clocks[c] = (struct t8152_clock){.reg = base + 0x20, .opps = opps, .count = table_len / 8};
+        t8152_clocks[c] =
+            (struct t8152_clock){.reg = base + 0x20, .opps = opps, .count = table_len / 8};
     }
     t8152_clocks_ready = true;
     return 0;
@@ -602,20 +608,23 @@ static int t8152_cpufreq_init(void)
 
 __attribute__((used, retain, noinline)) u64 cpufreq_get_cluster_hz(unsigned int cluster)
 {
+    if (chip_id == T6040)
+        return cpufreq_t6040_get_hz(cluster);
     if (cluster >= 2 || t8152_cpufreq_init())
         return 0;
     struct t8152_clock *c = &t8152_clocks[cluster];
     u64 raw = read64(c->reg);
     u32 state = raw & 31;
-    if ((raw & CLUSTER_PSTATE_BUSY) || state < t8152_state0 ||
-        state - t8152_state0 >= c->count)
+    if ((raw & CLUSTER_PSTATE_BUSY) || state < t8152_state0 || state - t8152_state0 >= c->count)
         return 0;
     return (u64)c->opps[2 * (state - t8152_state0)] * 1000;
 }
 
 __attribute__((used, retain, noinline)) int cpufreq_set_cluster_pstate(unsigned int cluster,
-                                                                   unsigned int pstate)
+                                                                       unsigned int pstate)
 {
+    if (chip_id == T6040)
+        return cpufreq_t6040_set_pstate(cluster, pstate);
     if (cluster >= 2 || t8152_cpufreq_init())
         return -1;
     struct t8152_clock *c = &t8152_clocks[cluster];
@@ -638,8 +647,39 @@ failed:
 }
 
 
+/*
+ * iBoot hands T8140 over with the P cluster at P1 (744 MHz), where inflating a
+ * 45 MB kernel Image takes ~2.3 s. cpufreq_init() leaves T8140 alone, so raise
+ * only the P cluster while payloads are loaded and put iBoot's P-state back
+ * before the SMP bring-up and the kernel handoff.
+ */
+#define T8140_PAYLOAD_BOOST_PSTATE 8
+
+static const struct cluster_t t8140_pcluster = {"PCPU", 0x211e00000, true, 0, 0, 0};
+static u32 t8140_inherited_pstate;
+static bool t8140_boosted;
+
+void cpufreq_payload_boost(bool enable)
+{
+    if (chip_id != T8140 || enable == t8140_boosted)
+        return;
+
+    if (enable)
+        t8140_inherited_pstate =
+            pstate_reg_to_pstate(read64(t8140_pcluster.base + CLUSTER_PSTATE));
+
+    u32 pstate = enable ? T8140_PAYLOAD_BOOST_PSTATE : t8140_inherited_pstate;
+    if (set_pstate(&t8140_pcluster, pstate))
+        printf("cpufreq: payload boost %d failed on %s\n", enable, t8140_pcluster.name);
+
+    /* Even after a failed raise, try to restore the inherited state. */
+    t8140_boosted = enable;
+}
+
 int cpufreq_init(void)
 {
+    if (chip_id == T6040)
+        return cpufreq_t6040_init();
     if (chip_id == T8140) {
         printf("cpufreq: skipping T8140 P-state hold pending register evidence\n");
         return 0;
@@ -667,7 +707,7 @@ int cpufreq_init(void)
 
 void cpufreq_fixup(void)
 {
-    if (chip_id == T8140)
+    if (chip_id == T6040 || chip_id == T8140)
         return;
 
     const struct cluster_t *cluster = cpufreq_get_clusters();

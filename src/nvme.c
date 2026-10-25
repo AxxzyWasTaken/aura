@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h"
+
 #include "adt.h"
 #include "assert.h"
 #include "malloc.h"
@@ -141,6 +143,9 @@ static sart_dev_t *nvme_sart = NULL;
 
 static u64 nvme_base;
 static u64 nvmmu_base;
+/* Block holding LINEAR_SQ_CTRL and the linear submission queue doorbells. */
+static u64 nvme_lsq_base;
+static bool nvme_lsq_in_nvmmu;
 
 static struct nvme_queue adminq, ioq;
 static bool nvme_cmd_timed_out;
@@ -166,7 +171,7 @@ static void nvme_log_entry_state(bool running)
            read32(nvme_base + NVME_MAX_PEND_CMDS_CTRL));
     printf("nvme: entry LINEAR_SQ=0x%x NVMMU_NUM=0x%x NVMMU_ASQ_TCB=0x%lx "
            "NVMMU_IOSQ_TCB=0x%lx\n",
-           read32(nvme_base + NVME_LINEAR_SQ_CTRL), read32(nvmmu_base + NVMMU_NUM),
+           read32(nvme_lsq_base + NVME_LINEAR_SQ_CTRL), read32(nvmmu_base + NVMMU_NUM),
            nvme_read64_lo_hi(nvmmu_base + NVMMU_ASQ_BASE),
            nvme_read64_lo_hi(nvmmu_base + NVMMU_IOSQ_BASE));
 }
@@ -253,7 +258,7 @@ static bool nvme_ctrl_shutdown(void)
 static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u64 *result)
 {
     /* A timed-out command may still own slot 0 and its DMA mappings. */
-    if (q->failed)
+    if (nvme_reboot_required || q->failed)
         return false;
 
     bool found = false;
@@ -285,9 +290,9 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u6
 
     nvme_poll_syslog();
     if (q->adminq)
-        write32(nvme_base + NVME_DB_LINEAR_ASQ, tag);
+        write32(nvme_lsq_base + NVME_DB_LINEAR_ASQ, tag);
     else
-        write32(nvme_base + NVME_DB_LINEAR_IOSQ, tag);
+        write32(nvme_lsq_base + NVME_DB_LINEAR_IOSQ, tag);
     nvme_poll_syslog();
 
     timeout = timeout_calculate(NVME_TIMEOUT);
@@ -357,6 +362,8 @@ bool nvme_init(void)
 
     nvme_base = 0;
     nvmmu_base = 0;
+    nvme_lsq_base = 0;
+    nvme_lsq_in_nvmmu = false;
     nvme_die = 0;
     nvme_asc = NULL;
     nvme_rtkit = NULL;
@@ -403,17 +410,28 @@ bool nvme_init(void)
             goto out_reset;
         }
         /*
-         * The J700 ADT advertises only the first 64 KiB of this alias.
+         * The J700 and J713 ADTs advertise only the first 64 KiB of this alias.
          * Its linear queue registers live at +0x24908..+0x24910 in the
          * same non-secure alias. The public T8140 Linux binding describes
          * the full 0x30000 aperture. Admit only that measured SoC/layout;
          * retain the normal bounds and overlap checks for every other BAR.
          */
-        if (chip_id == T8140 && nvmmu_base == 0x38dcc0000 &&
-            nvme_base == 0x3cdcc0000 && nvme_size == 0x10000)
+        if (nvme_size == 0x10000 &&
+            ((chip_id == T8140 && nvmmu_base == 0x38dcc0000 && nvme_base == 0x3cdcc0000) ||
+             (chip_id == T8132 && nvmmu_base == 0x485cc0000 && nvme_base == 0x4c5cc0000)))
             nvme_size = 0x30000;
-        if (nvmmu_size < NVMMU_TCB_STAT + sizeof(u32) ||
-            nvme_size < NVME_DB_LINEAR_IOSQ + sizeof(u32) || nvmmu_base > UINT64_MAX - nvmmu_size ||
+        /*
+         * On T6040/T6041 the "nvme" block really ends at 0x10000: LINEAR_SQ_CTRL and the
+         * linear submission queue doorbells sit at the same offsets in the NVMMU block,
+         * and the firmware enables the linear queues itself (as the Linux driver's
+         * apple,t6041-nvme-ans2 entry does).
+         */
+        nvme_lsq_in_nvmmu = chip_id == T6040 || chip_id == T6041;
+        u64 lsq_size = nvme_lsq_in_nvmmu ? nvmmu_size : nvme_size;
+        u64 nvme_need = nvme_lsq_in_nvmmu ? NVME_BOOT_STATUS + sizeof(u32)
+                                          : NVME_DB_LINEAR_IOSQ + sizeof(u32);
+        if (nvmmu_size < NVMMU_TCB_STAT + sizeof(u32) || nvme_size < nvme_need ||
+            lsq_size < NVME_DB_LINEAR_IOSQ + sizeof(u32) || nvmmu_base > UINT64_MAX - nvmmu_size ||
             nvme_base > UINT64_MAX - nvme_size ||
             (nvmmu_base < nvme_base + nvme_size && nvme_base < nvmmu_base + nvmmu_size)) {
             printf("nvme: invalid split BAR geometry\n");
@@ -422,6 +440,7 @@ bool nvme_init(void)
     } else {
         nvme_base = nvmmu_base;
     }
+    nvme_lsq_base = nvme_lsq_in_nvmmu ? nvmmu_base : nvme_base;
 
     u32 cg;
     if (ADT_GETPROP(adt, node, "clock-gates", &cg) < 0) {
@@ -451,7 +470,16 @@ bool nvme_init(void)
     if (nvme_type == NVME_T8132) {
         bool running = asc_cpu_running(nvme_asc);
         nvme_log_entry_state(running);
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+        /* Stage 1 runs straight after iBoot: a running ANS here is iBoot's
+         * session, which still needs the RTKit handshake. Only an earlier
+         * m1n1 stage (nvme.adopt) leaves a session that can be adopted. */
         adopting = nvme_adopt_live_session;
+#else
+        /* Older stage 1 shuts ANS down; newer stage 1 leaves a live session.
+         * Never replay RTKit's one-time handshake on the latter. */
+        adopting = nvme_adopt_live_session || (chip_id == T8132 && running);
+#endif
         if (adopting) {
             u32 boot_status = read32(nvme_base + NVME_BOOT_STATUS);
             u32 csts = read32(nvme_base + NVME_CSTS);
@@ -484,7 +512,8 @@ bool nvme_init(void)
 
 setup_controller:
     /* setup controller and NVMMU for linear submission queue */
-    set32(nvme_base + NVME_LINEAR_SQ_CTRL, NVME_LINEAR_SQ_CTRL_EN);
+    if (!nvme_lsq_in_nvmmu)
+        set32(nvme_lsq_base + NVME_LINEAR_SQ_CTRL, NVME_LINEAR_SQ_CTRL_EN);
     write32(nvme_base + NVME_MAX_PEND_CMDS_CTRL,
             ((NVME_QUEUE_SIZE - 1) << 16) | (NVME_QUEUE_SIZE - 1));
     write32(nvmmu_base + NVMMU_NUM, NVME_QUEUE_SIZE - 1);
@@ -586,6 +615,8 @@ out_reset:
     nvme_sart = NULL;
     nvme_base = 0;
     nvmmu_base = 0;
+    nvme_lsq_base = 0;
+    nvme_lsq_in_nvmmu = false;
     nvme_die = 0;
     return false;
 
@@ -662,6 +693,10 @@ bool nvme_shutdown(void)
         return true;
     }
 
+    /* A failed queue can still own DMA even when the controller looks ready. */
+    if (nvme_type == NVME_T8132 && (adminq.failed || ioq.failed))
+        goto out_preserve;
+
     if (nvme_type == NVME_T8132 && nvme_keep_running_for_linux) {
         u32 cc = read32(nvme_base + NVME_CC);
         u32 csts = read32(nvme_base + NVME_CSTS);
@@ -683,28 +718,47 @@ bool nvme_shutdown(void)
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_CMD_DELETE_SQ;
     cmd.cdw10 = 1; // sq id
-    if (!nvme_exec_command(&adminq, &cmd, NULL))
+    if (!nvme_exec_command(&adminq, &cmd, NULL)) {
         printf("nvme: delete sq command failed\n");
+        if (nvme_type == NVME_T8132)
+            goto out_preserve;
+    }
 
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_CMD_DELETE_CQ;
     cmd.cdw10 = 1; // cq id
-    if (!nvme_exec_command(&adminq, &cmd, NULL))
+    if (!nvme_exec_command(&adminq, &cmd, NULL)) {
         printf("nvme: delete cq command failed\n");
+        if (nvme_type == NVME_T8132)
+            goto out_preserve;
+    }
 
-    if (!nvme_ctrl_shutdown())
+    if (!nvme_ctrl_shutdown()) {
         printf("nvme: timeout while waiting for controller shutdown\n");
-    if (nvme_type == NVME_T8132) {
-        write64_lo_hi(nvme_base + NVME_IOQ_CMDS, 0);
-        write64_lo_hi(nvme_base + NVME_IOQ_CQES, 0);
+        if (nvme_type == NVME_T8132)
+            goto out_preserve;
     }
     if (!nvme_ctrl_disable()) {
         printf("nvme: timeout while waiting for CSTS.RDY to clear\n");
         if (nvme_type == NVME_T8132)
-            return false;
+            goto out_preserve;
     }
 
     if (nvme_type == NVME_T8132) {
+        write64_lo_hi(nvme_base + NVME_IOQ_CMDS, 0);
+        write64_lo_hi(nvme_base + NVME_IOQ_CQES, 0);
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+        /* Stage 2 and U-Boot adopt this session without servicing its mailbox
+         * (only Linux takes RTKit ownership again), so stop the IOP pushing
+         * log traffic at the AP before handing it on. Only T8132 has run
+         * this; the other M4-generation chips keep their stage 1 hand-off. */
+        if (chip_id == T8132) {
+            if (nvme_rtkit && rtkit_quiesce_ap(nvme_rtkit))
+                printf("nvme: ANS AP power quiesced for the next stage\n");
+            else
+                printf("nvme: could not quiesce ANS AP power; later stages may stall\n");
+        }
+#endif
         nvme_adopt_live_session = true;
         nvme_initialized = false;
         printf("nvme: controller disabled; preserving live RTKit session\n");
@@ -724,13 +778,20 @@ bool nvme_shutdown(void)
 
     printf("nvme: shutdown done\n");
     return true;
+
+out_preserve:
+    /* Leave every queue allocation and the live RTKit session owned. */
+    nvme_reboot_required = true;
+    nvme_adopt_live_session = false;
+    printf("nvme: unsafe post-M4 queue handoff; retaining DMA resources until reboot\n");
+    return false;
 }
 
 bool nvme_flush(u32 nsid)
 {
     struct nvme_command cmd;
 
-    if (!nvme_initialized)
+    if (nvme_reboot_required || !nvme_initialized)
         return false;
 
     memset(&cmd, 0, sizeof(cmd));
@@ -758,8 +819,9 @@ static bool nvme_submit_read(u32 nsid, u64 lba, void *buffer, u32 count, u64 prp
 
 bool nvme_read_blocks(u32 nsid, u64 lba, void *buffer, u32 count)
 {
-    if (!nvme_initialized || ioq.failed || !count || count > NVME_MAX_READ_BLOCKS ||
-        ((u64)buffer & (SZ_4K - 1)) || lba > UINT64_MAX - (count - 1))
+    if (nvme_reboot_required || !nvme_initialized || ioq.failed || !count ||
+        count > NVME_MAX_READ_BLOCKS || ((u64)buffer & (SZ_4K - 1)) ||
+        lba > UINT64_MAX - (count - 1))
         return false;
 
     if (count > 1 && nvme_multi_enabled) {

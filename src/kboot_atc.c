@@ -146,6 +146,46 @@ static const struct adt_tunable_info atc_tunables_t8122[] = {
     {"tunable_LN1_TX_SHM_CIO_DFLT", "apple,tunable-lane1-cio", 0x14000, 0x1000, true},
 };
 
+/*
+ * T8132 has separate AXI, LIOA, fabric and common-configuration banks. Keep
+ * their lists apart: the Linux PHY must not map the intervening display
+ * crossbar, nor apply the fabric list through its smaller core resource.
+ */
+static const struct adt_tunable_info atc_tunables_t8132_usb3[] = {
+    {"tunable_ATCAXI2AF", "apple,tunable-usb3-axi2af", 0, 0x8000, true},
+    {"tunable_ATCAXI2AF_WR_DIS", "apple,tunable-usb3-axi2af", 0, 0x8000, true},
+    {"tunable_ATCAXI2AF_LOCK_LOCK", "apple,tunable-usb3-axi2af", 0, 0x8000, true},
+    {"tunable_ATCAXI2AF_LIOA_IOA", "apple,tunable-usb3-lioa", 0, 0x4000, true},
+    {"tunable_ATC_FABRIC", "apple,tunable-usb3-fabric", 0, 0x4000, true},
+    {"tunable_ATC_COMMON_CFG", "apple,tunable-usb3-config", 0, 0x4000, true},
+    {"tunable_AUSCMN_DIG", "apple,tunable-usb3-common", 0x800, 0x200, true},
+    {"tunable_AUSPLL_CORE", "apple,tunable-usb3-common", 0x2200, 0x4000, true},
+    {"tunable_CIO3PLL_CORE", "apple,tunable-usb3-common", 0x2a00, 0x200, true},
+    {"tunable_CIO3PLL_TOP", "apple,tunable-usb3-common", 0x2800, 0x200, true},
+    {"tunable_ACIOPHY_LANE_USBC0", "apple,tunable-usb3-common", 0x5000, 0x1000, true},
+    {"tunable_ACIOPHY_PLL_TOP", "apple,tunable-usb3-common", 0x1000, 0x4000, true},
+    {"tunable_ACIOPHY_TOP", "apple,tunable-usb3-common", 0, 0x4000, true},
+    {"tunable_AUSCMN_SHM", "apple,tunable-usb3-efuse", 0xa00, 0x200, true},
+    {"tunable_CLKMON_CFG", "apple,tunable-usb3-efuse", 0x2600, 0x100, true},
+    {"tunable_LN0_RX_TOP_USB_DFLT", "apple,tunable-lane0-usb", 0x9000, 0x1000, true},
+    {"tunable_LN0_RX_TOP_USB_EQA", "apple,tunable-lane0-usb", 0x9000, 0x1000, false},
+    {"tunable_LN0_RX_EQ_USB_EQA", "apple,tunable-lane0-usb", 0xa000, 0x1000, true},
+    {"tunable_LN0_RX_SHM_USB_DFLT", "apple,tunable-lane0-usb", 0xb000, 0x1000, true},
+    {"tunable_LN0_TX_TOP_USB_DFLT", "apple,tunable-lane0-usb", 0xc000, 0x1000, true},
+    {"tunable_LN0_TX_SHM_USB_DFLT", "apple,tunable-lane0-usb", 0xd000, 0x1000, true},
+    {"tunable_LN1_RX_TOP_USB_DFLT", "apple,tunable-lane1-usb", 0x10000, 0x1000, true},
+    {"tunable_LN1_RX_TOP_USB_EQA", "apple,tunable-lane1-usb", 0x10000, 0x1000, false},
+    {"tunable_LN1_RX_EQ_USB_EQA", "apple,tunable-lane1-usb", 0x11000, 0x1000, true},
+    {"tunable_LN1_RX_SHM_USB_DFLT", "apple,tunable-lane1-usb", 0x12000, 0x1000, true},
+    {"tunable_LN1_TX_TOP_USB_DFLT", "apple,tunable-lane1-usb", 0x13000, 0x1000, true},
+    {"tunable_LN1_TX_SHM_USB_DFLT", "apple,tunable-lane1-usb", 0x14000, 0x1000, true},
+};
+
+/* Optional for USB3-only: the USB half of multifunction mode also needs AUX. */
+static const struct adt_tunable_info atc_tunable_t8132_usb3_dp = {
+    "tunable_AUX_TOP", "apple,tunable-usb3-dp", 0x16000, 0x4000, true,
+};
+
 static const struct adt_tunable_info atc_tunables_t8130[] = {
     {"tunable_ATC0AXI2AF", "apple,tunable-axi2af", 0, 0x8000, true},
     {"tunable_USB2PHY_REG_DFLT", "apple,tunable-usb2phy-reg-dflt", 0, 0x4000, true},
@@ -171,6 +211,18 @@ static const struct adt_tunable_info atc_tunables_t8130[] = {
     {"tunable_LN1_RX_SHM_USB_DFLT", "apple,tunable-lane1-usb", 0x12000, 0x1000, true},
     {"tunable_LN1_TX_TOP_USB_DFLT", "apple,tunable-lane1-usb", 0x13000, 0x1000, true},
     {"tunable_LN1_TX_SHM_USB_DFLT", "apple,tunable-lane1-usb", 0x14000, 0x1000, true},
+};
+
+/*
+ * A T6030 ATC PHY wired as a fixed DisplayPort transmitter (the J514S HDMI
+ * port's): the calibration its power-up applies, in this order, in one list.
+ */
+static const struct adt_tunable_info atc_tunables_t6030_dp[] = {
+    {"tunable_AUSCMN_DIG", "apple,tunable-dp-calibration", 0x800, 0x200, true},
+    {"tunable_AUSPLL_CORE", "apple,tunable-dp-calibration", 0x2200, 0x4000, true},
+    {"tunable_AUX_TOP", "apple,tunable-dp-calibration", 0x16000, 0x4000, true},
+    {"tunable_AUSCMN_SHM", "apple,tunable-dp-calibration", 0xa00, 0x200, true},
+    {"tunable_CLKMON_CFG", "apple,tunable-dp-calibration", 0x2600, 0x100, true},
 };
 
 static const struct atc_fuse_info atc_fuses_t8103_port0[] = {
@@ -453,6 +505,49 @@ static int dt_append_atc_tunable(void *dt, int adt_node, int fdt_node,
     return 0;
 }
 
+/*
+ * T6030 atc-phy3 drives only the HDMI port, as a DisplayPort PHY. Its USB and CIO lane tunables
+ * are optional: if the ADT does not have them, the common tunables (which DisplayPort needs) are
+ * still passed, and the kernel keeps the PHY to DisplayPort. Every other PHY needs every required
+ * entry, as before.
+ */
+static bool atc_lanes_optional(int port)
+{
+    return chip_id == T6030 && port == 3;
+}
+
+static bool atc_lane_tunable(const struct adt_tunable_info *t)
+{
+    static const char prefix[] = "apple,tunable-lane";
+    return !strncmp(t->fdt_name, prefix, sizeof(prefix) - 1);
+}
+
+/* The absent optional entries, for one log line: a ';'-separated list, cut short with "..." */
+struct atc_absent {
+    char list[192];
+    int count;
+    bool cut;
+};
+
+static void atc_note_absent(struct atc_absent *a, const char *name)
+{
+    size_t used = strlen(a->list);
+    size_t sep = used ? 1 : 0;
+
+    a->count++;
+    if (a->cut)
+        return;
+    /* Keep room for ";..." */
+    if (used + sep + strlen(name) + 4 >= sizeof(a->list)) {
+        strcpy(a->list + used, sep ? ";..." : "...");
+        a->cut = true;
+        return;
+    }
+    if (sep)
+        a->list[used++] = ';';
+    strcpy(a->list + used, name);
+}
+
 /* J700's DP lists use the same native ATC records as the USB lists above, but
  * their grouping and destination windows are distinct. Keep this map in the
  * order in which the Linux ATC PHY consumes the lists. */
@@ -698,11 +793,66 @@ static void dt_export_j700_atc(void *dt, int adt_node, int fdt_node)
         free(output[i].data);
 }
 
+/* Only the DP calibration: this PHY has no USB, USB4 or Type-C side. */
+static void dt_copy_atc_t6030_dp_tunables(void *dt, int adt_node, int fdt_node,
+                                          const char *adt_path)
+{
+    const char *name = atc_tunables_t6030_dp[0].fdt_name;
+
+    fdt_delprop(dt, fdt_node, name);
+    for (size_t i = 0; i < ARRAY_SIZE(atc_tunables_t6030_dp); ++i) {
+        if (dt_append_atc_tunable(dt, adt_node, fdt_node, &atc_tunables_t6030_dp[i])) {
+            fdt_delprop(dt, fdt_node, name);
+            printf("FDT: Unable to copy the DP calibration for %s\n", adt_path);
+            return;
+        }
+    }
+    printf("FDT: Copied the DP calibration for %s\n", adt_path);
+}
+
+/* Publish the complete USB3 bundle or none of it, preserving USB2 fallback. */
+static void dt_copy_t8132_usb3_tunables(void *dt, int adt_node, int fdt_node)
+{
+    fdt_delprop(dt, fdt_node, atc_tunable_t8132_usb3_dp.fdt_name);
+    for (size_t i = 0; i < ARRAY_SIZE(atc_tunables_t8132_usb3); i++)
+        fdt_delprop(dt, fdt_node, atc_tunables_t8132_usb3[i].fdt_name);
+
+    for (size_t i = 0; i < ARRAY_SIZE(atc_tunables_t8132_usb3); i++) {
+        const struct adt_tunable_info *group = &atc_tunables_t8132_usb3[i];
+        u32 len;
+        const void *raw = adt_getprop(adt, adt_node, group->adt_name, &len);
+
+        if (group->required && (!raw || !len))
+            goto cleanup;
+        if (dt_append_atc_tunable(dt, adt_node, fdt_node, group))
+            goto cleanup;
+    }
+    printf("FDT: Copied T8132 USB3 calibration\n");
+
+    /* Missing or malformed AUX data must not discard a complete USB bundle. */
+    u32 len;
+    const struct adt_tunable_info *dp = &atc_tunable_t8132_usb3_dp;
+    const void *raw = adt_getprop(adt, adt_node, dp->adt_name, &len);
+
+    if (!raw || !len || dt_append_atc_tunable(dt, adt_node, fdt_node, dp)) {
+        fdt_delprop(dt, fdt_node, dp->fdt_name);
+        printf("FDT: T8132 multifunction calibration unavailable\n");
+    }
+    return;
+
+cleanup:
+    for (size_t i = 0; i < ARRAY_SIZE(atc_tunables_t8132_usb3); i++)
+        fdt_delprop(dt, fdt_node, atc_tunables_t8132_usb3[i].fdt_name);
+    printf("FDT: T8132 USB3 calibration incomplete; preserving USB2 fallback\n");
+}
+
 static void dt_copy_atc_tunables(void *dt, const char *adt_path, const char *dt_alias, int port)
 {
     int ret;
     const struct adt_tunable_info *tunables;
     size_t tunable_count;
+    bool lanes_optional = atc_lanes_optional(port);
+    struct atc_absent absent = {0};
 
     const char *fdt_path = fdt_get_alias(dt, dt_alias);
     if (fdt_path == NULL) {
@@ -720,6 +870,19 @@ static void dt_copy_atc_tunables(void *dt, const char *adt_path, const char *dt_
     dt_export_j700_atc(dt, adt_node, fdt_node);
     if (adt_node < 0)
         return;
+
+    if (chip_id == T8132 && !fdt_node_check_compatible(dt, 0, "apple,j713") &&
+        !fdt_node_check_compatible(dt, fdt_node, "apple,t8132-atcphy") &&
+        adt_is_compatible_at(adt, adt_node, "atc-phy,t8132", 0)) {
+        dt_copy_t8132_usb3_tunables(dt, adt_node, fdt_node);
+        return;
+    }
+
+    if (!fdt_node_check_compatible(dt, fdt_node, "apple,t6030-atcphy-dp")) {
+        if (adt_is_compatible_at(adt, adt_node, "atc-phy,t8122", 0))
+            dt_copy_atc_t6030_dp_tunables(dt, adt_node, fdt_node, adt_path);
+        return;
+    }
 
     ret = dt_append_fuses(dt, adt_node, fdt_node, port);
     if (ret) {
@@ -742,6 +905,11 @@ static void dt_copy_atc_tunables(void *dt, const char *adt_path, const char *dt_
     }
 
     for (size_t i = 0; i < tunable_count; ++i) {
+        if (lanes_optional && atc_lane_tunable(&tunables[i]) &&
+            !adt_getprop(adt, adt_node, tunables[i].adt_name, NULL)) {
+            atc_note_absent(&absent, tunables[i].adt_name);
+            continue;
+        }
         if (chip_id == T8140 && !fdt_node_check_compatible(dt, 0, "apple,j700") &&
             !strcmp(tunables[i].fdt_name, "apple,tunable-axi2af"))
             continue;
@@ -749,6 +917,9 @@ static void dt_copy_atc_tunables(void *dt, const char *adt_path, const char *dt_
         if (ret)
             goto cleanup;
     }
+    if (absent.count)
+        printf("kboot: %s: %d optional lane tunables absent (%s); common tunables passed\n",
+               adt_path, absent.count, absent.list);
 
     if (adt_is_compatible_at(adt, adt_node, "atc-phy,t8142", 0) ||
         adt_is_compatible_at(adt, adt_node, "atc-phy,t8122", 0) ||
@@ -756,6 +927,9 @@ static void dt_copy_atc_tunables(void *dt, const char *adt_path, const char *dt_
         static const char *fdt_names[] = {"apple,tunable-lane0-cio", "apple,tunable-lane1-cio"};
         static const u32 lane_offsets[] = {0x9000, 0x10000};
         for (size_t i = 0; i < 2; i++) {
+            /* A lane without its CIO tunables gets none */
+            if (lanes_optional && !fdt_getprop(dt, fdt_node, fdt_names[i], NULL))
+                continue;
             if (fdt_appendprop_u32(dt, fdt_node, fdt_names[i],
                                    lane_offsets[i] + AUSPMA_RX_TOP_PMAFSM_RX_CTRL) < 0)
                 goto cleanup;
