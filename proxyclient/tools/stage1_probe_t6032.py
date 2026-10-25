@@ -11,10 +11,15 @@ the loader's pmgr call so the hardware-id words can be read; that setting is los
 Reads of the hardware-id words and of the GPU firmware image are guarded: a bus fault is counted and
 reported, it does not stop the probe. It never writes a GPU register and never starts firmware.
 
+The live board is validated first: model Mac15,14, target J575d, root compatible containing
+J575dAP. Anything else is refused before the firmware read, the SGX reads and --power-gpu.
+
 Output, under OUTDIR:
-  probe.txt, SHA256SUMS   the report and its hash: SEND THESE TWO ONLY.
-  private/                adt.bin, adt.txt (the whole device tree: serial, hardware UUID, chip IDs, MACs),
-                          gpu-text.bin (the GPU firmware image) and their hashes. DO NOT SEND.
+  probe.txt, SHA256SUMS   the report and its hash: SEND THESE TWO ONLY. probe.txt carries no raw
+                          firmware bytes: sizes, counts and digests only.
+  private/                adt.bin, adt.txt (the whole device tree: serial, hardware UUID, chip IDs,
+                          MACs), gpu-text.bin (the GPU firmware image), gpu-text-meta.txt (first16 /
+                          last16 of that image) and their hashes. DO NOT SEND.
 """
 import hashlib
 import os
@@ -79,6 +84,20 @@ def write_sums(directory, names):
                 fh.write(f"{hashlib.sha256(src.read()).hexdigest()}  {n}\n")
 
 
+def validate_board(dt):
+    """The live board must be the Mac Studio (M3 Ultra): (ok, reason)."""
+    model = str(getattr(dt, "model", ""))
+    target = str(getattr(dt, "target_type", ""))
+    compat = [str(c) for c in getattr(dt, "compatible", [])]
+    if model != "Mac15,14":
+        return False, f"model {model!r} != 'Mac15,14'"
+    if target != "J575d":
+        return False, f"target-type {target!r} != 'J575d'"
+    if "J575dAP" not in compat:
+        return False, f"root compatible {compat} lacks 'J575dAP'"
+    return True, ""
+
+
 def main():
     if "--selftest" in sys.argv:
         return selftest()
@@ -112,7 +131,7 @@ def main():
             p.set_exc_guard(GUARD.OFF)
         return v, faulted
 
-    log("probe: stage1_probe_t6032 v2")
+    log("probe: stage1_probe_t6032 v3")
     log(f"loader base: {u.base:#x}")
     adt_raw = u.get_adt()
     with open(os.path.join(priv, "adt.bin"), "wb") as fh:
@@ -122,6 +141,14 @@ def main():
         fh.write(str(dt))
     log(f"model: {dt.model}  target: {dt.target_type}  adt bytes: {len(adt_raw)}")
 
+    ok, why = validate_board(dt)
+    if not ok:
+        log(f"refusing: not a j575dap Mac Studio ({why}); no firmware or SGX reads were made")
+        log("send probe.txt and SHA256SUMS only; never send the private folder")
+        rep.close()
+        write_sums(out, ["probe.txt"])
+        return 1
+
     # 1. GPU firmware image iBoot loaded (a memory read, no GPU register involved)
     asc = dt["/arm-io/gfx-asc"]
     raw = asc._properties.get("segment-ranges")  # set by iBoot at run time; not in the IPSW tree
@@ -130,13 +157,19 @@ def main():
     else:
         segs = segments(raw)
         log("gfx-asc segments (phys, iova, size): " + "; ".join(f"{s[0]:#x} {s[1]:#x} {s[3] & 0xFFFFFFFF:#x}" for s in segs))
-        text, faulted = guarded(lambda: iface.readmem(segs[0][0], segs[0][3] & 0xFFFFFFFF))
+        try:
+            text, faulted = guarded(lambda: iface.readmem(segs[0][0], segs[0][3] & 0xFFFFFFFF))
+        except Exception as e:  # UartRemoteError and any other transport failure
+            log(f"gpu text: not readable ({type(e).__name__})")
+            text, faulted = None, False
         if faulted or not text:
             log("gpu text: not readable (bus fault or empty read)")
         else:
             with open(os.path.join(priv, "gpu-text.bin"), "wb") as fh:
                 fh.write(text)
-            log(f"gpu text: {len(text)} bytes, {sum(1 for b in text if b)} non-zero; first16 {text[:16].hex()} last16 {text[-16:].hex()}")
+            with open(os.path.join(priv, "gpu-text-meta.txt"), "w") as fh:
+                fh.write(f"first16 {text[:16].hex()}\nlast16 {text[-16:].hex()}\n")
+            log(f"gpu text: {len(text)} bytes, {sum(1 for b in text if b)} non-zero")
             for name, dg in text_digests(text):
                 log(f"gpu text {name}: {dg}")
 
@@ -161,7 +194,8 @@ def main():
 
     log("send probe.txt and SHA256SUMS only; never send the private folder")
     rep.close()
-    private = [n for n in ("adt.bin", "adt.txt", "gpu-text.bin") if os.path.exists(os.path.join(priv, n))]
+    private = [n for n in ("adt.bin", "adt.txt", "gpu-text.bin", "gpu-text-meta.txt")
+               if os.path.exists(os.path.join(priv, n))]
     write_sums(priv, private)
     write_sums(out, ["probe.txt"])
 

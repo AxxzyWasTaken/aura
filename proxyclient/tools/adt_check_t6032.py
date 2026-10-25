@@ -111,13 +111,14 @@ def main():
           cores == {"apple,sawtooth", "apple,everest"}, sorted(cores))
     ok, detail = True, []
     for c in cpus:
+        if "cpu-impl-reg" not in c._properties or "state" not in c._properties:
+            ok = False
+            detail.append(f"cpu{c.cpu_id} missing cpu-impl-reg/state")
+            continue
         impl = c.translate(list(c.cpu_impl_reg)[0])
         if c.die_id == 1 and (impl & PMGR_DIE_OFFSET) != PMGR_DIE_OFFSET:
             ok = False
             detail.append(f"cpu{c.cpu_id} impl_reg {hex(impl)} lacks die offset")
-        if "cpu-impl-reg" not in c._properties or "state" not in c._properties:
-            ok = False
-            detail.append(f"cpu{c.cpu_id} missing cpu-impl-reg/state")
     check("every core has cpu-impl-reg (RVBAR) and state; die-1 at +0x2000000000 (physical)", ok,
           "; ".join(detail) if detail else "32/32 cores, die-1 folded by PMGR_DIE_OFFSET")
 
@@ -210,9 +211,13 @@ def main():
           absent(adt, "/arm-io/dart-pmp") and absent(adt, "/arm-io/dart-isp"),
           "dapf_init_fdt() skips missing nodes")
     ans = have(adt, "/arm-io/ans")
-    check("ans present, translated reg[3] valid (nvme nvmmu path), die from bit 37 = 1",
-          ans is not None and ans.get_reg(3)[0] != 0 and
-          ((ans.get_reg(3)[0] >> 37) & 3) == 1, hex(ans.get_reg(3)[0]))
+    if ans is None:
+        check("ans present, translated reg[3] valid (nvme nvmmu path), die from bit 37 = 1",
+              False, "FAIL: /arm-io/ans missing")
+    else:
+        reg3 = ans.get_reg(3)[0]
+        check("ans present, translated reg[3] valid (nvme nvmmu path), die from bit 37 = 1",
+              reg3 != 0 and ((reg3 >> 37) & 3) == 1, hex(reg3))
     check("smc and aop present (ascwrap-v6, as other M3-family ADTs)",
           have(adt, "/arm-io/smc") is not None and have(adt, "/arm-io/aop") is not None,
           "both present")
