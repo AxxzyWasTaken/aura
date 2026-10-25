@@ -136,6 +136,7 @@ def main():
         else:
             with open(os.path.join(priv, "gpu-text.bin"), "wb") as fh:
                 fh.write(text)
+            log(f"gpu text: {len(text)} bytes, {sum(1 for b in text if b)} non-zero; first16 {text[:16].hex()} last16 {text[-16:].hex()}")
             for name, dg in text_digests(text):
                 log(f"gpu text {name}: {dg}")
 
