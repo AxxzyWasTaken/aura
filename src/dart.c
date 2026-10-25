@@ -527,6 +527,8 @@ int dart_set_bypass_fdt(void *dt, u32 phandle, u8 device)
  * read-only. Gen3 DARTs keep their own adoption. */
 dart_dev_t *dart_init_adt_display(const char *path, int instance, int device)
 {
+    /* Keep the stream in dart_init()'s u8. dart_init() then bounds it by type
+     * (32 streams on T8020/T6000, 256 on T8110) before any register access. */
     if (device < 0 || device > 255)
         return NULL;
 

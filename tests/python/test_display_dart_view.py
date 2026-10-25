@@ -700,6 +700,24 @@ static void t6000_locked_dcp(void)
     dart_shutdown(dart);
     assert(!live_objects && !heap_frees && legacy_l2_count == 1);
 }
+static void t6000_device_range(void)
+{
+    /* A T6000-format DART has 32 streams: an out-of-range stream gets no handle,
+     * and nothing reads or writes a register for it. */
+    static const int sids[] = {32, 33, 255};
+    for (unsigned int i = 0; i < ARRAY_SIZE(sids); i++) {
+        t6000_view(0x1);
+        unsigned int reads = reg_reads, before = nwrites;
+        assert(!dart_init_adt_display(DCP_PATH, 0, sids[i]));
+        assert(reg_reads == reads && nwrites == before && !heap_used && !live_objects);
+    }
+    /* Stream 31 is in range: its registers are read, and it is refused only
+     * because this fixture leaves that stream locked but not translating. */
+    t6000_view(0x1);
+    unsigned int reads = reg_reads;
+    assert(!dart_init_adt_display(DCP_PATH, 0, 31));
+    assert(reg_reads > reads && !nwrites && !heap_used && !live_objects);
+}
 static void t6000_locked_refusals(void)
 {
     /* Locked without an inherited root, or not translating: no handle at all. */
@@ -763,6 +781,7 @@ static const struct { const char *name; void (*run)(void); } cases[] = {
     {"disp-path-same-rule", disp_path_same_rule},
     {"t6000-locked-dcp", t6000_locked_dcp},
     {"t6000-locked-refusals", t6000_locked_refusals},
+    {"t6000-device-range", t6000_device_range},
     {"generic-locked-immutable", generic_locked_immutable},
     {"fdt-locked-immutable", fdt_locked_immutable},
     {"map-selected-root", map_selected_root},
@@ -821,6 +840,7 @@ CASES = (
     "admit-locked-translating", "refuse-device-range", "refuse-disabled-stream",
     "refuse-untranslated-stream", "stock-unlocked-view", "other-chip-same-rule",
     "gen3-unchanged", "disp-path-same-rule", "t6000-locked-dcp", "t6000-locked-refusals",
+    "t6000-device-range",
     "generic-locked-immutable", "fdt-locked-immutable",
     "map-selected-root", "unmap-selected-root", "unmap-absent-allocates-nothing",
     "map-absent-root-refused", "map-new-l2-in-present-root", "map-conflict-rolls-back",
