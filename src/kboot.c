@@ -141,7 +141,7 @@ void get_notchless_fb(u64 *fb_base, u64 *fb_height)
 
 /*
  * chosen.asahi,show-notch=1 (m1n1 config): the OS drives the full panel, notch rows
- * included (on J613: appledrm.t6030_show_notch=1). Keep iBoot's full framebuffer then, so
+ * included (appledrm.show_notch=1). Keep iBoot's full framebuffer then, so
  * the boot framebuffer covers the same rows as the display driver later does and early
  * users (fbcon, Plymouth) do not shift by the notch height at the handoff.
  */

@@ -17,6 +17,10 @@
 # Configure the boot display to 4K at 59.97Hz (or closest available)
 #display=3840x2160@59.94
 
+# Keep the notch rows when the OS drives the full panel
+# Pair with appledrm.show_notch=1 on Linux
+#chosen.asahi,show-notch=1
+
 # Add an arbitrary property to /chosen in the device tree
 #chosen.foo=bar
 
