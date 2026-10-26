@@ -4,7 +4,7 @@
 Builds tests/t6041_display_host.c with the tree's src/kboot_display_handoff.c, the host stand-in
 headers of tests/t8122_display_host/ and m1n1's libfdt (ASan, UBSan), and runs every scenario:
 a supported boot with no chosen property publishes the existing contract; an unsupported chip,
-board or device tree gets nothing at all; every missing ADT node and failed validation publishes
+board, firmware or device tree gets nothing at all; every missing ADT node and failed validation publishes
 nothing. The ADT, the MMIO and the device tree are synthetic; no hardware is exercised.
 """
 from pathlib import Path
@@ -21,14 +21,25 @@ LIBFDT = ["fdt.c", "fdt_ro.c", "fdt_rw.c", "fdt_wip.c", "fdt_sw.c", "fdt_empty_t
 
 @pytest.fixture(scope="module")
 def host(tmp_path_factory):
+    return build_host(tmp_path_factory.mktemp("t6041"))
+
+
+def build_host(tmp, unknown_profile=False):
     cc = shutil.which("cc")
     if not cc:
         pytest.skip("no host C compiler")
-    tmp = tmp_path_factory.mktemp("t6041")
     src = tmp / "src"
     src.mkdir()
     # The code under test next to the stand-ins, so that its #include "utils.h" finds them
-    shutil.copy(ROOT / "src/kboot_display_handoff.c", src)
+    code = (ROOT / "src/kboot_display_handoff.c").read_text()
+    if unknown_profile:
+        # An unqualified profile must never match even when the loaded firmware is unknown too.
+        start = code.index("static const struct dcp_soc dcp_soc_t6041 = {")
+        end = code.index("\n};", start)
+        record = code[start:end]
+        assert ".os_fw = V26_6_2," in record
+        code = code[:start] + record.replace(".os_fw = V26_6_2,", ".os_fw = V_UNKNOWN,") + code[end:]
+    (src / "kboot_display_handoff.c").write_text(code)
     shutil.copy(ROOT / "tests/t6041_display_host.c", src)
     for header in (ROOT / "tests/t8122_display_host").glob("*.h"):
         shutil.copy(header, src)
@@ -90,7 +101,12 @@ REASONS = {
     "no-adt-carveouts": "no /chosen/carveout-memory-map",
     "no-adt-pt-region": "no /arm-io/dart-dcp/pt-region-23",
     "no-adt-clock-gates": "no ADT /arm-io/dcp clock-gate has a PMGR power state",
-    "wrong-os": "OS firmware 14.7 is not 26.6.2",
+    "wrong-os": "no qualified OS firmware for apple,t6041-dcp: nothing done",
+    "unknown-os": "no qualified OS firmware for apple,t6041-dcp: nothing done",
+    "stale-optin-wrong-os": "no qualified OS firmware for apple,t6041-dcp: nothing done",
+    "no-disp-alias": NOT_DESCRIBED,
+    "stale-optin-no-dcp": NOT_DESCRIBED,
+    "stale-optin-wrong-disp": NOT_DESCRIBED,
     "bad-uuid": "no well-formed ADT uuid",
     "not-preloaded": "iBoot did not leave the dcp firmware loaded and running",
     "not-running": "DCP not running, leaving dart-dcp unlocked",
@@ -159,3 +175,21 @@ def test_t8122_handoff_unchanged():
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
     assert "T8122 display handoff: every scenario passes" in result.stdout
+
+
+@pytest.mark.parametrize("scenario", ["wrong-os", "unknown-os", "stale-optin-wrong-os",
+                                      "stale-optin-no-dcp", "stale-optin-wrong-disp"])
+def test_unqualified_profile_does_nothing(host, scenario):
+    result = run(host, scenario)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "nothing done: the device tree is byte for byte unchanged" in result.stdout
+    assert "nothing done: no MMIO access at all" in result.stdout
+
+
+def test_unknown_profile_does_not_match_unknown_firmware(tmp_path):
+    binary = build_host(tmp_path, unknown_profile=True)
+    result = run(binary, "unknown-os")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no qualified OS firmware for apple,t6041-dcp: nothing done" in result.stdout
+    assert "nothing done: the device tree is byte for byte unchanged" in result.stdout
+    assert "nothing done: no MMIO access at all" in result.stdout

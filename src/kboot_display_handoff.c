@@ -76,14 +76,14 @@
  *
  * T6041 display block of the M4 Pro (chip T6040, J616s only), with the desktop 26.6.2 DCP firmware:
  * the T6031 handoff with T6041 values. There is no /chosen opt-in: the handoff is attempted on
- * every boot whose chip is T6040, whose root is apple,j616s and whose device tree describes the
- * T6041 display block (aliases dcp and disp0, compatible apple,t6041-dcp and
- * apple,display-subsystem). Anything else gets nothing at all: no __OS_LOG reservation, no
- * register access, no DT edit. On a supported boot the __OS_LOG reservation and every check below
- * run as on T6031, and the handoff is published only if all of them pass. The DCP maps through
- * dart-dcp SID 23 and the display and its piodma through dart-disp0 SIDs 0 and 16, of 32 streams
- * each, so these SIDs are per SoC (struct dcp_soc .sids). Marker apple,t6041-handoff; the nodes
- * stay disabled.
+ * every boot whose chip is T6040, whose root is apple,j616s, whose OS firmware matches the known
+ * profile, and whose device tree describes the T6041 display block (aliases dcp and disp0,
+ * compatible apple,t6041-dcp and apple,display-subsystem). Anything else gets nothing at all: no
+ * __OS_LOG reservation, no register access, no DT edit. On a supported boot the __OS_LOG
+ * reservation and every check below run as on T6031, and the handoff is published only if all of
+ * them pass. The DCP maps through dart-dcp SID 23 and the display and its piodma through dart-disp0
+ * SIDs 0 and 16, of 32 streams each, so these SIDs are per SoC (struct dcp_soc .sids). Marker
+ * apple,t6041-handoff; the nodes stay disabled.
  *
  * Fail-soft: dt_set_display_handoff() always returns 0; a failed check is logged and changes
  * nothing. Transactional: DT edits are made on a scratch copy that replaces the DT only if every
@@ -224,7 +224,7 @@ struct dcp_soc {
     const char *disp_compat;
     const char *marker; /* set to <1> on dcp, display and piodma by the handoff */
     const char *optin;  /* /chosen property: the boot.bin config line chosen.<optin>=1 arms;
-                           NULL: none, the chip, board and device tree gates alone decide */
+                           NULL: none, the chip, board, firmware and device tree gates decide */
     bool always;        /* reserve, lock and check on every boot, not only when armed; otherwise
                            dart-dcp is only locked by a handoff whose checks have all passed */
     bool oslog_always;  /* reserve the __OS_LOG buffers on every boot, even when not armed */
@@ -2872,6 +2872,13 @@ int dt_set_display_handoff(void *dt)
 
     if (dcp6.soc->board_gate && (chip_id != dcp6.soc->chip || !dcp6_board_ok(dt))) {
         dlog("not a %s (chip 0x%x): nothing done\n", dcp6.soc->boards_desc, chip_id);
+        return 0;
+    }
+
+    /* Reject unsupported firmware before reserving __OS_LOG or touching registers. */
+    if (!dcp6.soc->optin &&
+        (dcp6.soc->os_fw == V_UNKNOWN || os_firmware.version != dcp6.soc->os_fw)) {
+        dlog("no qualified OS firmware for %s: nothing done\n", dcp6.soc->dcp_compat);
         return 0;
     }
 

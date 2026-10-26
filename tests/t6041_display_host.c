@@ -900,7 +900,8 @@ static void refusal_check(const void *in, const void *dt, bool oslog)
 
 enum kind {
     PUBLISH,
-    NOTHING, /* refused by the chip, board or DT gate: no access at all, the DT byte-identical */
+    NOTHING, /* refused by the chip, board, firmware or DT gate: no access at all, the DT
+                byte-identical */
     REFUSE,  /* refused after the gates, __OS_LOG reserved */
     REFUSE_NO_OSLOG,
 };
@@ -924,6 +925,12 @@ static const struct scenario scenarios[] = {
     {"no-dcp-alias", NOTHING, "a J616s device tree without the dcp alias"},
     {"wrong-dcp-compat", NOTHING, "dcp is not apple,t6041-dcp"},
     {"wrong-disp-compat", NOTHING, "disp0 is not apple,display-subsystem"},
+    {"no-disp-alias", NOTHING, "a J616s device tree without the disp0 alias"},
+    {"stale-optin-no-dcp", NOTHING, "a stale chosen flag cannot supply the missing dcp alias"},
+    {"stale-optin-wrong-disp", NOTHING, "a stale chosen flag cannot repair disp0 compatible"},
+    {"wrong-os", NOTHING, "OS firmware is not 26.6.2"},
+    {"unknown-os", NOTHING, "OS firmware is unknown"},
+    {"stale-optin-wrong-os", NOTHING, "a stale chosen flag cannot qualify OS firmware"},
     /* missing ADT nodes */
     {"no-adt-nub", REFUSE_NO_OSLOG, "no ADT iop-dcp-nub"},
     {"no-adt-dart-dcp", REFUSE, "no ADT dart-dcp"},
@@ -934,7 +941,6 @@ static const struct scenario scenarios[] = {
     {"no-adt-pt-region", REFUSE, "no ADT pt-region for dart-dcp SID 23"},
     {"no-adt-clock-gates", REFUSE, "no ADT clock-gates on /arm-io/dcp"},
     /* failed validation */
-    {"wrong-os", REFUSE, "OS firmware is not 26.6.2"},
     {"bad-uuid", REFUSE, "the ADT dcp image uuid is malformed"},
     {"not-preloaded", REFUSE, "iBoot did not leave the dcp firmware running"},
     {"not-running", REFUSE, "the DCP CPU is not running"},
@@ -1008,8 +1014,10 @@ int main(int argc, char **argv)
         prop_drop("/arm-io/dart-dcp", "pt-region-23");
     if (is(s, "no-adt-clock-gates"))
         prop_drop("/arm-io/dcp", "clock-gates");
-    if (is(s, "wrong-os"))
+    if (is(s, "wrong-os") || is(s, "stale-optin-wrong-os"))
         os_firmware = (struct fw_version_info){V14_7, "14.7", {14, 7, 0}, 3, "iBoot"};
+    if (is(s, "unknown-os"))
+        os_firmware = (struct fw_version_info){V_UNKNOWN, "unknown", {0}, 0, "unknown"};
     if (is(s, "bad-uuid"))
         prop_str("/arm-io/dcp/iop-dcp-nub", "uuid", "not-a-uuid");
     if (is(s, "not-preloaded"))
@@ -1024,11 +1032,13 @@ int main(int argc, char **argv)
         OK(fdt_del_node(dt, alias_node(dt, "dcp")));
         OK(fdt_del_node(dt, aliases));
     }
-    if (is(s, "no-dcp-alias"))
+    if (is(s, "no-dcp-alias") || is(s, "stale-optin-no-dcp"))
         OK(fdt_delprop(dt, aliases, "dcp"));
+    if (is(s, "no-disp-alias"))
+        OK(fdt_delprop(dt, aliases, "disp0"));
     if (is(s, "wrong-dcp-compat"))
         OK(fdt_setprop_string(dt, dcp, "compatible", "apple,t6031-dcp"));
-    if (is(s, "wrong-disp-compat"))
+    if (is(s, "wrong-disp-compat") || is(s, "stale-optin-wrong-disp"))
         OK(fdt_setprop_string(dt, alias_node(dt, "disp0"), "compatible",
                               "apple,t6031-display-subsystem"));
     if (is(s, "wrong-sid"))
@@ -1052,7 +1062,8 @@ int main(int argc, char **argv)
     if (is(s, "oslog-straddles"))
         OK(fdt_add_mem_rsv(dt, segs[SEG_OSLOG].phys + 0x4000, seg_size(SEG_OSLOG)));
     int chosen = fdt_path_offset(dt, "/chosen");
-    if (is(s, "stale-optin"))
+    if (is(s, "stale-optin") || is(s, "stale-optin-no-dcp") || is(s, "stale-optin-wrong-disp") ||
+        is(s, "stale-optin-wrong-os"))
         OK(fdt_setprop_string(dt, chosen, OPTIN, "1"));
     if (is(s, "stale-optin-zero"))
         OK(fdt_setprop_string(dt, chosen, OPTIN, "0"));
