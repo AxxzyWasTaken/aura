@@ -75,11 +75,15 @@
  * registers are.
  *
  * T6041 display block of the M4 Pro (chip T6040, J616s only), with the desktop 26.6.2 DCP firmware:
- * the T6031 handoff with T6041 values, armed only by the boot.bin config line
- * chosen.asahi,t6041-dcp=1, and nothing else on an unarmed boot (no __OS_LOG reservation either,
- * until that has been checked on this machine). The DCP maps through dart-dcp SID 23 and the
- * display and its piodma through dart-disp0 SIDs 0 and 16, of 32 streams each, so these SIDs are
- * per SoC (struct dcp_soc .sids). Marker apple,t6041-handoff; the nodes stay disabled.
+ * the T6031 handoff with T6041 values. There is no /chosen opt-in: the handoff is attempted on
+ * every boot whose chip is T6040, whose root is apple,j616s and whose device tree describes the
+ * T6041 display block (aliases dcp and disp0, compatible apple,t6041-dcp and
+ * apple,display-subsystem). Anything else gets nothing at all: no __OS_LOG reservation, no
+ * register access, no DT edit. On a supported boot the __OS_LOG reservation and every check below
+ * run as on T6031, and the handoff is published only if all of them pass. The DCP maps through
+ * dart-dcp SID 23 and the display and its piodma through dart-disp0 SIDs 0 and 16, of 32 streams
+ * each, so these SIDs are per SoC (struct dcp_soc .sids). Marker apple,t6041-handoff; the nodes
+ * stay disabled.
  *
  * Fail-soft: dt_set_display_handoff() always returns 0; a failed check is logged and changes
  * nothing. Transactional: DT edits are made on a scratch copy that replaces the DT only if every
@@ -219,7 +223,8 @@ struct dcp_soc {
     const char *dcp_compat;
     const char *disp_compat;
     const char *marker; /* set to <1> on dcp, display and piodma by the handoff */
-    const char *optin;  /* /chosen property: the boot.bin config line chosen.<optin>=1 arms */
+    const char *optin;  /* /chosen property: the boot.bin config line chosen.<optin>=1 arms;
+                           NULL: none, the chip, board and device tree gates alone decide */
     bool always;        /* reserve, lock and check on every boot, not only when armed; otherwise
                            dart-dcp is only locked by a handoff whose checks have all passed */
     bool oslog_always;  /* reserve the __OS_LOG buffers on every boot, even when not armed */
@@ -378,8 +383,8 @@ static const struct dcp_soc dcp_soc_t6031 = {
  * maps through dart-dcp SID 23 and the display and its piodma through dart-disp0 SIDs 0 and 16, of
  * 32 streams each (ADT sid, sid-count, l2-tt-N). The addresses are this ADT's, after the arm-io
  * ranges; segments and the display power state come from the ADT. The DCP image is not pinned:
- * the kernel accepts only the 26.6.2 firmware. Nothing happens unless the boot.bin config line
- * chosen.asahi,t6041-dcp=1 is set, and the display nodes stay disabled.
+ * the kernel accepts only the 26.6.2 firmware. No opt-in: nothing happens unless the device tree
+ * describes this display block (dcp6_dt_describes()), and the display nodes stay disabled.
  */
 static const char *const dcp_boards_t6041[] = {"apple,j616s", NULL};
 
@@ -392,7 +397,6 @@ static const struct dcp_soc dcp_soc_t6041 = {
     .dcp_compat = "apple,t6041-dcp",
     .disp_compat = "apple,display-subsystem",
     .marker = "apple,t6041-handoff",
-    .optin = "asahi,t6041-dcp",
     .adt_psreg = true,
     .board_gate = true,
     .any_uuid = true,
@@ -2336,6 +2340,8 @@ static int dcp6_publish(void *dt, const struct dcp6_dt *n)
 
 static bool dcp6_armed(void *dt)
 {
+    if (!dcp6.soc->optin)
+        return true;
     int chosen = fdt_path_offset(dt, "/chosen");
     int len = 0;
     const char *optin = chosen >= 0 ? fdt_getprop(dt, chosen, dcp6.soc->optin, &len) : NULL;
@@ -2834,6 +2840,22 @@ static void dcpext6_handoffs(void *dt)
     }
 }
 
+/*
+ * For an SoC without an opt-in: the device tree has the display block the handoff is for, the dcp
+ * and disp0 aliases naming nodes of the SoC's compatibles. Only the presence is checked here;
+ * dcp6_check_dt() checks the rest before anything is published.
+ */
+static bool dcp6_dt_describes(void *dt)
+{
+    const char *dcp = fdt_get_alias(dt, "dcp");
+    const char *disp = fdt_get_alias(dt, "disp0");
+    int dcp_node = dcp ? fdt_path_offset(dt, dcp) : -1;
+    int disp_node = disp ? fdt_path_offset(dt, disp) : -1;
+    return dcp_node >= 0 && disp_node >= 0 &&
+           !fdt_node_check_compatible(dt, dcp_node, dcp6.soc->dcp_compat) &&
+           !fdt_node_check_compatible(dt, disp_node, dcp6.soc->disp_compat);
+}
+
 /* Always returns 0: nothing here may stop the boot */
 int dt_set_display_handoff(void *dt)
 {
@@ -2850,6 +2872,13 @@ int dt_set_display_handoff(void *dt)
 
     if (dcp6.soc->board_gate && (chip_id != dcp6.soc->chip || !dcp6_board_ok(dt))) {
         dlog("not a %s (chip 0x%x): nothing done\n", dcp6.soc->boards_desc, chip_id);
+        return 0;
+    }
+
+    if (!dcp6.soc->optin && !dcp6_dt_describes(dt)) {
+        dlog("the device tree does not describe the display block (dcp %s, disp0 %s): nothing "
+             "done\n",
+             dcp6.soc->dcp_compat, dcp6.soc->disp_compat);
         return 0;
     }
 
