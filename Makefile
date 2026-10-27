@@ -1,8 +1,8 @@
 RUSTARCH ?= aarch64-unknown-none-softfloat
-BUILTIN_LOGO ?= bootlogo
+BUILTIN_LOGO ?= aurora
 
 ifneq ($(BUILTIN_LOGO),bootlogo)
-ifneq ($(words $(wildcard data/$(BUILTIN_LOGO)_128.bin data/$(BUILTIN_LOGO)_256.bin)),2)
+ifneq ($(words $(wildcard data/$(BUILTIN_LOGO)_48.bin data/$(BUILTIN_LOGO)_128.bin data/$(BUILTIN_LOGO)_256.bin)),3)
 $(error BUILTIN_LOGO assets are missing)
 endif
 endif
@@ -164,7 +164,7 @@ OBJECTS := \
 	afk.o \
 	aic.o \
 	asc.o \
-	bootlogo_48.o $(BUILTIN_LOGO)_128.o $(BUILTIN_LOGO)_256.o \
+	$(BUILTIN_LOGO)_48.o $(BUILTIN_LOGO)_128.o $(BUILTIN_LOGO)_256.o \
 	chainload.o \
 	chainload_asm.o \
 	chickens.o \
@@ -243,7 +243,10 @@ TARGET_RAW := m1n1.bin
 DEPDIR := build/.deps
 
 .PHONY: all clean format invoke_cc always_rebuild
-all: build/$(TARGET) build/$(TARGET_RAW)
+all: build/$(TARGET) build/$(TARGET_RAW) verify-logo
+.PHONY: verify-logo
+verify-logo: build/$(TARGET_RAW)
+	$(QUIET)python3 tools/verify_builtin_logo.py $< $(BUILTIN_LOGO)
 clean:
 	rm -rf build/* build/.deps
 format:

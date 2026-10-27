@@ -33,6 +33,10 @@ The output will be in `build/m1n1.macho`.
 
 To build verbosely, use `make V=1`.
 
+The built-in boot logo defaults to Aurora at 48, 128, and 256 pixels. Use
+`make BUILTIN_LOGO=bootlogo` to select the Asahi artwork explicitly. A normal
+build checks the compressed logos in `build/m1n1.bin` against the selected assets.
+
 ### Building using the container setup
 
 If you have a container runtime installed, like Podman or Docker, you can make use of the compose setup, which contains all build dependencies.

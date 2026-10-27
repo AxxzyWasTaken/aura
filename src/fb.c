@@ -49,13 +49,13 @@ static struct {
     bool active;
 } console;
 
-/* The 128 and 256 logos come from data/$(BUILTIN_LOGO)_*.bin, see the Makefile */
+/* The built-in logos come from data/$(BUILTIN_LOGO)_*.bin, see the Makefile */
 #define LOGO_GZ_START_(name, size) _binary_build_##name##_##size##_bin_gz_start
 #define LOGO_GZ_START(name, size)  LOGO_GZ_START_(name, size)
 #define LOGO_GZ_END_(name, size)   _binary_build_##name##_##size##_bin_gz_end
 #define LOGO_GZ_END(name, size)    LOGO_GZ_END_(name, size)
 
-extern u8 _binary_build_bootlogo_48_bin_gz_start[], _binary_build_bootlogo_48_bin_gz_end[];
+extern u8 LOGO_GZ_START(BUILTIN_LOGO, 48)[], LOGO_GZ_END(BUILTIN_LOGO, 48)[];
 extern u8 LOGO_GZ_START(BUILTIN_LOGO, 128)[], LOGO_GZ_END(BUILTIN_LOGO, 128)[];
 extern u8 LOGO_GZ_START(BUILTIN_LOGO, 256)[], LOGO_GZ_END(BUILTIN_LOGO, 256)[];
 
@@ -79,8 +79,8 @@ static u32 logo_256_px[256 * 256] ALIGNED(64);
 
 static struct builtin_logo logo_48 = {
     {logo_48_px, 48, 48},
-    _binary_build_bootlogo_48_bin_gz_start,
-    _binary_build_bootlogo_48_bin_gz_end,
+    LOGO_GZ_START(BUILTIN_LOGO, 48),
+    LOGO_GZ_END(BUILTIN_LOGO, 48),
     false,
 };
 
