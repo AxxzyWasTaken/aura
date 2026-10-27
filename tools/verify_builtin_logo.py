@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Check the actual gzip-compressed logos in an m1n1 binary."""
+"""Check the actual compressed or raw logos in an m1n1 binary."""
 
 import argparse
 from pathlib import Path
@@ -26,11 +26,14 @@ def embedded_logos(binary: bytes) -> set[bytes]:
 
 
 def verify(path: Path, name: str) -> None:
-    found = embedded_logos(path.read_bytes())
+    binary = path.read_bytes()
+    found = embedded_logos(binary)
     expected = {size: (ROOT / "data" / f"{name}_{size}.bin").read_bytes() for size in SIZES}
     asahi = {size: (ROOT / "data" / f"bootlogo_{size}.bin").read_bytes() for size in SIZES}
-    missing = [size for size, pixels in expected.items() if pixels not in found]
-    unexpected = [size for size, pixels in asahi.items() if pixels in found and name != "bootlogo"]
+    # Older m1n1 commits linked the same RGBA assets without compression.
+    missing = [size for size, pixels in expected.items() if pixels not in found and pixels not in binary]
+    unexpected = [size for size, pixels in asahi.items()
+                  if name != "bootlogo" and (pixels in found or pixels in binary)]
     if missing or unexpected:
         raise SystemExit(f"{path}: missing {name} sizes {missing}; embedded Asahi sizes {unexpected}")
     print(f"{path}: verified {name} logos at 48, 128, and 256 px")
