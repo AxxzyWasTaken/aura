@@ -31,7 +31,7 @@ def main() -> None:
     black.alpha_composite(crop)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    for size in (128, 256):
+    for size in (48, 128, 256):
         scaled = black.convert("RGB").resize((size, size), Image.Resampling.BOX)
         scaled.save(args.output_dir / f"aurora_{size}.png")
         rgba = scaled.convert("RGBA")
