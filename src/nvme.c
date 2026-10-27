@@ -445,7 +445,9 @@ bool nvme_init(void)
             ((chip_id == T8140 && nvmmu_base == 0x38dcc0000 && nvme_base == 0x3cdcc0000) ||
              (chip_id == T8132 && nvmmu_base == 0x485cc0000 && nvme_base == 0x4c5cc0000) ||
              /* J616C (T6041) has the same split layout: 64 KiB advertised, LSQ at +0x24908. */
-             (chip_id == T6041 && nvmmu_base == 0x40dcc0000 && nvme_base == 0x44dcc0000)))
+             (chip_id == T6041 && nvmmu_base == 0x40dcc0000 && nvme_base == 0x44dcc0000) ||
+             /* J813 (T8142) has the same split layout: 64 KiB advertised, LSQ at +0x24908. */
+             (chip_id == T8142 && nvmmu_base == 0x485cc0000 && nvme_base == 0x4c5cc0000)))
             nvme_size = 0x30000;
         /*
          * On T6040/T6041 the "nvme" block really ends at 0x10000: LINEAR_SQ_CTRL and the
