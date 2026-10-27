@@ -83,6 +83,8 @@ NOT_DESCRIBED = "the device tree does not describe the display block"
 # The log line of the check each scenario is meant to reach, so that none passes for another reason
 REASONS = {
     "publish": PUBLISHED,
+    "external": PUBLISHED,
+    "external-refuse": PUBLISHED,
     "stale-optin": PUBLISHED,
     "stale-optin-zero": PUBLISHED,
     "repeat": "handoff already published",

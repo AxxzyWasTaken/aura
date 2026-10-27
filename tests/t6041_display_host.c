@@ -437,6 +437,10 @@ static u32 ttbr_of(u64 l1)
 #define MARKER     "apple,t6041-handoff"
 #define OPTIN      "asahi,t6041-dcp" /* the removed opt-in, for the stale-optin scenario */
 #define DCP_UUID   "8E5C2B1A-4F7D-3A6E-9B0C-1D2E3F405162"
+#define EXT0       0x3a2e00000ULL
+#define EXT1       0x602e00000ULL
+#define EXT_DART0  0x3a2340000ULL
+#define EXT_DART1  0x602340000ULL
 
 struct seg {
     u64 phys, iova, remap;
@@ -639,6 +643,63 @@ static void build_dt(void *dt, const char *root_compat, size_t root_len)
     OK(fdt_setprop_string(dt, aliases, "dcp", "/soc/dcp@402e00000"));
     OK(fdt_setprop_string(dt, aliases, "disp0", "/display-subsystem"));
     OK(fdt_setprop_string(dt, aliases, "disp0-piodma", "/soc/dcp@402e00000/piodma"));
+}
+
+static void build_ext(void *dt, int which)
+{
+    const u64 base = which ? EXT1 : EXT0;
+    const u64 dart_base = which ? EXT_DART1 : EXT_DART0;
+    const u32 dart_ph = 100 + which;
+    char name[64], path[96];
+    snprintf(name, sizeof(name), "iommu@%llx", (unsigned long long)dart_base);
+    dart(dt, 0, name, dart_base, dart_ph);
+    snprintf(name, sizeof(name), "dcp@%llx", (unsigned long long)base);
+    int dcp = OK(fdt_add_subnode(dt, 0, name));
+    OK(fdt_setprop_string(dt, dcp, "compatible", "apple,t6041-dcpext"));
+    reg2(dt, dcp, base, 0x4000);
+    iommus(dt, dcp, dart_ph, 23);
+    OK(fdt_setprop_string(dt, dcp, "status", "disabled"));
+    fdt32_t mr[3];
+    static const char *const parts[] = {"text", "data", "heap"};
+    for (int i = 0; i < 3; i++) {
+        snprintf(name, sizeof(name), "dcpext%d-%s", which, parts[i]);
+        int region = OK(fdt_add_subnode(dt, fdt_path_offset(dt, "/reserved-memory"), name));
+        OK(fdt_setprop_string(dt, region, "compatible", "apple,asc-mem"));
+        reg2(dt, region, 0, 0x4000);
+        OK(fdt_setprop_empty(dt, region, "no-map"));
+        OK(fdt_setprop_string(dt, region, "status", "disabled"));
+        OK(fdt_setprop_u32(dt, region, "phandle", 110 + which * 3 + i));
+        mr[i] = cpu_to_fdt32(110 + which * 3 + i);
+    }
+    snprintf(path, sizeof(path), "/dcp@%llx", (unsigned long long)base);
+    dcp = fdt_path_offset(dt, path);
+    OK(fdt_setprop(dt, dcp, "memory-region", mr, sizeof(mr)));
+    static const char names[] = "text\0data\0heap";
+    OK(fdt_setprop(dt, dcp, "memory-region-names", names, sizeof(names)));
+}
+
+static void world_ext(int which)
+{
+    const u64 base = which ? EXT1 : EXT0;
+    const u64 dart_base = which ? EXT_DART1 : EXT_DART0;
+    struct seg ext[4] = {
+        {segs[SEG_TEXT].phys, 0, segs[SEG_TEXT].remap, segs[SEG_TEXT].size, 1},
+        {TB + 0x281200000ULL + which * 0x200000, 0, TB + 0x51000000 + which * 0x100000, 0x8000, 0},
+        {TB + 0x28030000ULL + which * 0x40000, 0, TB + 0x28030000ULL + which * 0x40000, 0x4000,
+         0xa},
+        {TB + 0x282200000ULL + which * 0x200000, ~0ULL, TB + 0x52000000 + which * 0x100000, 0x10000,
+         2},
+    };
+    char path[96];
+    snprintf(path, sizeof(path), "/arm-io/dcpext%d", which);
+    reg_add(path, base, 0x4000);
+    snprintf(path, sizeof(path), "/arm-io/dart-dcpext%d", which);
+    reg_add(path, dart_base, 0x4000);
+    snprintf(path, sizeof(path), "/arm-io/dcpext%d/iop-dcpext%d-nub", which, which);
+    prop_set(path, "segment-ranges", ext, sizeof(ext));
+    prop_str(path, "segment-names", "__TEXT;__DATA;__OS_LOG;unknown");
+    prop_u32(path, "pre-loaded", 1);
+    prop_u32(path, "running", 1);
 }
 
 static const char J616S[] = "apple,j616s\0apple,t6040\0apple,arm-platform";
@@ -914,6 +975,8 @@ struct scenario {
 
 static const struct scenario scenarios[] = {
     {"publish", PUBLISH, "a supported boot with no /chosen property publishes"},
+    {"external", PUBLISH, "both external firmware memories come from the ADT"},
+    {"external-refuse", PUBLISH, "one bad external ADT leaves its placeholders disabled"},
     {"stale-optin", PUBLISH, "a left-over chosen.asahi,t6041-dcp=1 changes nothing"},
     {"stale-optin-zero", PUBLISH, "a left-over chosen.asahi,t6041-dcp=0 does not disable it"},
     {"repeat", PUBLISH, "a second call adds nothing"},
@@ -994,6 +1057,14 @@ int main(int argc, char **argv)
 
     static u8 dt[DT_SIZE], in[DT_SIZE];
     build_dt(dt, is(s, "wrong-board") ? J614S : J616S, sizeof(J616S));
+    if (is(s, "external") || is(s, "external-refuse")) {
+        for (int i = 0; i < 2; i++) {
+            build_ext(dt, i);
+            world_ext(i);
+        }
+        if (is(s, "external-refuse"))
+            prop_u32("/arm-io/dcpext0/iop-dcpext0-nub", "running", 0);
+    }
 
     /* ADT side */
     if (is(s, "wrong-chip"))
@@ -1085,6 +1156,48 @@ int main(int argc, char **argv)
     fflush(stdout);
     check(ret == 0, "dt_set_display_handoff() returns 0");
     check(exc_count == 0, "no MMIO access faulted");
+
+    if (is(s, "external") || is(s, "external-refuse")) {
+        for (int i = 0; i < 2; i++) {
+            char path[40];
+            snprintf(path, sizeof(path), "/dcp@%llx", (unsigned long long)(i ? EXT1 : EXT0));
+            int ext = fdt_path_offset(dt, path);
+            const fdt32_t *mr = fdt_getprop(dt, ext, "memory-region", NULL);
+            check(ext >= 0 && mr && !strcmp(fdt_getprop(dt, ext, "status", NULL), "disabled"),
+                  "external processor stays disabled for the kernel gate");
+            for (int j = 0; j < 3; j++) {
+                int region = fdt_node_offset_by_phandle(dt, fdt32_ld(&mr[j]));
+                const char *status = fdt_getprop(dt, region, "status", NULL);
+                int len;
+                const fdt32_t *map = fdt_getprop(dt, region, "iommu-addresses", &len);
+                bool ready = status && !strcmp(status, "okay") && map && len == 5 * 4;
+                check(ready == (i != 0 || !is(s, "external-refuse")),
+                      "external memory is ready exactly when its ADT passed");
+                if (ready) {
+                    u64 want_phys = j == 0 ? segs[SEG_TEXT].phys :
+                        j == 1 ? TB + 0x281200000ULL + i * 0x200000 :
+                                 TB + 0x282200000ULL + i * 0x200000;
+                    u64 want_dva = j == 0 ? segs[SEG_TEXT].remap :
+                        j == 1 ? TB + 0x51000000 + i * 0x100000 :
+                                 TB + 0x52000000 + i * 0x100000;
+                    u64 want_size = j == 0 ? seg_size(SEG_TEXT) : j == 1 ? 0x8000 : 0x10000;
+                    const fdt64_t *r = fdt_getprop(dt, region, "reg", &len);
+                    fdt64_t map_dva, map_size;
+                    memcpy(&map_dva, &map[1], sizeof(map_dva));
+                    memcpy(&map_size, &map[3], sizeof(map_size));
+                    check(r && len == 16 && fdt64_ld(r) == want_phys &&
+                              fdt64_ld(&r[1]) == want_size &&
+                              fdt32_ld(map) == fdt_get_phandle(dt, ext) &&
+                              fdt64_to_cpu(map_dva) == want_dva &&
+                              fdt64_to_cpu(map_size) == want_size,
+                          "external region has the ADT physical span and DART alias");
+                }
+            }
+            check(!!fdt_getprop(dt, ext, "apple,firmware-compat", NULL) ==
+                      (i != 0 || !is(s, "external-refuse")),
+                  "firmware compatibility follows the memory transaction");
+        }
+    }
 
     if (is(s, "repeat")) {
         static u8 first[DT_SIZE];
