@@ -75,11 +75,15 @@
  * registers are.
  *
  * T6041 display block of the M4 Pro (chip T6040, J616s only), with the desktop 26.6.2 DCP firmware:
- * the T6031 handoff with T6041 values, armed only by the boot.bin config line
- * chosen.asahi,t6041-dcp=1, and nothing else on an unarmed boot (no __OS_LOG reservation either,
- * until that has been checked on this machine). The DCP maps through dart-dcp SID 23 and the
- * display and its piodma through dart-disp0 SIDs 0 and 16, of 32 streams each, so these SIDs are
- * per SoC (struct dcp_soc .sids). Marker apple,t6041-handoff; the nodes stay disabled.
+ * the T6031 handoff with T6041 values. There is no /chosen opt-in: the handoff is attempted on
+ * every boot whose chip is T6040, whose root is apple,j616s, whose OS firmware matches the known
+ * profile, and whose device tree describes the T6041 display block (aliases dcp and disp0,
+ * compatible apple,t6041-dcp and apple,display-subsystem). Anything else gets nothing at all: no
+ * __OS_LOG reservation, no register access, no DT edit. On a supported boot the __OS_LOG
+ * reservation and every check below run as on T6031, and the handoff is published only if all of
+ * them pass. The DCP maps through dart-dcp SID 23 and the display and its piodma through dart-disp0
+ * SIDs 0 and 16, of 32 streams each, so these SIDs are per SoC (struct dcp_soc .sids). Marker
+ * apple,t6041-handoff; the nodes stay disabled.
  *
  * Fail-soft: dt_set_display_handoff() always returns 0; a failed check is logged and changes
  * nothing. Transactional: DT edits are made on a scratch copy that replaces the DT only if every
@@ -219,7 +223,8 @@ struct dcp_soc {
     const char *dcp_compat;
     const char *disp_compat;
     const char *marker; /* set to <1> on dcp, display and piodma by the handoff */
-    const char *optin;  /* /chosen property: the boot.bin config line chosen.<optin>=1 arms */
+    const char *optin;  /* /chosen property: the boot.bin config line chosen.<optin>=1 arms;
+                           NULL: none, the chip, board, firmware and device tree gates decide */
     bool always;        /* reserve, lock and check on every boot, not only when armed; otherwise
                            dart-dcp is only locked by a handoff whose checks have all passed */
     bool oslog_always;  /* reserve the __OS_LOG buffers on every boot, even when not armed */
@@ -378,8 +383,8 @@ static const struct dcp_soc dcp_soc_t6031 = {
  * maps through dart-dcp SID 23 and the display and its piodma through dart-disp0 SIDs 0 and 16, of
  * 32 streams each (ADT sid, sid-count, l2-tt-N). The addresses are this ADT's, after the arm-io
  * ranges; segments and the display power state come from the ADT. The DCP image is not pinned:
- * the kernel accepts only the 26.6.2 firmware. Nothing happens unless the boot.bin config line
- * chosen.asahi,t6041-dcp=1 is set, and the display nodes stay disabled.
+ * the kernel accepts only the 26.6.2 firmware. No opt-in: nothing happens unless the device tree
+ * describes this display block (dcp6_dt_describes()), and the display nodes stay disabled.
  */
 static const char *const dcp_boards_t6041[] = {"apple,j616s", NULL};
 
@@ -392,7 +397,6 @@ static const struct dcp_soc dcp_soc_t6041 = {
     .dcp_compat = "apple,t6041-dcp",
     .disp_compat = "apple,display-subsystem",
     .marker = "apple,t6041-handoff",
-    .optin = "asahi,t6041-dcp",
     .adt_psreg = true,
     .board_gate = true,
     .any_uuid = true,
@@ -2336,6 +2340,8 @@ static int dcp6_publish(void *dt, const struct dcp6_dt *n)
 
 static bool dcp6_armed(void *dt)
 {
+    if (!dcp6.soc->optin)
+        return true;
     int chosen = fdt_path_offset(dt, "/chosen");
     int len = 0;
     const char *optin = chosen >= 0 ? fdt_getprop(dt, chosen, dcp6.soc->optin, &len) : NULL;
@@ -2834,6 +2840,191 @@ static void dcpext6_handoffs(void *dt)
     }
 }
 
+/*
+ * J616s external DCPs use the same four-segment ASC layout as the T6030
+ * external DCPs. The kernel DT supplies disabled text/data/heap placeholders;
+ * fill those only from this boot's ADT. In particular, do not enable the DCP,
+ * its DART or any display route here: the kernel's PMP-aware gate owns that.
+ */
+struct t6041_ext {
+    const char *name, *dt_path, *adt_path, *nub_path, *dart_path;
+    u64 coproc, dart;
+};
+
+static const struct t6041_ext t6041_exts[] = {
+    {"dcpext0", "/dcp@3a2e00000", "/arm-io/dcpext0", "/arm-io/dcpext0/iop-dcpext0-nub",
+     "/arm-io/dart-dcpext0", 0x3a2e00000UL, 0x3a2340000UL},
+    {"dcpext1", "/dcp@602e00000", "/arm-io/dcpext1", "/arm-io/dcpext1/iop-dcpext1-nub",
+     "/arm-io/dart-dcpext1", 0x602e00000UL, 0x602340000UL},
+};
+
+static int t6041_ext_fill(void *dt, const struct t6041_ext *ext)
+{
+    static const u32 flags[DCPEXT6_SEGS] = {SEG_FLAGS_TEXT, SEG_FLAGS_DATA, SEG_FLAGS_OSLOG,
+                                            SEG_FLAGS_HEAP};
+    static const char mr_names[] = "text\0data\0heap";
+    static const char *const parts[] = {"text", "data", "heap"};
+    static const int seg_index[] = {SEG_TEXT, SEG_DATA, SEG_3};
+    u64 coproc, dart, dram, dram_size, ram_end;
+    int node = fdt_path_offset(dt, ext->dt_path), len;
+    const fdt64_t *reg;
+    const fdt32_t *iommu, *mr;
+    u32 ph[3];
+
+    /* A DT without #451's external nodes is an ordinary internal-only boot. */
+    if (node < 0)
+        return 1;
+    if (fdt_node_check_compatible(dt, node, "apple,t6041-dcpext") ||
+        dcp6_status_disabled(dt, node, ext->name) || dcp6_adt_reg(ext->adt_path, 0, &coproc) ||
+        coproc != ext->coproc || dcp6_adt_reg(ext->dart_path, 0, &dart) || dart != ext->dart)
+        return -1;
+    reg = fdt_getprop(dt, node, "reg", &len);
+    if (!reg || len < 2 * (int)sizeof(fdt64_t) || fdt64_ld(reg) != coproc)
+        return -1;
+    iommu = fdt_getprop(dt, node, "iommus", &len);
+    if (!iommu || len != 2 * (int)sizeof(fdt32_t) || fdt32_ld(&iommu[1]) != 23)
+        return -1;
+    int dart_node = fdt_node_offset_by_phandle(dt, fdt32_ld(iommu));
+    if (dart_node < 0 || fdt_node_check_compatible(dt, dart_node, "apple,t8110-dart") ||
+        dcp6_status_disabled(dt, dart_node, ext->name))
+        return -1;
+    reg = fdt_getprop(dt, dart_node, "reg", &len);
+    if (!reg || len < 2 * (int)sizeof(fdt64_t) || fdt64_ld(reg) != dart)
+        return -1;
+
+    mr = fdt_getprop(dt, node, "memory-region", &len);
+    if (!mr || len != 3 * (int)sizeof(fdt32_t))
+        return -1;
+    for (int i = 0; i < 3; i++)
+        ph[i] = fdt32_ld(&mr[i]);
+    if (!ph[0] || !ph[1] || !ph[2] || ph[0] == ph[1] || ph[0] == ph[2] || ph[1] == ph[2])
+        return -1;
+    const char *names = fdt_getprop(dt, node, "memory-region-names", &len);
+    if (!names || len != sizeof(mr_names) || memcmp(names, mr_names, sizeof(mr_names)))
+        return -1;
+    for (int i = 0; i < 3; i++) {
+        int region = fdt_node_offset_by_phandle(dt, ph[i]);
+        const char *status = region < 0 ? NULL : fdt_getprop(dt, region, "status", NULL);
+        const fdt64_t *r = region < 0 ? NULL : fdt_getprop(dt, region, "reg", &len);
+        if (!status || strcmp(status, "disabled") ||
+            fdt_node_check_compatible(dt, region, "apple,asc-mem") ||
+            !fdt_getprop(dt, region, "no-map", NULL) ||
+            fdt_getprop(dt, region, "iommu-addresses", NULL) || !r ||
+            len != 2 * (int)sizeof(fdt64_t) || fdt64_ld(r) || fdt64_ld(&r[1]) != SZ_16K)
+            return -1;
+    }
+
+    int nub = adt_path_offset(adt, ext->nub_path);
+    u32 seg_len = 0, names_len = 0, preloaded, running;
+    const struct adt_segment_ranges *ranges =
+        nub < 0 ? NULL : adt_getprop(adt, nub, "segment-ranges", &seg_len);
+    const char *seg_names = nub < 0 ? NULL : adt_getprop(adt, nub, "segment-names", &names_len);
+    if (!ranges || seg_len != DCPEXT6_SEGS * sizeof(*ranges) || !seg_names ||
+        !dcp6_seg_name_is(seg_names, names_len, SEG_TEXT, "__TEXT") ||
+        !dcp6_seg_name_is(seg_names, names_len, SEG_DATA, "__DATA") ||
+        !dcp6_seg_name_is(seg_names, names_len, SEG_OSLOG, "__OS_LOG") ||
+        dcp6_adt_u32(nub, "pre-loaded", &preloaded) || preloaded != 1 ||
+        dcp6_adt_u32(nub, "running", &running) || running != 1 || dcp6_dram(&dram, &dram_size))
+        return -1;
+    ram_end = kboot_ram_base() + kboot_ram_size();
+    if (ram_end < kboot_ram_base())
+        return -1;
+    struct dcp6_seg segs[DCPEXT6_SEGS];
+    for (int i = 0; i < DCPEXT6_SEGS; i++) {
+        struct adt_segment_ranges r;
+        memcpy(&r, &ranges[i], sizeof(r));
+        segs[i] = (struct dcp6_seg){r.phys, ALIGN_UP((u64)r.size, SZ_16K), r.remap, r.unk};
+        const struct dcp6_seg *s = &segs[i];
+        if (s->flags != flags[i] || !r.size || s->size > DCP6_SEG_MAX_SIZE ||
+            (s->phys & (SZ_16K - 1)) || s->phys < dram || s->phys + s->size < s->phys ||
+            s->phys + s->size > dram + dram_size)
+            return -1;
+        if (i == SEG_OSLOG) {
+            if (s->remap != s->phys || s->size > DCP6_OSLOG_MAX)
+                return -1;
+        } else if (s->remap < DCP6_DART_VM_BASE ||
+                   s->remap - DCP6_DART_VM_BASE > DCP6_DART_VM_SIZE - s->size ||
+                   (s->remap & (SZ_16K - 1)) ||
+                   !(s->phys + s->size <= kboot_ram_base() || s->phys >= ram_end) ||
+                   dcp6_carveout_conflict(s->phys, s->size, ext->name)) {
+            return -1;
+        }
+        for (int j = 0; j < i; j++)
+            if (dcp6_overlaps(s->phys, s->size, segs[j].phys, segs[j].size) ||
+                (i != SEG_OSLOG && j != SEG_OSLOG &&
+                 dcp6_overlaps(s->remap, s->size, segs[j].remap, segs[j].size)))
+                return -1;
+    }
+    /* The two external processors and the panel share immutable TEXT. */
+    if (segs[SEG_TEXT].phys != dcp6.segs[SEG_TEXT].phys ||
+        segs[SEG_TEXT].size != dcp6.segs[SEG_TEXT].size)
+        return -1;
+
+    u32 owner = dcp6_phandle(dt, ext->dt_path);
+    if (!owner)
+        return -1;
+    for (int i = 0; i < 3; i++) {
+        const struct dcp6_seg *s = &segs[seg_index[i]];
+        char name[64];
+        fdt64_t region_reg[2] = {cpu_to_fdt64(s->phys), cpu_to_fdt64(s->size)};
+        if (i && dcp6_resv_conflict(dt, s->phys, s->size, ext->name))
+            return -1;
+        snprintf(name, sizeof(name), "%s-%s@%lx", ext->name, parts[i], s->phys);
+        int region = fdt_node_offset_by_phandle(dt, ph[i]);
+        if (region < 0 || fdt_set_name(dt, region, name))
+            return -1;
+        region = fdt_node_offset_by_phandle(dt, ph[i]);
+        if (region < 0 || fdt_setprop(dt, region, "reg", region_reg, sizeof(region_reg)) ||
+            dcp6_append_iommu_addr(dt, region, owner, DCP6_DART_VM_BASE,
+                                   s->remap - DCP6_DART_VM_BASE, s->size) ||
+            fdt_setprop_string(dt, region, "status", "okay"))
+            return -1;
+    }
+    node = fdt_path_offset(dt, ext->dt_path);
+    if (node < 0 || firmware_set_fdt(dt, node, "apple,firmware-version", &os_firmware) ||
+        firmware_set_fdt(dt, node, "apple,firmware-compat", &os_firmware))
+        return -1;
+    return 0;
+}
+
+static void t6041_ext_handoffs(void *dt)
+{
+    int panel = fdt_path_offset(dt, "dcp");
+    if (panel < 0 || !fdt_getprop(dt, panel, dcp6.soc->marker, NULL))
+        return;
+    for (size_t i = 0; i < ARRAY_SIZE(t6041_exts); i++) {
+        void *scratch = dcp6_scratch(dt);
+        if (!scratch)
+            return;
+        int ret = t6041_ext_fill(scratch, &t6041_exts[i]);
+        if (ret) {
+            if (ret < 0)
+                dlog("%s firmware memory refused; placeholder remains disabled\n",
+                     t6041_exts[i].name);
+            free(scratch);
+            continue;
+        }
+        if (!dcp6_commit(dt, scratch))
+            dlog("%s firmware memory published; processor remains disabled\n", t6041_exts[i].name);
+    }
+}
+
+/*
+ * For an SoC without an opt-in: the device tree has the display block the handoff is for, the dcp
+ * and disp0 aliases naming nodes of the SoC's compatibles. Only the presence is checked here;
+ * dcp6_check_dt() checks the rest before anything is published.
+ */
+static bool dcp6_dt_describes(void *dt)
+{
+    const char *dcp = fdt_get_alias(dt, "dcp");
+    const char *disp = fdt_get_alias(dt, "disp0");
+    int dcp_node = dcp ? fdt_path_offset(dt, dcp) : -1;
+    int disp_node = disp ? fdt_path_offset(dt, disp) : -1;
+    return dcp_node >= 0 && disp_node >= 0 &&
+           !fdt_node_check_compatible(dt, dcp_node, dcp6.soc->dcp_compat) &&
+           !fdt_node_check_compatible(dt, disp_node, dcp6.soc->disp_compat);
+}
+
 /* Always returns 0: nothing here may stop the boot */
 int dt_set_display_handoff(void *dt)
 {
@@ -2850,6 +3041,20 @@ int dt_set_display_handoff(void *dt)
 
     if (dcp6.soc->board_gate && (chip_id != dcp6.soc->chip || !dcp6_board_ok(dt))) {
         dlog("not a %s (chip 0x%x): nothing done\n", dcp6.soc->boards_desc, chip_id);
+        return 0;
+    }
+
+    /* Reject unsupported firmware before reserving __OS_LOG or touching registers. */
+    if (!dcp6.soc->optin &&
+        (dcp6.soc->os_fw == V_UNKNOWN || os_firmware.version != dcp6.soc->os_fw)) {
+        dlog("no qualified OS firmware for %s: nothing done\n", dcp6.soc->dcp_compat);
+        return 0;
+    }
+
+    if (!dcp6.soc->optin && !dcp6_dt_describes(dt)) {
+        dlog("the device tree does not describe the display block (dcp %s, disp0 %s): nothing "
+             "done\n",
+             dcp6.soc->dcp_compat, dcp6.soc->disp_compat);
         return 0;
     }
 
@@ -2876,5 +3081,7 @@ int dt_set_display_handoff(void *dt)
         dlog("not armed (no chosen.%s=1): no display handoff\n", dcp6.soc->optin);
     if (dcp6.soc->ext)
         dcpext6_handoffs(dt);
+    if (dcp6.soc == &dcp_soc_t6041)
+        t6041_ext_handoffs(dt);
     return 0;
 }
