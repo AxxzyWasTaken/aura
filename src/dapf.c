@@ -289,8 +289,7 @@ static int dapf_select_t8132(const char *path, int index, int node, int *dart_pa
         u64 base, size;
         if (adt_get_reg(adt, dart_path, "reg", i, &base, &size) < 0 || !size ||
             base + size < base ||
-            (instances[i].type != DAPF_INSTANCE_DART &&
-             ((base & 0x3fff) || size != 0x4000))) {
+            (instances[i].type != DAPF_INSTANCE_DART && ((base & 0x3fff) || size != 0x4000))) {
             printf("dapf: Invalid T8132 instance resource for %s\n", path);
             return -1;
         }
@@ -505,12 +504,9 @@ static int dapf_init_j713(void *dt)
         const char *consumer;
         int index;
     } entries[] = {
-        {"/arm-io/dart-aop", "/arm-io/aop", 1},
-        {"/arm-io/dart-mtp", "/arm-io/mtp", 1},
-        {"/arm-io/dart-pmp", "/arm-io/pmp", 1},
-        {"/arm-io/dart-isp", "/arm-io/isp", 5},
-        {"/arm-io/dart-isp0", "/arm-io/isp0", 5},
-        {NULL, NULL, -1},
+        {"/arm-io/dart-aop", "/arm-io/aop", 1},   {"/arm-io/dart-mtp", "/arm-io/mtp", 1},
+        {"/arm-io/dart-pmp", "/arm-io/pmp", 1},   {"/arm-io/dart-isp", "/arm-io/isp", 5},
+        {"/arm-io/dart-isp0", "/arm-io/isp0", 5}, {NULL, NULL, -1},
     };
     const typeof(entries[0]) *entry = entries;
     int chosen = dt ? fdt_path_offset(dt, "/chosen") : -1;
@@ -558,8 +554,8 @@ static int dapf_init_j713(void *dt)
 
             int powered = pmgr_adt_is_powered(entry->consumer);
             if (powered <= 0) {
-                printf("dapf: Skipping %s; consumer %s is inactive or its state is unknown\n", entry->path,
-                       entry->consumer);
+                printf("dapf: Skipping %s; consumer %s is inactive or its state is unknown\n",
+                       entry->path, entry->consumer);
                 entry++;
                 continue;
             }

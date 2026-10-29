@@ -94,8 +94,8 @@ void dt_t6031_fw_uuids(void *dt)
     if (fdt_setprop(dt, chosen, FW_UUIDS_PROP, list, len))
         printf("FDT: %s: could not add /chosen/" FW_UUIDS_PROP "\n", tag);
     else
-        printf("FDT: %s: %d of %d firmware image UUIDs in /chosen/" FW_UUIDS_PROP "\n", tag,
-               found, (int)ARRAY_SIZE(fw_nubs));
+        printf("FDT: %s: %d of %d firmware image UUIDs in /chosen/" FW_UUIDS_PROP "\n", tag, found,
+               (int)ARRAY_SIZE(fw_nubs));
 }
 
 #define FACTS_NODE     "asahi,t6031-facts"

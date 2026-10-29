@@ -224,8 +224,8 @@ static void mmu_publish_translation(void)
 {
     sysop("dsb ishst");
     /* With TGE clear, VHE's EL1 invalidation targets guest translations. */
-    if (chip_id == T6040 && mrs(CurrentEL) == 8 &&
-        (mrs(HCR_EL2) & HCR_E2H) && !(mrs(HCR_EL2) & HCR_TGE))
+    if (chip_id == T6040 && mrs(CurrentEL) == 8 && (mrs(HCR_EL2) & HCR_E2H) &&
+        !(mrs(HCR_EL2) & HCR_TGE))
         sysop("tlbi alle2is");
     else
         sysop("tlbi vmalle1is");

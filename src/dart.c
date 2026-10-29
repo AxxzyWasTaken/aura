@@ -562,13 +562,12 @@ dart_dev_t *dart_init_adt_display(const char *path, int instance, int device)
     int roots = 0;
     for (int i = 0; i < dart->params->ttbr_count; i++)
         roots += !!dart->l1[i];
-    printf("dart: %s sid %d %slocked, tcr 0x%x, stream %s, %d inherited root(s)\n", path,
-           device, dart->locked ? "" : "not ", tcr, enabled ? "enabled" : "disabled", roots);
+    printf("dart: %s sid %d %slocked, tcr 0x%x, stream %s, %d inherited root(s)\n", path, device,
+           dart->locked ? "" : "not ", tcr, enabled ? "enabled" : "disabled", roots);
 
     if (dart->locked) {
         if (!enabled || !translating || !roots) {
-            printf("dart: %s: locked stream does not translate through inherited tables\n",
-                   path);
+            printf("dart: %s: locked stream does not translate through inherited tables\n", path);
             dart_shutdown(dart);
             return NULL;
         }

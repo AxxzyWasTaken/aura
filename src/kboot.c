@@ -405,9 +405,9 @@ struct m3_default_board {
 };
 
 static const char *const m3_air_boards[] = {"apple,j613", "apple,j615", NULL};
-static const char *const m3_air_switches[] = {
-    "asahi,t8122-dcp", "asahi,t8122-gpu", "asahi,t8122-gpu-power-standin",
-    "asahi,t8122-gpu-fuse-leakage", NULL};
+static const char *const m3_air_switches[] = {"asahi,t8122-dcp", "asahi,t8122-gpu",
+                                              "asahi,t8122-gpu-power-standin",
+                                              "asahi,t8122-gpu-fuse-leakage", NULL};
 static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
 static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
 static const char *const m3_max_boards[] = {"apple,j516c", NULL};
@@ -2693,7 +2693,8 @@ static int dt_reserve_asc_segments(const char *adt_path, const char *adt_path_al
          * its RAM, marked as such, without an IOMMU mapping.
          */
         if (((chip_id == T6030 && !strncmp(fdt_path, "dcp", 3)) ||
-             (chip_id == T8132 && !strcmp(fdt_path, "dcp"))) && seg->unk == 0xa)
+             (chip_id == T8132 && !strcmp(fdt_path, "dcp"))) &&
+            seg->unk == 0xa)
             ret = fdt_setprop_empty(dt, mem_node, "apple,dcp-os-log");
         else
             ret = dt_device_set_reserved_mem(mem_node, node_name, dev_phandle, iova, seg_size);
@@ -3055,11 +3056,8 @@ static int dt_t8140_copy_provider_props(const char *dcp_path)
         const char *name;
         u32 size;
     } props[] = {
-        {"power-lut-data-x", 4},
-        {"power-lut-data-y", 4},
-        {"power-lut-data-xindex", 52},
-        {"power-lut-data-yindex", 4},
-        {"power-lut-data-lut", 52},
+        {"power-lut-data-x", 4},      {"power-lut-data-y", 4},    {"power-lut-data-xindex", 52},
+        {"power-lut-data-yindex", 4}, {"power-lut-data-lut", 52},
     };
     const void *values[ARRAY_SIZE(props)];
     int disp = adt_path_offset(adt, "/arm-io/disp0");
@@ -3071,8 +3069,7 @@ static int dt_t8140_copy_provider_props(const char *dcp_path)
         u32 size = 0;
         values[i] = adt_getprop(adt, disp, props[i].name, &size);
         if (values[i] && size != props[i].size) {
-            printf("FDT: disp0 %s has %u bytes, expected %u\n", props[i].name, size,
-                   props[i].size);
+            printf("FDT: disp0 %s has %u bytes, expected %u\n", props[i].name, size, props[i].size);
             return -FDT_ERR_BADVALUE;
         }
     }
@@ -5268,7 +5265,8 @@ static int dt_set_j713_display_maps(const struct adt_segment_ranges *segments, u
     const char *aliases[] = {"disp0", "disp0_piodma"};
     const u8 streams[] = {0, 16};
     struct j713_display_maps maps[2] = {
-        {.segments = segments, .count = count}, {.segments = segments, .count = count},
+        {.segments = segments, .count = count},
+        {.segments = segments, .count = count},
     };
     u32 phandles[2];
 
@@ -6554,8 +6552,7 @@ static int dt_set_pmgr(void)
     return 0;
 }
 
-static int dt_set_adt_regs(const char *alias, const u64 *addrs, const u64 *sizes,
-                           size_t count)
+static int dt_set_adt_regs(const char *alias, const u64 *addrs, const u64 *sizes, size_t count)
 {
     const char *path = fdt_get_alias(dt, alias);
     if (!path)
@@ -6633,8 +6630,7 @@ static int dt_set_ans_nvme(bool polled)
         bail("ADT: ANS control aperture is too small\n");
 
     const u64 nvme_addrs[] = {nvme_addr, nvmmu_addr, ans_addr};
-    const u64 nvme_sizes[] = {nvme_size < 0x40000 ? 0x40000 : nvme_size,
-                             nvmmu_size, 0x4000};
+    const u64 nvme_sizes[] = {nvme_size < 0x40000 ? 0x40000 : nvme_size, nvmmu_size, 0x4000};
     int ret = dt_set_adt_regs("ans", nvme_addrs, nvme_sizes, ARRAY_SIZE(nvme_addrs));
     if (ret < 0)
         bail("FDT: failed to set ANS register ranges: %d\n", ret);

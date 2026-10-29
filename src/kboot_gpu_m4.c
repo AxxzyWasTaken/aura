@@ -4,6 +4,7 @@
 #include "adt.h"
 #include "soc.h"
 #include "utils.h"
+
 #include "libfdt/libfdt.h"
 
 /* Resource publication only. Never start, stop, reset or power the GPU here. */
@@ -14,8 +15,8 @@ struct gpu_m4_range {
 
 static bool valid_range(struct gpu_m4_range r)
 {
-    return r.base && r.size && !((r.base | r.size) & (SZ_16K - 1)) &&
-           r.base + r.size > r.base && r.base + r.size <= (1ULL << 42);
+    return r.base && r.size && !((r.base | r.size) & (SZ_16K - 1)) && r.base + r.size > r.base &&
+           r.base + r.size <= (1ULL << 42);
 }
 
 static int read_exact(int node, const char *name, void *out, u32 size)
@@ -49,8 +50,7 @@ static int reserve_range(void *dt, struct gpu_m4_range range)
         u64 base, size;
         if (fdt_get_mem_rsv(dt, i, &base, &size))
             return -1;
-        if (base + size >= base && base <= range.base &&
-            base + size >= range.base + range.size)
+        if (base + size >= base && base <= range.base && base + size >= range.base + range.size)
             return 0;
     }
     return fdt_add_mem_rsv(dt, range.base, range.size);
@@ -76,22 +76,24 @@ static int publish_gpu_m4(void *dt)
     if (sgx < 0 || asc < 0)
         return -1;
     u64 base, size;
-    if (adt_get_reg(adt, sgx_path, "reg", 0, &base, &size) < 0 ||
-        base != 0x300000000 || size != 0x4000000 ||
-        adt_get_reg(adt, asc_path, "reg", 0, &base, &size) < 0 ||
+    if (adt_get_reg(adt, sgx_path, "reg", 0, &base, &size) < 0 || base != 0x300000000 ||
+        size != 0x4000000 || adt_get_reg(adt, asc_path, "reg", 0, &base, &size) < 0 ||
         base != 0x302600000 || size != 0x88000)
         return -1;
 
     u32 irq[4];
-    if (read_exact(asc, "interrupts", irq, sizeof(irq)) ||
-        irq[0] != 994 || irq[1] != 993 || irq[2] != 996 || irq[3] != 995)
+    if (read_exact(asc, "interrupts", irq, sizeof(irq)) || irq[0] != 994 || irq[1] != 993 ||
+        irq[2] != 996 || irq[3] != 995)
         return -1;
 
     const char *properties[] = {
-        "gpu-region", "gfx-shared-region", "gfx-handoff", "gfx-shared-l2-region",
+        "gpu-region",
+        "gfx-shared-region",
+        "gfx-handoff",
+        "gfx-shared-l2-region",
     };
     const char *paths[] = {
-        "/reserved-memory/uat-ttbs", "/reserved-memory/uat-pagetables",
+        "/reserved-memory/uat-ttbs",    "/reserved-memory/uat-pagetables",
         "/reserved-memory/uat-handoff", "/reserved-memory/uat-shared-l2",
         "/reserved-memory/gpu-fw-text", "/reserved-memory/gpu-fw-data",
     };
@@ -142,8 +144,7 @@ static int publish_gpu_m4(void *dt)
         fdt64_st(&reg[0], ranges[i].base);
         fdt64_st(&reg[1], ranges[i].size);
         if (fdt_setprop(dt, node, "reg", reg, sizeof(reg)) ||
-            fdt_setprop_empty(dt, node, "no-map") ||
-            fdt_setprop_string(dt, node, "status", "okay"))
+            fdt_setprop_empty(dt, node, "no-map") || fdt_setprop_string(dt, node, "status", "okay"))
             return -1;
     }
     gpu = fdt_path_offset(dt, "gpu");

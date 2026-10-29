@@ -4,6 +4,7 @@
 #include "dart.h"
 #include "smc.h"
 #include "utils.h"
+
 #include "libfdt/libfdt.h"
 
 /* J713 /amfm/function-reg_on pKW4 template. Its firmware bit meaning is opaque. */
@@ -79,8 +80,7 @@ static int pcie_fdt_resolve_iommu(void *dt, int host, int port, u32 *phandle, u8
 
         int iommu_len;
         const fdt32_t *iommu_cells = fdt_getprop(dt, provider, "#iommu-cells", &iommu_len);
-        if (!iommu_cells || iommu_len != (int)sizeof(*iommu_cells) ||
-            fdt32_ld(iommu_cells) != 1)
+        if (!iommu_cells || iommu_len != (int)sizeof(*iommu_cells) || fdt32_ld(iommu_cells) != 1)
             return -1;
 
         u32 sid_base = fdt32_ld(&map[pos + 2]);

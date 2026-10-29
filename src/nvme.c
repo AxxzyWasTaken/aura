@@ -457,8 +457,8 @@ bool nvme_init(void)
          */
         nvme_lsq_in_nvmmu = chip_id == T6040 || chip_id == T6041;
         u64 lsq_size = nvme_lsq_in_nvmmu ? nvmmu_size : nvme_size;
-        u64 nvme_need = nvme_lsq_in_nvmmu ? NVME_BOOT_STATUS + sizeof(u32)
-                                          : NVME_DB_LINEAR_IOSQ + sizeof(u32);
+        u64 nvme_need =
+            nvme_lsq_in_nvmmu ? NVME_BOOT_STATUS + sizeof(u32) : NVME_DB_LINEAR_IOSQ + sizeof(u32);
         if (nvmmu_size < NVMMU_TCB_STAT + sizeof(u32) || nvme_size < nvme_need ||
             lsq_size < NVME_DB_LINEAR_IOSQ + sizeof(u32) || nvmmu_base > UINT64_MAX - nvmmu_size ||
             nvme_base > UINT64_MAX - nvme_size ||

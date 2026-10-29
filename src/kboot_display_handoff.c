@@ -243,8 +243,8 @@ struct dcp_soc {
     bool sids;          /* the stream IDs and stream count below; otherwise SIDs 5/0/4 of 16 */
     bool oslog_in_rsv;  /* an __OS_LOG wholly inside a /memreserve/ is still given its node */
     u8 sid_dcp, sid_disp, sid_piodma, streams;
-    const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only (unless any_uuid) */
-    u32 os_fw;          /* enum fw_version the kernel's DCP interface is written for */
+    const char *uuid; /* DCP firmware image; NULL: none pinned, dry run only (unless any_uuid) */
+    u32 os_fw;        /* enum fw_version the kernel's DCP interface is written for */
     const char *os_fw_name;
     /* Nonzero: the ADT must say the same. Zero: taken from the ADT. */
     u64 coproc, dart_dcp, dart_disp;
