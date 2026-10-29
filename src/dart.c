@@ -1031,6 +1031,12 @@ void *dart_translate(dart_dev_t *dart, uintptr_t iova)
     return dart_translate_internal(dart, iova, 0);
 }
 
+/* Firmware locked this DART's root and stream registers; it keeps its tables. */
+bool dart_is_locked(dart_dev_t *dart)
+{
+    return dart && dart->locked;
+}
+
 void *dart_translate_silent(dart_dev_t *dart, uintptr_t iova)
 {
     return dart_translate_internal(dart, iova, 1);

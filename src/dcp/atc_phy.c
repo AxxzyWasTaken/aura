@@ -13,12 +13,13 @@
 #include "../tps6598x.h"
 #include "../utils.h"
 
-#define ATC_CFG       0x60000
-#define ATC_AON       0x1e00
-#define ATC_XBAR      0x74000
-#define ATC_TIMEOUT   10000
-#define ATC_SAVED_MAX 192
-#define ATC_PSD58     0x303a13a00ULL
+#define ATC_CFG              0x60000
+#define ATC_AON              0x1e00
+#define ATC_XBAR             0x74000
+#define ATC_TIMEOUT          10000
+#define ATC_ALT_MODE_TIMEOUT 2000000
+#define ATC_SAVED_MAX        192
+#define ATC_PSD58            0x303a13a00ULL
 
 struct atc_saved {
     u32 offset;
@@ -275,20 +276,56 @@ atc_phy_t *atc_phy_init(const char *path)
     spmi_dev_t *spmi = spmi_init("/arm-io/nub-spmi-a0");
     if (!spmi)
         return NULL;
-    u8 mode[4], status[8] = {0}, data[8] = {0};
-    int m = ace3_read(spmi, 8, ACE3_REG_MODE, mode, sizeof(mode));
-    int s = ace3_read(spmi, 8, ACE3_REG_STATUS, status, sizeof(status));
-    int d = ace3_read(spmi, 8, TPS6598X_REG_DATA_STATUS, data, sizeof(data));
-    spmi_shutdown(spmi);
-    if (m != 4 || memcmp(mode, "APP ", 4) || s < 4 || d < 4 ||
-        !(status[0] & TPS6598X_STATUS_PLUG_PRESENT))
+    /* iBoot hands the port controllers over asleep: their registers read back as
+     * unimplemented or zero until an SPMI wakeup, and they sit in power state 7.
+     * Wake hpm3 and request S0 as USB initialization does, then wait: on a fresh
+     * boot the controller reports the attached partner only after S0, and a
+     * DisplayPort partner also needs to finish alternate-mode entry. Release the
+     * controller the same way USB initialization does. */
+    tps6598x_dev_t *tps = tps6598x_init_spmi("/arm-io/nub-spmi-a0/hpm3", spmi);
+    if (!tps) {
+        spmi_shutdown(spmi);
+        printf("ATC3: back-right USB-C controller did not wake\n");
         return NULL;
-    u32 data_status;
-    memcpy(&data_status, data, sizeof(data_status));
+    }
+    if (tps6598x_powerup(tps) < 0)
+        printf("ATC3: back-right USB-C controller did not enter S0\n");
+    u8 mode[4], status[8], data[8];
+    int m, s, d;
+    u32 data_status = 0;
+    u64 deadline = timeout_calculate(ATC_ALT_MODE_TIMEOUT);
+    for (;;) {
+        memset(status, 0, sizeof(status));
+        memset(data, 0, sizeof(data));
+        m = ace3_read(spmi, 8, ACE3_REG_MODE, mode, sizeof(mode));
+        s = ace3_read(spmi, 8, ACE3_REG_STATUS, status, sizeof(status));
+        d = ace3_read(spmi, 8, TPS6598X_REG_DATA_STATUS, data, sizeof(data));
+        if (d >= 4)
+            memcpy(&data_status, data, sizeof(data_status));
+        if (m != 4 || memcmp(mode, "APP ", 4) || s < 4 || d < 4 ||
+            ((status[0] & TPS6598X_STATUS_PLUG_PRESENT) &&
+             (data_status & TPS6598X_DATA_DP_CONNECTION)) ||
+            timeout_expired(deadline))
+            break;
+        mdelay(50);
+    }
+    tps6598x_shutdown(tps);
+    spmi_shutdown(spmi);
+    if (m != 4 || memcmp(mode, "APP ", 4) || s < 4 || d < 4) {
+        printf("ATC3: back-right USB-C controller state is unreadable\n");
+        return NULL;
+    }
+    if (!(status[0] & TPS6598X_STATUS_PLUG_PRESENT)) {
+        printf("ATC3: nothing is plugged into the back-right USB-C port\n");
+        return NULL;
+    }
     if (!(data_status & TPS6598X_DATA_DP_CONNECTION) ||
         data_status & (TPS6598X_DATA_USB3_CONNECTION | TPS6598X_DATA_USB4_CONNECTION |
-                       TPS6598X_DATA_TBT_CONNECTION))
+                       TPS6598X_DATA_TBT_CONNECTION)) {
+        printf("ATC3: back-right USB-C partner is not a DisplayPort-only sink (data status %#x)\n",
+               data_status);
         return NULL;
+    }
 
     atc_phy_t *phy = calloc(1, sizeof(*phy));
     if (!phy)

@@ -178,6 +178,24 @@ int dcp_work(dcp_dev_t *dcp)
     return afk_epic_work(dcp->afk, -1);
 }
 
+/* Is entry @index of the ';'-separated ADT segment-names list exactly @name? */
+static bool seg_name_is(const char *names, u32 names_len, unsigned int index, const char *name)
+{
+    if (!names)
+        return false;
+    u32 pos = 0;
+    for (unsigned int i = 0; i < index; i++) {
+        while (pos < names_len && names[pos] && names[pos] != ';')
+            pos++;
+        if (pos >= names_len || names[pos] != ';')
+            return false;
+        pos++;
+    }
+    size_t len = strlen(name);
+    return pos + len <= names_len && !memcmp(names + pos, name, len) &&
+           (pos + len == names_len || names[pos + len] == ';' || !names[pos + len]);
+}
+
 static int dcp_create_firmware_mappings(const display_config_t *cfg, dcp_dev_t *dcp)
 {
     int created = 0;
@@ -197,11 +215,23 @@ static int dcp_create_firmware_mappings(const display_config_t *cfg, dcp_dev_t *
 
     seg = adt_getprop(adt, node, "segment-ranges", &segments_len);
     unsigned int count = segments_len / sizeof(*seg);
+    u32 names_len = 0;
+    const char *names = adt_getprop(adt, node, "segment-names", &names_len);
 
     for (unsigned int i = 0; i < count; i++) {
         u64 iova = seg[i].remap & ~asc_dram_mask;
         if (dart_translate_silent(dcp->dart_dcp, iova))
             continue;
+
+        /* On M6, iBoot maps every segment the firmware needs into the locked
+         * DCP DART except the __OS_LOG buffer, which it places right after the
+         * boot object without a mapping (remap == phys). The log is optional
+         * (chainload drops it for XNU), and chainload stages the next image in
+         * that memory, so do not grant the firmware DMA into it. */
+        if (dart_is_locked(dcp->dart_dcp) && seg_name_is(names, names_len, i, "__OS_LOG")) {
+            printf("dcp: Leaving unmapped segment #%u __OS_LOG to the locked DART\n", i);
+            continue;
+        }
 
         size_t len = ALIGN_UP(seg[i].size, SZ_16K);
         u32 flags = i == 0 ? 0b0100 : 0; // TEXT gets this bit set?
