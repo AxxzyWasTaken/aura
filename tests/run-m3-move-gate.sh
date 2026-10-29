@@ -24,16 +24,9 @@ clang --target=aarch64-none-elf -c -O2 -ffreestanding -fpic -nostdinc \
 llvm-objcopy -O binary -j .init "$tmp/start.o" "$tmp/init.bin"
 llvm-objdump -d --no-show-raw-insn -j .init "$tmp/start.o" > "$tmp/init.dis"
 
-# The separate J613 stage1 must stay at the iBoot placement. Check actual
-# preprocessed assembly, rather than assuming the build flag reaches start.S.
-printf '%s\n' '#define J613_ESP_STAGE1' > "$tmp/build/build_cfg.h"
-clang --target=aarch64-none-elf -c -O2 -ffreestanding -fpic -nostdinc \
-    -isystem "$(clang -print-file-name=include)" -isystem sysinc -Isrc -Isrc/hv -I"$tmp" \
-    -march=armv8.2-a -o "$tmp/stage1.o" "$tmp/src/start.S"
-llvm-objdump -d --no-show-raw-insn -j .init "$tmp/stage1.o" > "$tmp/stage1.dis"
-# The old move writes top_of_kernel_data after loading it at BootArgs+32.
-if grep -Eq 'ldr[[:space:]]+x21, \[x19, #0x20\]' "$tmp/stage1.dis"; then
-    echo 'FAIL: optional J613 stage1 still runs the stage2 self-move'
+# A Stage 1 must stay at the iBoot placement: only an ESP Stage 2 sets stage2_relocates.
+if ! awk '/^#ifdef ESP_STAGE2$/{s=1} s&&/stage2_relocates = 1;/{one=1} s&&/^#else$/{e=1} e&&/stage2_relocates = 0;/{zero=1} END{exit !(one&&zero)}' src/payload.c; then
+    echo 'FAIL: stage2_relocates is not 1 only for ESP_STAGE2 builds'
     exit 1
 fi
 

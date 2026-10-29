@@ -150,6 +150,13 @@ static int adt_path_offset(const void *dt, const char *path)
     assert(dt == adt && !strcmp(path, "/chosen/memory-map"));
     return adt_node;
 }
+/* This ADT has no preoslog and no BootArgs entry: their handling must leave the layout alone. */
+static const void *adt_getprop(const void *dt, int node, const char *name, u32 *len)
+{
+    assert(dt == adt && node == adt_node);
+    assert(!strcmp(name, "preoslog") || !strcmp(name, "BootArgs"));
+    return NULL;
+}
 static int adt_getprop_copy(const void *dt, int node, const char *name, void *out, size_t len)
 {
     assert(dt == adt && node == adt_node && !strcmp(name, "SEPFW") && len == sizeof(sepfw));

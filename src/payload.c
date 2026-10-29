@@ -406,14 +406,6 @@ int payload_run(void)
         return -1;
     }
 
-#ifdef J613_ESP_STAGE1
-    /* main.c admits only J613/26.6.2 before invoking payload_run. */
-    const char *configured = stage1_config_target();
-    if (configured) {
-        chainload_spec = (char *)configured;
-    }
-#endif
-
     if (chainload_spec) {
         next_stage.entry = NULL;
         int ret = chainload_load(chainload_spec, chosen, &chosen_cnt, ARRAY_SIZE(chosen));
