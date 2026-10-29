@@ -8,13 +8,14 @@
 #include "malloc.h"
 #include "memory.h"
 #include "nvme.h"
+#include "stage1_config.h"
 #include "string.h"
 #include "types.h"
 #include "utils.h"
 #include "xnuboot.h"
 
 #ifdef CHAINLOADING
-int rust_load_image(const char *spec, void **image, size_t *size);
+int rust_load_image(const char *spec, void **image, size_t *size, bool *proxy_request);
 void rust_free_image(void *image, size_t size);
 #endif
 
@@ -283,7 +284,29 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
         }
     }
 
-    ret = rust_load_image(spec, &image, &size);
+    bool proxy_request = false;
+    ret = rust_load_image(spec, &image, &size, &proxy_request);
+#ifndef ESP_STAGE2
+    /*
+     * An aura-proxy file at the ESP root asks Stage 1 to wait for a host. Hand NVMe
+     * back first so a host that takes the window finds the same state as before any load,
+     * and read the Stage 2 again only if nobody did.
+     */
+    if (ret == 0 && proxy_request) {
+        rust_free_image(image, size);
+        if (!nvme_shutdown()) {
+            next_stage.entry = NULL;
+            return -1;
+        }
+        if (stage1_proxy_request_window())
+            return next_stage.entry ? 0 : -1;
+        if (!nvme_init()) {
+            printf("chainload: NVME init failed\n");
+            return -1;
+        }
+        ret = rust_load_image(spec, &image, &size, NULL);
+    }
+#endif
     if (ret == 0) {
         ret = chainload_image(image, size, vars, *var_cnt);
         rust_free_image(image, size);

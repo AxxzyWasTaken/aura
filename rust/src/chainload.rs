@@ -65,7 +65,7 @@ impl From<gpt::Error<nvme::Error>> for Error {
     }
 }
 
-fn load_image(spec: &str) -> Result<Vec<u8>, Error> {
+fn load_image(spec: &str, proxy_request: Option<&mut bool>) -> Result<Vec<u8>, Error> {
     println!("Chainloading from the ESP");
 
     let mut args = spec.split(';');
@@ -102,6 +102,16 @@ fn load_image(spec: &str) -> Result<Vec<u8>, Error> {
     let fs = FileSystem::new(storage, opts)?;
     let (parent, file_name) = path.rsplit_once('/').unwrap_or(("", path));
     let root = fs.root_dir();
+    // An "aura-proxy" file at the ESP root asks Stage 1 to wait for a host before booting.
+    if let Some(marker) = proxy_request {
+        *marker = false;
+        for result in root.iter() {
+            let entry = result?;
+            if entry.is_file() && entry.eq_name("aura-proxy") {
+                *marker = true;
+            }
+        }
+    }
     let dir = if parent.is_empty() {
         root
     } else {
@@ -151,6 +161,7 @@ pub unsafe extern "C" fn rust_load_image(
     raw_spec: *const c_char,
     image: *mut *mut c_void,
     size: *mut c_size_t,
+    proxy_request: *mut bool,
 ) -> c_int {
     if raw_spec.is_null() || image.is_null() || size.is_null() {
         return -1;
@@ -159,7 +170,8 @@ pub unsafe extern "C" fn rust_load_image(
         return -1;
     };
 
-    match load_image(spec) {
+    let marker = unsafe { proxy_request.as_mut() };
+    match load_image(spec, marker) {
         Ok(buf) => {
             let buf = Box::leak(buf.into_boxed_slice());
             unsafe {
