@@ -184,11 +184,17 @@ static void pmgr_adt_get_parents(const struct pmgr_device *device, u16 parent[2]
     }
 }
 
+/* IDs whose ancestry is already known to be acyclic and complete. Without
+ * this, multi-parent domains make the walk exponential in the depth. */
+static u8 pmgr_valid_ids[0x10000 / 8];
+
 static int pmgr_validate_parents(u16 id, u16 *ancestors, size_t depth)
 {
     const struct pmgr_device *device;
     u16 parents[2];
 
+    if (pmgr_valid_ids[id / 8] & BIT(id % 8))
+        return 0;
     if (depth >= PMGR_MAX_PARENT_DEPTH)
         return -1;
     if (pmgr_find_device(id, &device)) {
@@ -212,11 +218,13 @@ static int pmgr_validate_parents(u16 id, u16 *ancestors, size_t depth)
         if (parents[i] && pmgr_validate_parents(parents[i], ancestors, depth + 1))
             return -1;
     }
+    pmgr_valid_ids[id / 8] |= BIT(id % 8);
     return 0;
 }
 
 static int pmgr_validate_topology(void)
 {
+    memset(pmgr_valid_ids, 0, sizeof(pmgr_valid_ids));
     for (size_t i = 0; i < pmgr_devices_len; i++) {
         const struct pmgr_device *device = &pmgr_devices[i];
         u16 id = pmgr_adt_get_id(device);
