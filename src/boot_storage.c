@@ -20,7 +20,7 @@
 #define IMAGE_ALIGN   (2 * SZ_1M)
 
 #ifdef CHAINLOADING
-int rust_load_image(const char *spec, void **image, size_t *size);
+int rust_load_image(const char *spec, void **image, size_t *size, bool *proxy_request);
 void rust_free_image(void *image, size_t size);
 
 static int boot_image_header(const void *data, size_t file_size, u64 *text_offset, u64 *image_size)
@@ -159,8 +159,8 @@ int boot_storage_load(const char *spec, struct kernel_header **kernel, void **fd
     size_t sizes[3] = {0};
     for (size_t i = 0; i < (have_initrd ? 3 : 2); i++) {
         int len = snprintf(file_spec, spec_len + 1, "%s;%s", part[0], part[i + 1]);
-        if (len < 0 || (size_t)len > spec_len || rust_load_image(file_spec, &files[i], &sizes[i]) ||
-            !files[i] || !sizes[i])
+        if (len < 0 || (size_t)len > spec_len ||
+            rust_load_image(file_spec, &files[i], &sizes[i], NULL) || !files[i] || !sizes[i])
             goto fail;
     }
 

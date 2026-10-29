@@ -75,6 +75,35 @@ void get_device_info(void)
     printf("\n");
 }
 
+/* Stage 1 runs at most one proxy window per boot: from its config or an aura-proxy request. */
+static bool stage1_window_done;
+static enum stage1_proxy_result stage1_window_result = STAGE1_PROXY_TIMEOUT;
+
+static void stage1_run_host_proxy(void)
+{
+    printf("Stage 1: host request received\n");
+    fb_set_active(true);
+    uartproxy_run_presynced();
+    while (!next_stage.entry)
+        uartproxy_run(NULL);
+}
+
+bool stage1_proxy_request_window(void)
+{
+    if (stage1_window_done)
+        return false;
+    stage1_window_done = true;
+    printf("Stage 1: aura-proxy on the ESP, waiting %u s for a host\n",
+           STAGE1_PROXY_REQUEST_MS / 1000);
+    stage1_window_result = uartproxy_wait_stage1(STAGE1_PROXY_REQUEST_MS);
+    if (stage1_window_result == STAGE1_PROXY_CDC || stage1_window_result == STAGE1_PROXY_KIS) {
+        stage1_run_host_proxy();
+        return true;
+    }
+    printf("Stage 1: proxy window ended\n");
+    return false;
+}
+
 void run_actions(void)
 {
     bool usb_up = false;
@@ -82,14 +111,16 @@ void run_actions(void)
     enum stage1_payload_action payload_action;
 
     u32 window_ms = stage1_config_window_ms();
-    if (window_ms && !aura_proxy_enabled()) {
-        window_result = uartproxy_wait_stage1(window_ms);
+    /* aura-proxy: wait for a host, then boot as normal if none came. */
+    if (aura_proxy_enabled() && window_ms < STAGE1_PROXY_REQUEST_MS) {
+        printf("aura-proxy: waiting %u s for a host\n", STAGE1_PROXY_REQUEST_MS / 1000);
+        window_ms = STAGE1_PROXY_REQUEST_MS;
+    }
+    if (window_ms) {
+        window_result = stage1_window_result = uartproxy_wait_stage1(window_ms);
+        stage1_window_done = true;
         if (window_result == STAGE1_PROXY_CDC || window_result == STAGE1_PROXY_KIS) {
-            printf("Stage 1: host request received\n");
-            fb_set_active(true);
-            uartproxy_run_presynced();
-            while (!next_stage.entry)
-                uartproxy_run(NULL);
+            stage1_run_host_proxy();
             return;
         }
         printf("Stage 1: proxy window ended\n");
@@ -139,14 +170,11 @@ void run_actions(void)
 #endif
 #endif
 
-    if (aura_proxy_enabled())
-        printf("aura-proxy: stage 1 payload chainload disabled\n");
-    else
-        printf("Checking for payloads...\n");
+    printf("Checking for payloads...\n");
 
-    bool payload_valid = !aura_proxy_enabled() && payload_run() == 0;
-    payload_action = stage1_proxy_payload_action(window_result, payload_valid, usb_cdc_ready(),
-                                                 !usb_cdc_owns_carrier());
+    bool payload_valid = payload_run() == 0;
+    payload_action = stage1_proxy_payload_action(stage1_window_result, payload_valid,
+                                                 usb_cdc_ready(), !usb_cdc_owns_carrier());
     if (payload_action == STAGE1_PAYLOAD_NATIVE) {
         printf("Valid payload found\n");
         return;

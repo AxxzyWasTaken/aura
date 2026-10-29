@@ -28,8 +28,9 @@ static void *initrd;
 static size_t initrd_size;
 static bool nvme_init(void) { return true; }
 static bool nvme_shutdown(void) { shutdowns++; return true; }
-static int rust_load_image(const char *spec, void **data, size_t *size)
+static int rust_load_image(const char *spec, void **data, size_t *size, bool *proxy_request)
 {
+    (void)proxy_request;
     loaded++;
     if (!strcmp(spec, "esp;image")) { *data = &image; *size = sizeof(image); }
     else if (!strcmp(spec, "esp;dtb")) { *data = &tree; *size = 1; }

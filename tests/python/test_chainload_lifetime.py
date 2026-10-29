@@ -17,20 +17,25 @@ def test_chainload_releases_loaded_image(tmp_path):
 #include <string.h>
 static struct { void *entry; } next_stage;
 static char image[16];
-static int load_error, copy_error, freed, copied;
-static bool shutdown_ok;
+static int load_error, copy_error, freed, copied, loads, windows;
+static bool shutdown_ok, request, host;
 static bool nvme_init(void) { return true; }
 static bool nvme_has_live_post_m4_session(void) { return true; }
 static bool nvme_shutdown(void) { return shutdown_ok; }
-static int rust_load_image(const char *spec, void **data, size_t *size)
+static int rust_load_image(const char *spec, void **data, size_t *size, bool *proxy_request)
 {
+    loads++;
+    /* The ESP is read for the request only on the first load. */
+    assert(loads == 1 || !proxy_request);
+    if (proxy_request)
+        *proxy_request = request;
     *data = image;
     *size = sizeof(image);
     return load_error;
 }
 static int chainload_image(void *data, size_t size, char **vars, size_t count)
 {
-    assert(data == image && size == sizeof(image) && !freed);
+    assert(data == image && size == sizeof(image) && freed == loads - 1);
     assert(count == 1 && !strcmp(vars[0], "nvme.adopt=live-rtkit-v1"));
     copied++;
     next_stage.entry = copy_error ? NULL : (void *)1;
@@ -38,8 +43,15 @@ static int chainload_image(void *data, size_t size, char **vars, size_t count)
 }
 static void rust_free_image(void *data, size_t size)
 {
-    assert(data == image && size == sizeof(image) && copied && !freed);
+    assert(data == image && size == sizeof(image) && freed < loads);
     freed++;
+}
+static bool stage1_proxy_request_window(void)
+{
+    windows++;
+    if (host)
+        next_stage.entry = (void *)2;
+    return host;
 }
 ''' + source + r'''
 int main(void)
@@ -47,7 +59,7 @@ int main(void)
     for (int failure = 0; failure < 4; failure++) {
         char *vars[1];
         size_t count = 0;
-        freed = copied = 0;
+        freed = copied = loads = windows = 0;
         load_error = failure == 1 ? -1 : 0;
         copy_error = failure == 2 ? -1 : 0;
         shutdown_ok = failure != 3;
@@ -56,6 +68,24 @@ int main(void)
         assert(copied == (failure != 1));
         assert(!!next_stage.entry == !failure);
     }
+    /* aura-proxy on the ESP, no host: one window, the Stage 2 is read again and booted. */
+    request = true;
+    host = false;
+    shutdown_ok = true;
+    load_error = copy_error = 0;
+    freed = copied = loads = windows = 0;
+    next_stage.entry = NULL;
+    char *vars[1];
+    size_t count = 0;
+    assert(chainload_load("test", vars, &count, 1) == 0);
+    assert(windows == 1 && loads == 2 && freed == 2 && copied == 1 && next_stage.entry == (void *)1);
+    /* A host takes the window: nothing is chainloaded and its next stage stands. */
+    host = true;
+    freed = copied = loads = windows = 0;
+    next_stage.entry = NULL;
+    count = 0;
+    assert(chainload_load("test", vars, &count, 1) == 0);
+    assert(windows == 1 && loads == 1 && freed == 1 && copied == 0 && next_stage.entry == (void *)2);
     return 0;
 }
 '''
