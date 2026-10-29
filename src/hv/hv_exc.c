@@ -322,9 +322,9 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
             return true;
 
         /*
-         * Handle this one here because m1n1/Linux (will) use it for explicit cpuidle.
+         * Handle this one here because aura/Linux (will) use it for explicit cpuidle.
          * We can pass it through; going into deep sleep doesn't break the HV since we
-         * don't do any wfis that assume otherwise in m1n1. However, don't het macOS
+         * don't do any wfis that assume otherwise in aura. However, don't het macOS
          * disable WFI ret (when going into systemwide sleep), since that breaks things.
          */
         case SYSREG_ISS(SYS_IMP_APL_CYC_OVRD):

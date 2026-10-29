@@ -4,7 +4,7 @@
 Apple's device trees name parents they do not list: C0-USBCTL-V (id 293)
 names parent 81 on base M1 (J274, J293, J313, J456, J457), and ISP_CPU_CORE0/1
 (ids 177, 178) name parent 176 on base M3 (J433, J434, J504, J613, J615).
-pmgr_init() must still succeed on those tables, as upstream m1n1 does, while a
+pmgr_init() must still succeed on those tables, as upstream does, while a
 duplicate ID, a parent cycle or a real device without an address still fails
 the whole table.
 """

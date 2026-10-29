@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1.trace.i2c import I2CTracer
+from aura.trace.i2c import I2CTracer
 
 I2CTracer = I2CTracer._reloadcls()
 
@@ -16,7 +16,7 @@ for node in hv.adt["/arm-io"]:
             for irq in getattr(node, "interrupts"):
                 hv.trace_irq(node.name, irq, 1, hv.IRQTRACE_IRQ)
 
-from m1n1.gpiola import GPIOLogicAnalyzer
+from aura.gpiola import GPIOLogicAnalyzer
 
 if not hv.started:
     for cpu in list(hv.adt["cpus"]):

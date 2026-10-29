@@ -13,7 +13,7 @@ IncludeIsMainRegex: '(_.*)?$'
 # Include block order goes like this
 # - config.h style files, including ../config.h
 # - system headers (<>)
-# - All m1n1 headers, starting with the "this file" header, rest sorted
+# - All aura headers, starting with the "this file" header, rest sorted
 # - 3rd party code headers
 # - build artifact headers (stuff outside of src/)
 IncludeCategories:

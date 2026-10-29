@@ -124,7 +124,7 @@ static bool smp_old_vector_owned(u64 locked)
         locked >= inherited_top || (locked >= image_start && locked < image_end))
         return false;
 
-    /* A retired m1n1 image has the same four vector slot tags and bare tail. */
+    /* A retired aura image has the same four vector slot tags and bare tail. */
     u64 limit = min(ro_start, inherited_top);
     limit = min(limit, locked + min((u64)16 * SZ_1M, UINT64_MAX - locked));
     if (image_start > locked)

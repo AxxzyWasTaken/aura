@@ -152,7 +152,7 @@ int usb_cdc_atc_power_on(uintptr_t pipehandler)
     mdelay(5);
     write32(usb2 + USB2_USBCTL, 2); /* RUN */
 
-    /* Park upstream m1n1's DWC3 PIPE on the dummy PHY until DWC3 is ready. */
+    /* Park the upstream DWC3 PIPE on the dummy PHY until DWC3 is ready. */
     write32(pipe + PIPE_MUX, 0x22);
     write32(pipe + PIPE_AON_GEN, BIT(0));
     write32(pipe + PIPE_NONSELECTED, 0x9332);

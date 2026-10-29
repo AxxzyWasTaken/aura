@@ -3,10 +3,10 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.hw.dart import DART
-from m1n1.hw.scaler import *
-from m1n1.utils import *
+from aura.setup import *
+from aura.hw.dart import DART
+from aura.hw.scaler import *
+from aura.utils import *
 import struct
 import time
 from PIL import Image, ImageDraw

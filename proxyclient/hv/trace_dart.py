@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1.trace.dart import DARTTracer
+from aura.trace.dart import DARTTracer
 
 DARTTracer = DARTTracer._reloadcls()
 

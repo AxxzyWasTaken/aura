@@ -5,9 +5,9 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import struct
 
-from m1n1.setup import *
-from m1n1 import asm
-from m1n1.hw.dart import DART
+from aura.setup import *
+from aura import asm
+from aura.hw.dart import DART
 
 if len(sys.argv) > 1:
     dart_name = sys.argv[1]

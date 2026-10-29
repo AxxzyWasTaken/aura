@@ -4,8 +4,8 @@ import argparse, hashlib, json, statistics, struct, subprocess, sys, time
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from m1n1.proxy import UartInterface, M1N1Proxy
-from m1n1.asm import ARMAsm
+from aura.proxy import UartInterface, AuraProxy
+from aura.asm import ARMAsm
 ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument('action', choices=['start', 'cores', 'atomic', 'amp', 'clocks', 'status'])
 ap.add_argument('image', type=Path)
@@ -21,19 +21,19 @@ assert args.action != 'start' or not STATE.exists(), 'Use a fresh receipt after 
 RAW = IMAGE.read_bytes()
 assert hashlib.sha256(RAW).hexdigest() == SHA
 SYMS = {}
-for line in subprocess.check_output([args.nm, str(IMAGE.with_name('m1n1-raw.elf'))], text=True).splitlines():
+for line in subprocess.check_output([args.nm, str(IMAGE.with_name('aura-raw.elf'))], text=True).splitlines():
     q = line.split()
     if len(q) == 3: SYMS[q[2]] = int(q[0], 16)
 # A shared advisory lock prevents two copies of this harness owning one port.
 import fcntl, tempfile
-lock = open(Path(tempfile.gettempdir()) / ('m1n1-' + Path(args.device).name + '.lock'), 'a')
+lock = open(Path(tempfile.gettempdir()) / ('aura-' + Path(args.device).name + '.lock'), 'a')
 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 f = UartInterface(args.device); f.dev.timeout = 8
 s = json.loads(STATE.read_text()) if STATE.exists() else {'sha256': SHA, 'results': []}
 assert s['sha256'] == SHA
 def save(): STATE.write_text(json.dumps(s, indent=2))
 try:
-    f.nop(); p = M1N1Proxy(f); p.nop(); base = p.get_base()
+    f.nop(); p = AuraProxy(f); p.nop(); base = p.get_base()
     assert s.get('base', base) == base
     s['base'] = base
     for n in ['smp_start_secondaries', 'smp_secondary_entry', 'fb_set_active']:

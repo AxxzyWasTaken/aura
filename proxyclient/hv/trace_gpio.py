@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1.trace.gpio import GPIOTracer
+from aura.trace.gpio import GPIOTracer
 
 #trace_device("/arm-io/gpio", True)
 

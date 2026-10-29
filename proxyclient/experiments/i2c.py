@@ -5,8 +5,8 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import struct
 
-from m1n1.setup import *
-from m1n1 import asm
+from aura.setup import *
+from aura import asm
 
 base = 0x235010000
 

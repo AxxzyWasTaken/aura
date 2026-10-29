@@ -6,13 +6,13 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 import struct
 from construct import *
 
-from m1n1.setup import *
-from m1n1.shell import run_shell
-from m1n1 import asm
-from m1n1.hw.dart import DART
-from m1n1.fw.dcp.iboot import DCPIBootClient, SurfaceFormat, EOTF, Transform, AddrFormat
-from m1n1.fw.dcp.dcpav import *
-from m1n1.proxyutils import RegMonitor
+from aura.setup import *
+from aura.shell import run_shell
+from aura import asm
+from aura.hw.dart import DART
+from aura.fw.dcp.iboot import DCPIBootClient, SurfaceFormat, EOTF, Transform, AddrFormat
+from aura.fw.dcp.dcpav import *
+from aura.proxyutils import RegMonitor
 
 dart = DART.from_adt(u, "arm-io/dart-dcpext0")
 disp_dart = DART.from_adt(u, "arm-io/dart-dispext0")

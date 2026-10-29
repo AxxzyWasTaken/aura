@@ -8,8 +8,8 @@
 # <adt-allowlist.txt> is the ADT allowlist of an aurora-sep --m3-report from that Mac. It is read
 # here and never copied into the tree. tests/t6031_adt.py turns it into a binary ADT, with
 # synthetic values for what an allowlist leaves out (listed in its output). tests/t6031_host.c
-# then runs m1n1's display handoff, GPU setup, firmware facts, PMP values (kboot.c's dt_pass_pmp(),
-# copied out of src/kboot.c below) and firmware image UUIDs on it, with m1n1's ADT reader
+# then runs aura's display handoff, GPU setup, firmware facts, PMP values (kboot.c's dt_pass_pmp(),
+# copied out of src/kboot.c below) and firmware image UUIDs on it, with aura's ADT reader
 # (rust/src/adt.rs, built for the host), pmgr.c, firmware.c and libfdt, against
 # tests/t6031-j516c-handoff.dts or, with T6031_DTB, a kernel's J516C device tree.
 set -eu
@@ -24,7 +24,7 @@ fail() {
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-# m1n1's ADT reader. A reader that still converts the node name through c_char gets one
+# aura's ADT reader. A reader that still converts the node name through c_char gets one
 # expression changed to take char as unsigned, as it is on arm64 but not on x86-64; one that
 # reads the name as bytes already is used unchanged.
 mkdir -p "$tmp/rs" "$tmp/src"

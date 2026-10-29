@@ -5,8 +5,8 @@ import time
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import struct
-from m1n1.setup import *
-from m1n1.fw.smc import SMCClient, SMCError
+from aura.setup import *
+from aura.fw.smc import SMCClient, SMCError
 
 smc_addr = u.adt["arm-io/smc"].get_reg(0)[0]
 smc = SMCClient(u, smc_addr)

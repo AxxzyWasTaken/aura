@@ -3,9 +3,9 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1 import adt
-from m1n1.setup import *
-from m1n1.hw.nco import NCO
+from aura import adt
+from aura.setup import *
+from aura.hw.nco import NCO
 
 dt = u.adt
 

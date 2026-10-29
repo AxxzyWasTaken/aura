@@ -49,13 +49,13 @@ static struct {
     bool active;
 } console;
 
-/* The 128 and 256 logos come from data/$(BUILTIN_LOGO)_*.bin, see the Makefile */
+/* The built-in logos come from data/$(BUILTIN_LOGO)_*.bin, see the Makefile */
 #define LOGO_GZ_START_(name, size) _binary_build_##name##_##size##_bin_gz_start
 #define LOGO_GZ_START(name, size)  LOGO_GZ_START_(name, size)
 #define LOGO_GZ_END_(name, size)   _binary_build_##name##_##size##_bin_gz_end
 #define LOGO_GZ_END(name, size)    LOGO_GZ_END_(name, size)
 
-extern u8 _binary_build_bootlogo_48_bin_gz_start[], _binary_build_bootlogo_48_bin_gz_end[];
+extern u8 LOGO_GZ_START(BUILTIN_LOGO, 48)[], LOGO_GZ_END(BUILTIN_LOGO, 48)[];
 extern u8 LOGO_GZ_START(BUILTIN_LOGO, 128)[], LOGO_GZ_END(BUILTIN_LOGO, 128)[];
 extern u8 LOGO_GZ_START(BUILTIN_LOGO, 256)[], LOGO_GZ_END(BUILTIN_LOGO, 256)[];
 
@@ -79,8 +79,8 @@ static u32 logo_256_px[256 * 256] ALIGNED(64);
 
 static struct builtin_logo logo_48 = {
     {logo_48_px, 48, 48},
-    _binary_build_bootlogo_48_bin_gz_start,
-    _binary_build_bootlogo_48_bin_gz_end,
+    LOGO_GZ_START(BUILTIN_LOGO, 48),
+    LOGO_GZ_END(BUILTIN_LOGO, 48),
     false,
 };
 
@@ -460,11 +460,23 @@ void fb_init(bool clear)
     fb.size = cur_boot_args.video.stride * cur_boot_args.video.height;
     printf("fb init: %dx%d (%d) [s=%d] @%p\n", fb.width, fb.height, fb.depth, fb.stride, fb.hwptr);
 
-    mmu_add_mapping(cur_boot_args.video.base, cur_boot_args.video.base, ALIGN_UP(fb.size, 0x4000),
-                    MAIR_IDX_NORMAL_NC, PERM_RW);
+    u64 fb_base = cur_boot_args.video.base;
+    size_t fb_map_size = ALIGN_UP(fb.size, 0x4000);
 
     fb.ptr = malloc(fb.size);
+
+    /*
+     * Copy what is on screen through a cacheable mapping: reading the 30 MB of a 5K panel through
+     * the non-cacheable one takes over a second. Nothing holds a cached copy of the framebuffer
+     * here, and the lines this copy brings in are invalidated before the mapping changes.
+     */
+    mmu_rm_mapping(fb_base, fb_map_size);
+    mmu_add_mapping(fb_base, fb_base, fb_map_size, MAIR_IDX_NORMAL, PERM_RW);
+    dc_ivac_range(fb.hwptr, fb_map_size);
     memcpy(fb.ptr, fb.hwptr, fb.size);
+    dc_ivac_range(fb.hwptr, fb_map_size);
+    mmu_rm_mapping(fb_base, fb_map_size);
+    mmu_add_mapping(fb_base, fb_base, fb_map_size, MAIR_IDX_NORMAL_NC, PERM_RW);
 
     // This is the touchbar, make everything tiny
     if (chip_id == T8012) {
@@ -526,7 +538,7 @@ void fb_init(bool clear)
     if (clear) {
         memset32(fb.ptr, 0, fb.size);
     } else {
-        // Workaround for m1n1 stage 1 framebuffer UAF bug
+        // Workaround for aura stage 1 framebuffer UAF bug
         memset32(fb.ptr, 0, min(256, fb.size));
     }
 

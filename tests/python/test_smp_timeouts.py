@@ -6,7 +6,7 @@ import os
 import subprocess
 
 
-REPO = Path(os.environ.get("M1N1_SMP_SOURCE", Path(__file__).resolve().parents[2]))
+REPO = Path(os.environ.get("AURA_SMP_SOURCE", Path(__file__).resolve().parents[2]))
 
 
 def compile_and_run(tmp_path, name, source):

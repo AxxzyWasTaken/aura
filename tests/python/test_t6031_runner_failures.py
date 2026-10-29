@@ -15,9 +15,9 @@ import pytest
 
 
 REPO = Path(__file__).resolve().parents[2]
-HANDOFF = Path(os.environ.get("M1N1_T6031_HANDOFF_RUNNER_SOURCE",
+HANDOFF = Path(os.environ.get("AURA_T6031_HANDOFF_RUNNER_SOURCE",
                              REPO / "tests/run-t6031-handoff.sh"))
-UNCHANGED = Path(os.environ.get("M1N1_T6031_UNCHANGED_RUNNER_SOURCE",
+UNCHANGED = Path(os.environ.get("AURA_T6031_UNCHANGED_RUNNER_SOURCE",
                                REPO / "tests/run-t6031-unchanged.sh"))
 
 FAKE_TOOL = r'''

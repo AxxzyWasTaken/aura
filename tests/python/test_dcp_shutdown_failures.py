@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 
-REPO = Path(os.environ.get("M1N1_DCP_SOURCE", Path(__file__).resolve().parents[2]))
+REPO = Path(os.environ.get("AURA_DCP_SOURCE", Path(__file__).resolve().parents[2]))
 
 
 def function(source, name):

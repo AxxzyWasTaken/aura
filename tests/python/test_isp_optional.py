@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 """The ISP is optional: an unusable firmware description disables it, not the boot.
 
-Runs kboot.c's dt_set_isp() and dt_reserve_asc_firmware() as they are, on real FDTs.
+Runs kboot.c's dt_set_isp(), dt_reserve_asc_firmware() and dt_reserve_asc_segments() as they
+are, on real FDTs.
 """
 
 from pathlib import Path
@@ -35,9 +36,12 @@ typedef uint32_t u32;
 #define PACKED __attribute__((packed))
 #define T6030 0x6030
 #define T8140 0x8140
+#define T8132 0x8132
 #define SZ_16K 16384
 #define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
+/* Only the dram_only segment filter reads properties this way; ISP reservations do not. */
+#define ADT_GETPROP(a, n, k, v) ((size_t)0)
 static void *dt, *adt;
 static u32 chip_id = 0x8122;
 static unsigned char blob[32768];
@@ -85,7 +89,7 @@ static int dt_set_isp_fwdata(void)
     return fwdata_fault ? -1 : 0;
 }
 ''' + function("dt_device_set_reserved_mem") + function("dt_device_add_mem_region") +
-        function("dt_reserve_asc_firmware") + set_isp + r'''
+        function("dt_reserve_asc_segments") + function("dt_reserve_asc_firmware") + set_isp + r'''
 static void world(int which)
 {
     fault = which;

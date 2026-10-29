@@ -1,7 +1,7 @@
 /*
  * tinfzlib - tiny zlib decompressor
  *
- * This version of tinfzlib was modified for use with m1n1.
+ * This version of tinfzlib was modified for use with aura.
  *
  * Copyright (c) 2003-2019 Joergen Ibsen
  *

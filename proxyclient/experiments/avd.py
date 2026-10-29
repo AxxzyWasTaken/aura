@@ -5,9 +5,9 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.append("/home/eileen/asahi/avd")  # git clone https://github.com/eiln/avd.git
 # Decode with our own generated instruction stream
 
-from m1n1.setup import *
-from m1n1.utils import *
-from m1n1.fw.avd import *
+from aura.setup import *
+from aura.utils import *
+from aura.fw.avd import *
 from tools.common import ffprobe
 
 if __name__ == "__main__":

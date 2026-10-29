@@ -8,8 +8,7 @@
 #include "utils.h"
 
 /*
- * ACE3 SPMI transport, per
- * OtherResources/re-work/asahi-docs/docs/hw/peripherals/ace3.md:
+ * ACE3 SPMI transport, per the public Asahi Linux hardware notes (hw/peripherals/ace3.md):
  *
  *   0x00        logical register select -- write 0x80 | reg, MSB self-clears
  *   0x1F  [RO]  size in bytes of the selected logical register
@@ -57,6 +56,10 @@ static int ace3_select(spmi_dev_t *dev, u8 sid, u8 lreg)
         u8 sel;
         if (spmi_ext_read(dev, sid, ACE3_SPMI_SELECT, &sel, 1) < 0)
             return -1;
+        if ((sel & ~ACE3_SELECT_BUSY) != lreg) {
+            printf("ace3: sid %u: unexpected selector %#x for register %#x\n", sid, sel, lreg);
+            return -1;
+        }
         if (!(sel & ACE3_SELECT_BUSY))
             return 0;
         if (timeout_expired(timeout)) {

@@ -3,7 +3,7 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
+from aura.setup import *
 
 HV_VTMR_CTL = (3, 5, 15, 1, 3)
 HV_VTMR_CTL_VMASK = (1 << 0)

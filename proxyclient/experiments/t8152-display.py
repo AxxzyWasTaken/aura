@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Capture the native M6 boot console without clearing it or replacing its text.
 
-Boot the matching image first. USB-C initialization now runs in m1n1 itself.
+Boot the matching image first. USB-C initialization now runs in aura itself.
 Use --initialize only to retry after connecting a display, or --reinit to
 qualify framebuffer history replay. Neither option draws a test banner.
 """
@@ -19,8 +19,8 @@ from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "proxyclient"))
-from m1n1.proxy import UartInterface, M1N1Proxy
-from m1n1.proxyutils import ProxyUtils
+from aura.proxy import UartInterface, AuraProxy
+from aura.proxyutils import ProxyUtils
 
 ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument("image", type=Path)
@@ -35,10 +35,10 @@ args.image = args.image.resolve()
 raw = args.image.read_bytes()
 assert hashlib.sha256(raw).hexdigest() == args.sha256
 args.output.mkdir(parents=True, exist_ok=False)
-lock = open(Path(tempfile.gettempdir()) / ("m1n1-" + Path(args.device).name + ".lock"), "a")
+lock = open(Path(tempfile.gettempdir()) / ("aura-" + Path(args.device).name + ".lock"), "a")
 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-elf = args.image.parent / "m1n1-raw.elf"
+elf = args.image.parent / "aura-raw.elf"
 symbols = {}
 for line in subprocess.check_output([args.nm, str(elf)], text=True).splitlines():
     parts = line.split()
@@ -69,7 +69,7 @@ f = UartInterface(args.device)
 f.dev.timeout = 30
 try:
     f.nop()
-    p = M1N1Proxy(f)
+    p = AuraProxy(f)
     base = p.get_base()
     assert p.read32(base + symbols["chip_id"]) == 0x8152
     assert p.read32(base + symbols["board_id"]) == 0x24

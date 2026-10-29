@@ -33,7 +33,7 @@ jobs:
           rustup target install aarch64-unknown-none-softfloat
 
       - name: Build
-        run: make -j2 ARCH=aarch64-linux-gnu- CHAINLOADING=1
+        run: make -j2 ARCH=aarch64-linux-gnu- CHAINLOADING=1 EXTRA_CFLAGS='-Wstack-usage=2048 -Os'
 
       - uses: actions/upload-artifact@v7
         with:

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
-from m1n1.trace import Tracer
-from m1n1.trace.dart import DARTTracer
-from m1n1.utils import *
-from m1n1.proxyutils import RegMonitor
+from aura.trace import Tracer
+from aura.trace.dart import DARTTracer
+from aura.utils import *
+from aura.proxyutils import RegMonitor
 hv.p.hv_set_time_stealing(0, 1)
 
 # Usage
@@ -51,7 +51,7 @@ hv.p.hv_set_time_stealing(0, 1)
 #
 # 6. If all goes well (i.e. the bitstream is decoding on AVD), the tracer will save:
 #
-#       >> ~/m1n1/proxyclient $ ls data/*
+#       >> ~/aura/proxyclient $ ls data/*
 #       data/vp9/matrix_1080X512:
 #       frame.2023-12-17T21:17:47.519048.00004000.bin  probs.2023-12-17T21:17:47.519048.00004000.00004000.bin
 #       frame.2023-12-17T21:17:47.578537.000bc000.bin  probs.2023-12-17T21:17:47.578537.000bc000.0000c000.bin

@@ -8,7 +8,7 @@ import subprocess
 
 def test_reserved_memory_reg_alignment(tmp_path):
     repo = Path(__file__).resolve().parents[2]
-    source = Path(os.environ.get("M1N1_MEMORY_SOURCE", repo / "src/kboot.c")).read_text()
+    source = Path(os.environ.get("AURA_MEMORY_SOURCE", repo / "src/kboot.c")).read_text()
     start = source.index("static int dt_set_memory(void)")
     function = source[start:source.index("\nstatic ", start + 1)]
     program = r'''
@@ -17,9 +17,9 @@ def test_reserved_memory_reg_alignment(tmp_path):
 #include <stdio.h>
 #include <string.h>
 #include "libfdt.h"
-/* Match m1n1's aarch64-linux-gnu target, not the host libc's uint64_t alias. */
+/* Match aura's aarch64-linux-gnu target, not the host libc's uint64_t alias. */
 typedef unsigned long u64;
-_Static_assert(sizeof(u64) == 8, "the m1n1 host fixture requires an LP64 host");
+_Static_assert(sizeof(u64) == 8, "the aura host fixture requires an LP64 host");
 #define MAX_MEM_REGIONS 32
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
 static _Alignas(8) unsigned char blob[8192];

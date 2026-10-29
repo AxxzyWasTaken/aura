@@ -24,10 +24,6 @@ def _run(tmp_path, dtb):
     start = source.index("struct dt_t8140_dram {")
     end = source.index("/* T8142 display carveouts:", start)
     helper = source[start:end]
-    # Preserve the recipient's separately tested read-only metadata exporter.
-    observe_start = helper.index("static void dt_t8140_external_metadata(void)")
-    observe_end = helper.index("static int dt_set_display_t8140(void)", observe_start)
-    helper = helper[:observe_start] + "static unsigned int metadata_calls;\nstatic void dt_t8140_external_metadata(void) { metadata_calls++; }\n" + helper[observe_end:]
     iommu_node = source[source.index("static int dt_get_iommu_node("):
                         source.index("static dart_dev_t *dt_init_dart_by_node(")]
     asc_source = (repo / "src/asc.c").read_text()
@@ -683,10 +679,8 @@ int main(int argc, char **argv)
             assert(!fdt_setprop_string(dt, aliases, bad_aliases[i].name, bad_aliases[i].value));
         if (!strcmp(bad_aliases[i].value, "loop"))
             assert(!fdt_setprop_string(dt, off("/aliases"), "loop", "dcpext"));
-        metadata_calls = 0;
         memcpy(unchanged, tree, sizeof(tree));
         assert(dt_set_display_t8140() == -1);
-        assert(metadata_calls == 0);
         assert(!memcmp(unchanged, tree, sizeof(tree)));
         /* Refused before any reservation reads a DART. */
         assert(n_collected == 0 && reservation_calls == 0);
@@ -700,10 +694,8 @@ int main(int argc, char **argv)
         int duplicate = fdt_add_subnode(dt, 0, "duplicate-controller");
         assert(duplicate >= 0);
         assert(!fdt_setprop_string(dt, duplicate, "compatible", duplicate_roles[i]));
-        metadata_calls = 0;
         memcpy(unchanged, tree, sizeof(tree));
         assert(dt_set_display_t8140() == -1);
-        assert(metadata_calls == 0);
         assert(!memcmp(unchanged, tree, sizeof(tree)));
         assert(n_collected == 0 && reservation_calls == 0);
     }
@@ -720,10 +712,8 @@ int main(int argc, char **argv)
     assert(duplicate >= 0);
     assert(!fdt_setprop_string(dt, duplicate, "compatible", "apple,display-subsystem"));
     assert(!fdt_setprop(dt, off("/duplicate-master"), "iommus", tuple_copy, tuple_length));
-    metadata_calls = 0;
     memcpy(unchanged, tree, sizeof(tree));
     assert(dt_set_display_t8140() == -1);
-    assert(metadata_calls == 0);
     assert(!memcmp(unchanged, tree, sizeof(tree)));
     assert(n_collected == 0 && reservation_calls == 0);
     printf("PASS duplicate internal master refused\n");
@@ -741,10 +731,8 @@ int main(int argc, char **argv)
     const char *absent = NULL;
     assert(dt_t8140_display_alias_roles(&absent) == 0 && !absent);
     assert(!fdt_setprop_string(dt, off("/aliases"), "disp0", "/external-master"));
-    metadata_calls = 0;
     memcpy(unchanged, tree, sizeof(tree));
     assert(dt_set_display_t8140() == -1);
-    assert(metadata_calls == 0);
     assert(!memcmp(unchanged, tree, sizeof(tree)));
     assert(n_collected == 0 && reservation_calls == 0);
     printf("PASS external-only master cannot impersonate internal\n");
@@ -755,10 +743,8 @@ int main(int argc, char **argv)
     static const char both_roles[] = "apple,t8140-dcp\0apple,t8140-dcpext";
     assert(!fdt_setprop(dt, off(DCP), "compatible", both_roles, sizeof(both_roles)));
     assert(!fdt_setprop_string(dt, off("/aliases"), "dcpext", DCP));
-    metadata_calls = 0;
     memcpy(unchanged, tree, sizeof(tree));
     assert(dt_set_display_t8140() == -1);
-    assert(metadata_calls == 0);
     assert(!memcmp(unchanged, tree, sizeof(tree)));
     assert(n_collected == 0 && reservation_calls == 0);
     printf("PASS controller roles must be distinct\n");
@@ -790,9 +776,7 @@ int main(int argc, char **argv)
             assert(!fdt_del_node(dt, off(*n)));
         for (const char *const *a = absent_cases[i].aliases; *a; a++)
             assert(!fdt_delprop(dt, off("/aliases"), *a));
-        metadata_calls = 0;
         assert(dt_set_display_t8140() == 0);
-        assert(metadata_calls == 1);
         assert(n_collected == 0 && reservation_calls == 0);
         assert(!live_claim());
         const char *why = fdt_getprop(dt, off("/chosen"), "apple,dcp-handoff-reason", NULL);
@@ -812,10 +796,8 @@ int main(int argc, char **argv)
     assert(!fdt_del_node(dt, off(DCPEXT)));
     assert(!fdt_del_node(dt, off(DISPLAY)));
     assert(!fdt_del_node(dt, off(DCP)));
-    metadata_calls = 0;
     memcpy(unchanged, tree, sizeof(tree));
     assert(dt_set_display_t8140() == -1);
-    assert(metadata_calls == 0);
     assert(!memcmp(unchanged, tree, sizeof(tree)));
     printf("PASS dangling display aliases fail closed\n");
 
@@ -843,10 +825,8 @@ int main(int argc, char **argv)
                 assert(second >= 0);
                 assert(!fdt_setprop_string(dt, second, "compatible", "apple,t8140-dcpext"));
             }
-            metadata_calls = 0;
             memcpy(unchanged, tree, sizeof(tree));
             assert(dt_set_display_t8140() == -1);
-            assert(metadata_calls == 0);
             assert(!memcmp(unchanged, tree, sizeof(tree)));
             assert(n_collected == 0 && reservation_calls == 0);
         }
@@ -872,9 +852,8 @@ int main(int argc, char **argv)
         assert(!fdt_delprop(dt, off("/aliases"), "disp0"));
         if (!keep_piodma)
             assert(!fdt_delprop(dt, off("/aliases"), "disp0-piodma"));
-        metadata_calls = 0;
         assert(dt_set_display_t8140() == 0);
-        assert(metadata_calls == 1 && n_collected == 0 && reservation_calls == 0);
+        assert(n_collected == 0 && reservation_calls == 0);
         const char *why = fdt_getprop(dt, off("/chosen"), "apple,dcp-handoff-reason", NULL);
         assert(why && !strcmp(why, "FDT disp0 alias absent"));
         expect(DCP, "disabled");

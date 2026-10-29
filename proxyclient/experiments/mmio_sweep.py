@@ -4,8 +4,8 @@ import sys, pathlib
 import time
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.loadobjs import *
+from aura.setup import *
+from aura.loadobjs import *
 import argparse
 import numpy as np
 

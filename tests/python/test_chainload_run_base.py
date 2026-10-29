@@ -34,6 +34,36 @@ def load_header():
     return defines + "\n" + struct[:struct.index("};") + 2] + "\n"
 
 
+def test_chainload_header_rejects_footprint_outside_file(tmp_path):
+    source = (REPO / "src/chainload.c").read_text()
+    harness = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+typedef uint64_t u64;
+typedef uint32_t u32;
+typedef uint8_t u8;
+#define SZ_16K 0x4000
+''' + load_header() + function(source, "chainload_run_footprint") + r'''
+int main(void)
+{
+    unsigned char image[0x4000] = {0};
+    struct chainload_header hdr = {
+        CHAINLOAD_HDR_MAGIC, CHAINLOAD_HDR_VERSION, CHAINLOAD_HDR_F_RUN_BASE, 0x4000, 0
+    };
+    memcpy(image + CHAINLOAD_HDR_OFFSET, &hdr, sizeof(hdr));
+    assert(chainload_run_footprint(image, sizeof(image)) == sizeof(image));
+    /* Even a complete header cannot describe bytes beyond the supplied file. */
+    assert(chainload_run_footprint(image, sizeof(image) - 1) == 0);
+    assert(chainload_run_footprint(image, CHAINLOAD_HDR_OFFSET + sizeof(hdr) - 1) == 0);
+    return 0;
+}
+'''
+    compile_and_run(tmp_path, "chainload-header-file-bounds", harness)
+
+
 def test_chainload_places_images_around_t8140_firmware_ro(tmp_path):
     source = (REPO / "src/chainload.c").read_text()
     bodies = function(source, "chainload_run_footprint") + "\n" + \
@@ -87,7 +117,7 @@ _Static_assert(offsetof(struct boot_args, top_of_kernel_data) == 32, "boot_args 
 #define SEPFW_SIZE    0x5dc000UL
 #define SEPFW_OFF     (RO_OFF - SZ_16K - SEPFW_SIZE)
 #define HEAP_USED     0x2400000UL /* stage 1 heap: framebuffer copy, loaded file, buffers */
-#define FOOTPRINT     0x410000UL
+static u64 FOOTPRINT = 0x410000UL;
 #define STUB_SIZE     64
 
 static struct boot_args cur_boot_args;
@@ -119,6 +149,13 @@ static int adt_path_offset(const void *dt, const char *path)
 {
     assert(dt == adt && !strcmp(path, "/chosen/memory-map"));
     return adt_node;
+}
+/* This ADT has no preoslog and no BootArgs entry: their handling must leave the layout alone. */
+static const void *adt_getprop(const void *dt, int node, const char *name, u32 *len)
+{
+    assert(dt == adt && node == adt_node);
+    assert(!strcmp(name, "preoslog") || !strcmp(name, "BootArgs"));
+    return NULL;
 }
 static int adt_getprop_copy(const void *dt, int node, const char *name, void *out, size_t len)
 {
@@ -449,6 +486,10 @@ static void no_room_is_refused(void)
     setup(T8140, HEAP_USED);
     force_alloc = ram + RAM_SIZE - copy + SZ_16K;
     refused(T8140, image, big, "no room to stage");
+    /* ... with the stub that follows it */
+    setup(T8140, HEAP_USED);
+    force_alloc = ram + RAM_SIZE - copy;
+    refused(T8140, image, big, "no room to stage");
     /* ... or has no memory at all */
     setup(T8140, HEAP_USED);
     alloc_fail = 1;
@@ -515,6 +556,48 @@ static void other_chips_are_unchanged(void)
     }
 }
 
+/* Optional built-image check: use the real header and payload, not synthetic bytes. */
+static void composed_image_is_placed(void)
+{
+    const char *path = getenv("NEO_STAGE2_FILE");
+    if (!path)
+        return;
+    FILE *f = fopen(path, "rb");
+    assert(f && !fseek(f, 0, SEEK_END));
+    long length = ftell(f);
+    assert(length > CHAINLOAD_HDR_OFFSET + CHAINLOAD_HDR_SIZE && (u64)length < RAM_SIZE / 2);
+    rewind(f);
+    size_t size = (size_t)length;
+    u8 *image = malloc(size);
+    assert(image && fread(image, 1, size, f) == size);
+    assert(!fclose(f));
+    struct chainload_header hdr;
+    memcpy(&hdr, image + CHAINLOAD_HDR_OFFSET, sizeof(hdr));
+    assert(hdr.magic == CHAINLOAD_HDR_MAGIC && hdr.footprint <= size);
+    FOOTPRINT = hdr.footprint;
+    setup(T8140, HEAP_USED);
+    bool large = home + image_size_for(size) > ro_start;
+    assert(chainload_image(image, size, vars, NVARS) == 0);
+    check_staging(image, size, sepfw[0]);
+    u64 dest = next_stage.args[2];
+    if (large) {
+        assert(dest >= live_heap && run_base_field(dest) == home);
+    } else {
+        assert(dest == home && !run_base_field(next_stage.args[1]));
+    }
+    u64 run, payload;
+    run_next_stage(&run, &payload);
+    assert(run == home && run + FOOTPRINT <= ro_start);
+    assert(payload == dest + FOOTPRINT);
+    assert(!memcmp((void *)payload, image + FOOTPRINT, size - FOOTPRINT));
+    struct boot_args *ba = (struct boot_args *)staged_view(next_stage.args[0]);
+    assert(ba->top_of_kernel_data >= ro_end && ba->top_of_kernel_data >= live_heap);
+    assert(ba->top_of_kernel_data >= dest + image_size_for(size));
+    printf("composed image: %zu bytes, footprint %#lx, %s\n", size, FOOTPRINT,
+           large ? "staged above firmware RO" : "unchanged fitting path");
+    free(image);
+}
+
 int main(void)
 {
     /* The failing combined stage 2 (aura + 115 DTBs + U-Boot + variables) */
@@ -532,6 +615,7 @@ int main(void)
     fitting_image_is_unchanged(0x400000 - 0x8000, false);
     no_room_is_refused();
     other_chips_are_unchanged();
+    composed_image_is_placed();
     puts("chainload run base matrix PASS");
     return 0;
 }

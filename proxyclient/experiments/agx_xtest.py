@@ -6,13 +6,13 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import atexit, sys
 
-from m1n1.agx import AGX
-from m1n1.agx.render import *
-from m1n1.fw.agx.microsequence import *
+from aura.agx import AGX
+from aura.agx.render import *
+from aura.fw.agx.microsequence import *
 from construct import *
 
-from m1n1.setup import *
-from m1n1 import asm
+from aura.setup import *
+from aura import asm
 
 p.pmgr_adt_power_enable("/arm-io/gfx-asc")
 p.pmgr_adt_power_enable("/arm-io/sgx")

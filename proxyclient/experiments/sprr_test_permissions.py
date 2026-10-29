@@ -5,9 +5,9 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 from contextlib import contextmanager
 
-from m1n1.setup import *
-from m1n1.find_regs import *
-from m1n1 import asm
+from aura.setup import *
+from aura.find_regs import *
+from aura import asm
 
 p.smp_start_secondaries()
 

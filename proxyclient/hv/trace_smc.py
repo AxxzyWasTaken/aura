@@ -4,11 +4,11 @@ import struct
 
 from enum import IntEnum
 
-from m1n1.proxyutils import RegMonitor
-from m1n1.utils import *
-from m1n1.trace.dart import DARTTracer
-from m1n1.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR
-from m1n1.fw.smc import *
+from aura.proxyutils import RegMonitor
+from aura.utils import *
+from aura.trace.dart import DARTTracer
+from aura.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR
+from aura.fw.smc import *
 
 ASCTracer = ASCTracer._reloadcls()
 

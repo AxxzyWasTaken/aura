@@ -5,6 +5,9 @@
 #include "soc.h"
 #include "types.h"
 #include <stdio.h>
+/* The host build prints debug-only lines too, as a DEBUG build does. */
+#undef dprintf
+#define dprintf(...) printf(__VA_ARGS__)
 #define ARRAY_SIZE(s)        (sizeof(s) / sizeof((s)[0]))
 #define ALIGN_UP(x, a)       (((x) + ((a)-1)) & ~((a)-1))
 #define BIT(x)               (1UL << (x))

@@ -1,14 +1,14 @@
 import struct
 from construct import *
 
-from m1n1.utils import irange
-from m1n1.hw.dart import DART
-from m1n1.utils import chexdump
-from m1n1.proxyutils import RegMonitor
-from m1n1.constructutils import *
-from m1n1.hv.types import MMIOTraceFlags
+from aura.utils import irange
+from aura.hw.dart import DART
+from aura.utils import chexdump
+from aura.proxyutils import RegMonitor
+from aura.constructutils import *
+from aura.hv.types import MMIOTraceFlags
 
-from m1n1.trace.pcie import *
+from aura.trace.pcie import *
 
 PCIeDevTracer = PCIeDevTracer._reloadcls()
 

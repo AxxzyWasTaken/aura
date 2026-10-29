@@ -2,7 +2,7 @@
 /*
  * Internal display handoff, for SoCs whose internal DCP iBoot leaves running.
  *
- * iBoot starts the internal DCP, lights the panel and leaves the coprocessor running. m1n1 does
+ * iBoot starts the internal DCP, lights the panel and leaves the coprocessor running. aura does
  * not restart, reconfigure or stop it here (display.c refuses its own DCP modeset path on T6030).
  * This file only describes the state iBoot left, for the next stage. Everything that differs
  * between SoCs (addresses, firmware image, boards, device-tree names, which steps run) is in
@@ -35,7 +35,7 @@
  * T6030 external display processors, dcpext0 and, if the ADT and the device tree have it,
  * dcpext1 (see dcpext6_insts[]): with chosen asahi,t6030-dcpext=1 and the panel handoff
  * published, each processor's firmware memory (apple,t6030-dcpext-memory-ready); with chosen
- * asahi,t6030-dispext=1, its empty, locked display DART and a scanout child
+ * asahi,t6030-dispext=1, that memory plus its empty, locked display DART and a scanout child
  * (apple,t6030-dispext-handoff).
  *
  * T8122 (M3): the __OS_LOG reservations on every boot (oslog_always), and nothing else unless the
@@ -61,18 +61,29 @@
  * kernel device tree without display nodes is normal. No T8122 PMP is handed off here.
  *
  * T6031 (M3 Max, J514C/J516C only; nothing at all on another board or chip, so not on a T6034):
- * the T8122 handoff with T6031 values, armed only by the boot.bin config line
- * chosen.asahi,t6031-dcp=1, as on T6030 and T8122, until it has run on a Max. The kernel decides
- * whether to take the display over (its display path is off by default and enabled per boot on
- * its command line), so the handoff must be harmless when ignored: the nodes stay disabled and
- * only the marker and the memory description are added. On every boot, armed or not, the __OS_LOG
- * buffers of dcp and dcpext0..3, taken from the ADT, are reserved. Armed, the DCP, DART and display
- * power state are read and checked as on T8122, against the T6031 addresses (the display block sits
- * at 0x3_8400_0000), and only with every check passing is dart-dcp locked and the handoff published
- * with marker apple,t6031-handoff. The DCP image is not pinned here: apple,firmware-uuid is the
- * running image's ADT uuid, and the kernel's board record decides whether it knows that image. No
- * ADT description is logged (the ADT reaches Linux whole, and the log ring is 16K); the DART stream
- * registers are.
+ * the T8122 handoff with T6031 values, armed by chosen.asahi,t6031-dcp=1, as on T6030 and T8122.
+ * On a J516C dt_set_m3_defaults() (kboot.c) sets it unless a config line set it; a J514C still
+ * needs the boot.bin config line. The kernel decides whether to take the display over (a kernel
+ * may leave that to its command line), so the handoff must be harmless when ignored: the nodes
+ * stay disabled and only the marker and the memory description are added. On every boot, armed or
+ * not, the __OS_LOG buffers of dcp and dcpext0..3, taken from the ADT, are reserved. Armed, the
+ * DCP, DART and display power state are read and checked as on T8122, against the T6031 addresses
+ * (the display block sits at 0x3_8400_0000), and only with every check passing is dart-dcp locked
+ * and the handoff published with marker apple,t6031-handoff. The DCP image is not pinned here:
+ * apple,firmware-uuid is the running image's ADT uuid, and the kernel's board record decides
+ * whether it knows that image. No ADT description is logged (the ADT reaches Linux whole, and the
+ * log ring is 16K); the DART stream registers are.
+ *
+ * T6041 display block of the M4 Pro (chip T6040, J616s only), with the desktop 26.6.2 DCP firmware:
+ * the T6031 handoff with T6041 values. There is no /chosen opt-in: the handoff is attempted on
+ * every boot whose chip is T6040, whose root is apple,j616s, whose OS firmware matches the known
+ * profile, and whose device tree describes the T6041 display block (aliases dcp and disp0,
+ * compatible apple,t6041-dcp and apple,display-subsystem). Anything else gets nothing at all: no
+ * __OS_LOG reservation, no register access, no DT edit. On a supported boot the __OS_LOG
+ * reservation and every check below run as on T6031, and the handoff is published only if all of
+ * them pass. The DCP maps through dart-dcp SID 23 and the display and its piodma through dart-disp0
+ * SIDs 0 and 16, of 32 streams each, so these SIDs are per SoC (struct dcp_soc .sids). Marker
+ * apple,t6041-handoff; the nodes stay disabled.
  *
  * Fail-soft: dt_set_display_handoff() always returns 0; a failed check is logged and changes
  * nothing. Transactional: DT edits are made on a scratch copy that replaces the DT only if every
@@ -94,6 +105,11 @@
 #include "libfdt/libfdt.h"
 
 #define dlog(fmt, ...) printf("DCP: %s: " fmt, dcp6.soc->name, ##__VA_ARGS__)
+/*
+ * Routine details of a handoff that went as expected (registers, segments, mappings). They
+ * are printed only in DEBUG builds: on a boot console they cost about a second.
+ */
+#define dlog_debug(fmt, ...) dprintf("DCP: %s: " fmt, dcp6.soc->name, ##__VA_ARGS__)
 
 #define bail(...)                                                                                  \
     do {                                                                                           \
@@ -134,7 +150,8 @@
 #define DART_T8110_TTBR_VALID       BIT(0)
 #define DART_T8110_TTBR_ADDR        GENMASK(29, 2)
 #define DART_T8110_TTBR_SHIFT       14
-#define DART_T8110_STREAMS          16
+#define DART_T8110_STREAMS          16 /* T6030, T8122, T6031 */
+#define DART_STREAMS_MAX            32
 
 /* Two-level tables of 16K pages cover the 36-bit DVA space: 2048 x 32 MiB, 2048 x 16 KiB */
 #define DART_PTE_VALID   BIT(0)
@@ -195,8 +212,8 @@ static const struct dcp6_seg_def dcp6_seg_defs_t6030[DCP6_SEGS] = {
 
 #define DCP6_OSLOG_NODE "dcp-oslog"
 #define DCP6_OSLOG_PROP "apple,dcp-os-log"
-/* (address, size) of each __OS_LOG buffer found on the loaded file part of m1n1 */
-#define DCP6_OVERLAP_PROP "asahi,m1n1-oslog-overlap"
+/* (address, size) of each __OS_LOG buffer found on the loaded file part of aura */
+#define DCP6_OVERLAP_PROP "asahi,aura-oslog-overlap"
 
 /* Owners of the nubs whose __OS_LOG is reserved: /arm-io/<owner>/iop-<owner>-nub */
 static const char *const dcp6_nubs_t6030[] = {"dcp", "dcpext0", "dcpext1"};
@@ -211,7 +228,8 @@ struct dcp_soc {
     const char *dcp_compat;
     const char *disp_compat;
     const char *marker; /* set to <1> on dcp, display and piodma by the handoff */
-    const char *optin;  /* /chosen property: the boot.bin config line chosen.<optin>=1 arms */
+    const char *optin;  /* /chosen property: the boot.bin config line chosen.<optin>=1 arms;
+                           NULL: none, the chip, board, firmware and device tree gates decide */
     bool always;        /* reserve, lock and check on every boot, not only when armed; otherwise
                            dart-dcp is only locked by a handoff whose checks have all passed */
     bool oslog_always;  /* reserve the __OS_LOG buffers on every boot, even when not armed */
@@ -222,8 +240,11 @@ struct dcp_soc {
     bool board_gate;    /* nothing at all unless chip_id is .chip and the root is one of .boards */
     bool any_uuid;      /* no image pinned: the running image's ADT uuid is published */
     bool log_streams;   /* log the DART stream registers, without the ADT description */
-    const char *uuid;   /* DCP firmware image; NULL: none pinned, dry run only (unless any_uuid) */
-    u32 os_fw;          /* enum fw_version the kernel's DCP interface is written for */
+    bool sids;          /* the stream IDs and stream count below; otherwise SIDs 5/0/4 of 16 */
+    bool oslog_in_rsv;  /* an __OS_LOG wholly inside a /memreserve/ is still given its node */
+    u8 sid_dcp, sid_disp, sid_piodma, streams;
+    const char *uuid; /* DCP firmware image; NULL: none pinned, dry run only (unless any_uuid) */
+    u32 os_fw;        /* enum fw_version the kernel's DCP interface is written for */
     const char *os_fw_name;
     /* Nonzero: the ADT must say the same. Zero: taken from the ADT. */
     u64 coproc, dart_dcp, dart_disp;
@@ -362,7 +383,46 @@ static const struct dcp_soc dcp_soc_t6031 = {
     .pmgr_disp_cpu = 0x2922802a0UL,
 };
 
-static const struct dcp_soc *const dcp_socs[] = {&dcp_soc_t6030, &dcp_soc_t8122, &dcp_soc_t6031};
+/*
+ * T6041 display block of the M4 Pro (T6040, J616s), with the desktop 26.6.2 DCP firmware. The DCP
+ * maps through dart-dcp SID 23 and the display and its piodma through dart-disp0 SIDs 0 and 16, of
+ * 32 streams each (ADT sid, sid-count, l2-tt-N). The addresses are this ADT's, after the arm-io
+ * ranges; segments and the display power state come from the ADT. The DCP image is not pinned:
+ * the kernel accepts only the 26.6.2 firmware. No opt-in: nothing happens unless the device tree
+ * describes this display block (dcp6_dt_describes()), and the display nodes stay disabled.
+ */
+static const char *const dcp_boards_t6041[] = {"apple,j616s", NULL};
+
+static const struct dcp_soc dcp_soc_t6041 = {
+    .name = "T6041",
+    .chip = T6040,
+    .compat = "apple,t6040",
+    .boards = dcp_boards_t6041,
+    .boards_desc = "J616s",
+    .dcp_compat = "apple,t6041-dcp",
+    .disp_compat = "apple,display-subsystem",
+    .marker = "apple,t6041-handoff",
+    .adt_psreg = true,
+    .board_gate = true,
+    .any_uuid = true,
+    .log_streams = true,
+    .sids = true,
+    .oslog_in_rsv = true,
+    .sid_dcp = 23,
+    .sid_disp = 0,
+    .sid_piodma = 16,
+    .streams = 32,
+    .os_fw = V26_6_2,
+    .os_fw_name = "26.6.2",
+    .coproc = 0x402e00000UL,
+    .dart_dcp = 0x402340000UL,
+    .dart_disp = 0x402300000UL,
+    .vm_base = DCP6_DART_VM_BASE,
+    .vm_size = DCP6_DART_VM_SIZE,
+};
+
+static const struct dcp_soc *const dcp_socs[] = {&dcp_soc_t6030, &dcp_soc_t8122, &dcp_soc_t6031,
+                                                 &dcp_soc_t6041};
 
 struct dcp6_seg {
     u64 phys;
@@ -412,6 +472,26 @@ static struct {
 } dcp6;
 
 /* ---- small helpers ---- */
+
+static int dcp6_sid_dcp(void)
+{
+    return dcp6.soc->sids ? dcp6.soc->sid_dcp : DCP6_SID_DCP;
+}
+
+static int dcp6_sid_disp(void)
+{
+    return dcp6.soc->sids ? dcp6.soc->sid_disp : DCP6_SID_DISP;
+}
+
+static int dcp6_sid_piodma(void)
+{
+    return dcp6.soc->sids ? dcp6.soc->sid_piodma : DCP6_SID_PIODMA;
+}
+
+static int dcp6_streams(void)
+{
+    return dcp6.soc->sids ? dcp6.soc->streams : DART_T8110_STREAMS;
+}
 
 static bool dcp6_overlaps(u64 a, u64 a_size, u64 b, u64 b_size)
 {
@@ -572,6 +652,39 @@ static int dcp6_resv_conflict(void *dt, u64 base, u64 size, const char *what)
         }
     }
     return 0;
+}
+
+/*
+ * As dcp6_resv_conflict(), for an __OS_LOG buffer: with .oslog_in_rsv, a /memreserve/ that
+ * contains it whole is no conflict (the buffer is already kept from the OS; the no-map node only
+ * describes it). On the J616s the buffers sit inside the aura retained range on tether boots.
+ */
+static void *dcp6_scratch(void *dt);
+
+static int dcp6_oslog_conflict(void *dt, u64 base, u64 size)
+{
+    if (!dcp6.soc->oslog_in_rsv)
+        return dcp6_resv_conflict(dt, base, size, "__OS_LOG");
+
+    int n = fdt_num_mem_rsv(dt);
+    for (int i = 0; i < n; i++) {
+        u64 a, s;
+        if (fdt_get_mem_rsv(dt, i, &a, &s) || !dcp6_overlaps(base, size, a, s))
+            continue;
+        if (base < a || base + size > a + s)
+            bail("__OS_LOG 0x%lx+0x%lx straddles /memreserve/ 0x%lx+0x%lx\n", base, size, a, s);
+        dlog_debug("__OS_LOG 0x%lx+0x%lx lies inside /memreserve/ 0x%lx+0x%lx\n", base, size, a, s);
+    }
+
+    /* the /reserved-memory part, with no /memreserve/ entries in the way */
+    void *copy = dcp6_scratch(dt);
+    if (!copy)
+        return -1;
+    while (fdt_num_mem_rsv(copy) > 0)
+        fdt_del_mem_rsv(copy, 0);
+    int ret = dcp6_resv_conflict(copy, base, size, "__OS_LOG");
+    free(copy);
+    return ret;
 }
 
 static int dcp6_carveout_conflict(u64 base, u64 size, const char *what)
@@ -741,11 +854,11 @@ static int dcp6_get_oslog(const char *owner, const char *nub_path, u64 *phys, u6
 }
 
 /*
- * The running coprocessors write their __OS_LOG buffers from before m1n1 starts. Stage 1 loads
+ * The running coprocessors write their __OS_LOG buffers from before aura starts. Stage 1 loads
  * this image at its own base and start.S then copies the file part of it away (aura-raw.ld keeps
  * that part below 0x120000, where the panel DCP's buffer was seen with the stage 1 these builds
  * were checked with). If a buffer lies on the loaded file part, the coprocessor may have written
- * over m1n1's code or data before the copy: say so loudly, and mark it in /chosen for the OS
+ * over aura's code or data before the copy: say so loudly, and mark it in /chosen for the OS
  * side. The buffer is still reserved, because the coprocessor keeps writing it; nothing else can
  * be undone at this point.
  */
@@ -756,9 +869,9 @@ static bool dcp6_oslog_on_file_part(const char *owner, u64 phys, u64 size, fdt64
     kboot_loaded_file_part(&base, &len);
     if (!dcp6_overlaps(phys, size, base, len))
         return false;
-    dlog("WARNING: %s __OS_LOG 0x%lx+0x%lx overlaps m1n1 where stage 1 loaded it (0x%lx+0x%lx)\n",
+    dlog("WARNING: %s __OS_LOG 0x%lx+0x%lx overlaps aura where stage 1 loaded it (0x%lx+0x%lx)\n",
          owner, phys, size, base, len);
-    dlog("WARNING: its coprocessor may have changed m1n1 there; m1n1 was only checked with a "
+    dlog("WARNING: its coprocessor may have changed aura there; aura was only checked with a "
          "stage 1 that leaves the first 0x120000 bytes clear\n");
     marker[0] = cpu_to_fdt64(phys);
     marker[1] = cpu_to_fdt64(size);
@@ -803,7 +916,7 @@ static __attribute__((noinline)) void dcp6_reserve_oslogs(void *dt)
                 dlog("%s: __OS_LOG overlaps %s's\n", dcp6.nubs[i], dcp6.nubs[j]);
                 bad = true;
             }
-        if (bad || dcp6_resv_conflict(dt, logs[i].phys, logs[i].size, "__OS_LOG") ||
+        if (bad || dcp6_oslog_conflict(dt, logs[i].phys, logs[i].size) ||
             dcp6_carveout_conflict(logs[i].phys, logs[i].size, "__OS_LOG"))
             continue;
         logs[i].add = true;
@@ -842,8 +955,8 @@ static __attribute__((noinline)) void dcp6_reserve_oslogs(void *dt)
 
     for (int i = 0; i < dcp6.nnubs; i++)
         if (logs[i].add)
-            dlog("%s __OS_LOG reserved: /reserved-memory/%s (0x%lx+0x%lx, no-map)\n", dcp6.nubs[i],
-                 logs[i].name, logs[i].phys, logs[i].size);
+            dlog_debug("%s __OS_LOG reserved: /reserved-memory/%s (0x%lx+0x%lx, no-map)\n",
+                       dcp6.nubs[i], logs[i].name, logs[i].phys, logs[i].size);
 }
 
 /* ---- ADT description (dry run) ---- */
@@ -1130,7 +1243,7 @@ static void dcp6_describe_dart(const char *path)
         return;
     dcp6_describe_u64(node, path, "vm-base");
     dcp6_describe_u64(node, path, "vm-size");
-    for (int sid = 0; sid < DART_T8110_STREAMS; sid++) {
+    for (int sid = 0; sid < dcp6_streams(); sid++) {
         char prop[24];
         u64 lo, hi;
         snprintf(prop, sizeof(prop), "pt-region-%d", sid);
@@ -1317,10 +1430,10 @@ static int dcp6_adt_power_on(void)
 /* Dry run: the DART streams in use, read only */
 static void dcp6_describe_streams(const char *what, u64 base)
 {
-    u32 tcr[DART_T8110_STREAMS], ttbr[DART_T8110_STREAMS];
+    u32 tcr[DART_STREAMS_MAX], ttbr[DART_STREAMS_MAX];
 
     int g = dcp6_guard_begin();
-    for (int sid = 0; sid < DART_T8110_STREAMS; sid++) {
+    for (int sid = 0; sid < dcp6_streams(); sid++) {
         tcr[sid] = read32(base + DART_T8110_TCR(sid));
         ttbr[sid] = read32(base + DART_T8110_TTBR(sid));
     }
@@ -1328,9 +1441,9 @@ static void dcp6_describe_streams(const char *what, u64 base)
         dlog("%s: reading the stream registers faulted\n", what);
         return;
     }
-    for (int sid = 0; sid < DART_T8110_STREAMS; sid++)
+    for (int sid = 0; sid < dcp6_streams(); sid++)
         if (tcr[sid] || ttbr[sid])
-            dlog("%s SID %d: TCR 0x%x TTBR 0x%x\n", what, sid, tcr[sid], ttbr[sid]);
+            dlog_debug("%s SID %d: TCR 0x%x TTBR 0x%x\n", what, sid, tcr[sid], ttbr[sid]);
 }
 
 /* Sets dart-dcp's PROTECT_TTBR_TCR (prot: PROTECT as read), which stays set until reset */
@@ -1554,10 +1667,10 @@ static int dcp6_derive_segs(const struct adt_segment_ranges *seg, int n, const c
     dcp6.defs = dcp6.derived;
     for (int i = 0; i < n; i++) {
         if (i == oslog)
-            dlog("dcp segment %d: %s, physical buffer\n", i, dcp6.derived[i].name);
+            dlog_debug("dcp segment %d: %s, physical buffer\n", i, dcp6.derived[i].name);
         else
-            dlog("dcp segment %d: %s, region-id-%d\n", i, dcp6.derived[i].name,
-                 dcp6.derived[i].region_id);
+            dlog_debug("dcp segment %d: %s, region-id-%d\n", i, dcp6.derived[i].name,
+                       dcp6.derived[i].region_id);
     }
     return 0;
 }
@@ -1820,7 +1933,7 @@ static int dcp6_check_sid(struct dcp6_sid *s)
 
         if (r->seg == dcp6.seg_oslog)
             bail("%s SID %d maps the __OS_LOG buffer\n", s->what, s->sid);
-        if (s->sid != DCP6_SID_DCP && g->flags != SEG_FLAGS_HEAP)
+        if (s != &dcp6.sid[0] && g->flags != SEG_FLAGS_HEAP)
             bail("%s SID %d maps dcp segment %d\n", s->what, s->sid, r->seg);
         if (seen[r->seg])
             bail("%s SID %d maps dcp segment %d twice\n", s->what, s->sid, r->seg);
@@ -1828,16 +1941,16 @@ static int dcp6_check_sid(struct dcp6_sid *s)
         if (r->phys != g->phys || r->size != g->size)
             bail("%s SID %d maps 0x%lx+0x%lx of dcp segment %d (0x%lx+0x%lx)\n", s->what, s->sid,
                  r->phys, r->size, r->seg, g->phys, g->size);
-        if (s->sid == DCP6_SID_DCP && r->dva != dcp6_dva(g->remap))
+        if (s == &dcp6.sid[0] && r->dva != dcp6_dva(g->remap))
             bail("dcp SID %d maps segment %d at DVA 0x%lx, ADT says 0x%lx\n", s->sid, r->seg,
                  r->dva, g->remap);
     }
 
-    if (s->sid == DCP6_SID_DCP) {
+    if (s == &dcp6.sid[0]) {
         for (int i = 0; i < dcp6.nsegs; i++)
             if (i != dcp6.seg_oslog && !seen[i])
                 bail("dcp SID %d does not map dcp segment %d\n", s->sid, i);
-    } else if (s->sid == DCP6_SID_DISP && !seen[dcp6.seg_vram]) {
+    } else if (s == &dcp6.sid[1] && !seen[dcp6.seg_vram]) {
         bail("display SID %d does not map the framebuffer\n", s->sid);
     }
     return 0;
@@ -1852,9 +1965,9 @@ static void dcp6_dry_run(void)
         int vm;
         u64 base;
     } sids[3] = {
-        {"dcp", DCP6_SID_DCP, "/arm-io/dart-dcp", VM_DCP, dcp6.dart_dcp},
-        {"display", DCP6_SID_DISP, "/arm-io/dart-disp0", VM_DISP, dcp6.dart_disp},
-        {"piodma", DCP6_SID_PIODMA, "/arm-io/dart-disp0", VM_DISP, dcp6.dart_disp},
+        {"dcp", dcp6_sid_dcp(), "/arm-io/dart-dcp", VM_DCP, dcp6.dart_dcp},
+        {"display", dcp6_sid_disp(), "/arm-io/dart-disp0", VM_DISP, dcp6.dart_disp},
+        {"piodma", dcp6_sid_piodma(), "/arm-io/dart-disp0", VM_DISP, dcp6.dart_disp},
     };
 
     dcp6.segs_ok = !dcp6_get_segs();
@@ -1868,14 +1981,16 @@ static void dcp6_dry_run(void)
         s->ok = !dcp6_walk(s, sids[i].dart, sids[i].vm, sids[i].base) && !dcp6_check_sid(s);
         if (!s->ok)
             continue;
+#ifdef DEBUG
         u64 pages = 0;
         for (int j = 0; j < s->nruns; j++)
             pages += s->runs[j].size / DART_PAGE;
-        dlog("%s SID %d: %d mappings, %lu pages, all in firmware segments (", s->what, s->sid,
-             s->nruns, pages);
+        dlog_debug("%s SID %d: %d mappings, %lu pages, all in firmware segments (", s->what, s->sid,
+                   s->nruns, pages);
         for (int j = 0; j < s->nruns; j++)
-            printf("%s%d@0x%lx", j ? " " : "", s->runs[j].seg, s->runs[j].dva);
-        printf(")\n");
+            dprintf("%s%d@0x%lx", j ? " " : "", s->runs[j].seg, s->runs[j].dva);
+        dprintf(")\n");
+#endif
     }
 }
 
@@ -2007,11 +2122,11 @@ static int dcp6_check_dt(void *dt, struct dcp6_dt *n)
             dcp6_status_disabled(dt, pio, "25G83 piodma"))
             bail("25G83 DT profile/compatibility or PIODMA status is invalid\n");
     }
-    int dart_dcp = dcp6_check_iommu(dt, dcp, "dcp", DCP6_SID_DCP, dcp6.dart_dcp,
+    int dart_dcp = dcp6_check_iommu(dt, dcp, "dcp", dcp6_sid_dcp(), dcp6.dart_dcp,
                                     dcp6.vm_base[VM_DCP], dcp6.vm_size[VM_DCP]);
-    int dart_disp = dcp6_check_iommu(dt, disp, "display", DCP6_SID_DISP, dcp6.dart_disp,
+    int dart_disp = dcp6_check_iommu(dt, disp, "display", dcp6_sid_disp(), dcp6.dart_disp,
                                      dcp6.vm_base[VM_DISP], dcp6.vm_size[VM_DISP]);
-    int dart_pio = dcp6_check_iommu(dt, pio, "piodma", DCP6_SID_PIODMA, dcp6.dart_disp,
+    int dart_pio = dcp6_check_iommu(dt, pio, "piodma", dcp6_sid_piodma(), dcp6.dart_disp,
                                     dcp6.vm_base[VM_DISP], dcp6.vm_size[VM_DISP]);
     if (dart_dcp < 0 || dart_disp < 0 || dart_pio < 0)
         return -1;
@@ -2061,7 +2176,8 @@ static int dcp6_check_adt(void)
     if (soc->any_uuid) {
         if (!dcp6_is_uuid(uuid, len))
             bail("the dcp firmware image has no well-formed ADT uuid\n");
-        dlog("dcp firmware image %s, not pinned here: the kernel's board record decides\n", uuid);
+        dlog_debug("dcp firmware image %s, not pinned here: the kernel's board record decides\n",
+                   uuid);
     } else if (!uuid || len != strlen(soc->uuid) + 1 || memcmp(uuid, soc->uuid, len)) {
         bail("dcp firmware is not image %s\n", soc->uuid);
     }
@@ -2239,6 +2355,8 @@ static int dcp6_publish(void *dt, const struct dcp6_dt *n)
 
 static bool dcp6_armed(void *dt)
 {
+    if (!dcp6.soc->optin)
+        return true;
     int chosen = fdt_path_offset(dt, "/chosen");
     int len = 0;
     const char *optin = chosen >= 0 ? fdt_getprop(dt, chosen, dcp6.soc->optin, &len) : NULL;
@@ -2308,9 +2426,10 @@ static __attribute__((noinline)) void dcp6_handoff(void *dt)
  * only while the processor's CPU power domain is on; it never restarts or locks it. Every external
  * node stays disabled until a kernel that knows the markers enables it.
  *
- * Both processors are armed by the same /chosen flags: asahi,t6030-dcpext for the memory and
- * asahi,t6030-dispext for the display DART. dcpext1 is handed off only if the ADT has it and the
- * device tree describes it (alias dcpext1); otherwise it is skipped and nothing changes. Each
+ * Both processors are armed by the same /chosen flags: asahi,t6030-dcpext for memory only and
+ * asahi,t6030-dispext for the display DART and its prerequisite memory. dcpext1 is handed off
+ * only if the ADT has it and the device tree describes it (alias dcpext1); otherwise it is
+ * skipped and nothing changes. Each
  * handoff is its own transaction, so a refused dcpext1 leaves dcpext0's in place.
  */
 #define DCPEXT6_MARKER  "apple,t6030-dcpext-memory-ready"
@@ -2722,8 +2841,8 @@ static bool dcpext6_present(void *dt, const struct dcpext6_inst *inst)
 /* dcpext0, then dcpext1; each processor's memory handoff before its display DART handoff */
 static void dcpext6_handoffs(void *dt)
 {
-    bool mem = dcpext6_flag(dt, "asahi,t6030-dcpext");
     bool disp = dcpext6_flag(dt, "asahi,t6030-dispext");
+    bool mem = disp || dcpext6_flag(dt, "asahi,t6030-dcpext");
 
     if (!mem && !disp)
         return;
@@ -2736,6 +2855,215 @@ static void dcpext6_handoffs(void *dt)
         if (disp)
             dispext6_handoff(dt, inst);
     }
+}
+
+/*
+ * J616s external DCPs use the same four-segment ASC layout as the T6030
+ * external DCPs. The kernel DT supplies disabled text/data/heap placeholders;
+ * fill those only from this boot's ADT. In particular, do not enable the DCP,
+ * its DART or any display route here: the kernel's PMP-aware gate owns that.
+ */
+struct t6041_ext {
+    const char *name, *dt_path, *adt_path, *nub_path, *dart_path;
+    u64 coproc, dart;
+};
+
+static const struct t6041_ext t6041_exts[] = {
+    {"dcpext0", "/dcp@3a2e00000", "/arm-io/dcpext0", "/arm-io/dcpext0/iop-dcpext0-nub",
+     "/arm-io/dart-dcpext0", 0x3a2e00000UL, 0x3a2340000UL},
+    {"dcpext1", "/dcp@602e00000", "/arm-io/dcpext1", "/arm-io/dcpext1/iop-dcpext1-nub",
+     "/arm-io/dart-dcpext1", 0x602e00000UL, 0x602340000UL},
+};
+
+static int t6041_ext_fill(void *dt, const struct t6041_ext *ext)
+{
+    static const u32 flags[DCPEXT6_SEGS] = {SEG_FLAGS_TEXT, SEG_FLAGS_DATA, SEG_FLAGS_OSLOG,
+                                            SEG_FLAGS_HEAP};
+    static const char mr_names[] = "text\0data\0heap";
+    static const char *const parts[] = {"text", "data", "heap"};
+    static const int seg_index[] = {SEG_TEXT, SEG_DATA, SEG_3};
+    u64 coproc, dart, dram, dram_size, ram_end;
+    int node = fdt_path_offset(dt, ext->dt_path), len;
+    const fdt64_t *reg;
+    const fdt32_t *iommu, *mr;
+    u32 ph[3];
+
+    /* A DT without #451's external nodes is an ordinary internal-only boot. */
+    if (node < 0)
+        return 1;
+    if (fdt_node_check_compatible(dt, node, "apple,t6041-dcpext") ||
+        dcp6_status_disabled(dt, node, ext->name) || dcp6_adt_reg(ext->adt_path, 0, &coproc) ||
+        coproc != ext->coproc || dcp6_adt_reg(ext->dart_path, 0, &dart) || dart != ext->dart)
+        return -1;
+    reg = fdt_getprop(dt, node, "reg", &len);
+    if (!reg || len < 2 * (int)sizeof(fdt64_t) || fdt64_ld(reg) != coproc)
+        return -1;
+    iommu = fdt_getprop(dt, node, "iommus", &len);
+    if (!iommu || len != 2 * (int)sizeof(fdt32_t) || fdt32_ld(&iommu[1]) != 23)
+        return -1;
+    int dart_node = fdt_node_offset_by_phandle(dt, fdt32_ld(iommu));
+    if (dart_node < 0 || fdt_node_check_compatible(dt, dart_node, "apple,t8110-dart") ||
+        dcp6_status_disabled(dt, dart_node, ext->name))
+        return -1;
+    reg = fdt_getprop(dt, dart_node, "reg", &len);
+    if (!reg || len < 2 * (int)sizeof(fdt64_t) || fdt64_ld(reg) != dart)
+        return -1;
+
+    mr = fdt_getprop(dt, node, "memory-region", &len);
+    if (!mr || len != 3 * (int)sizeof(fdt32_t))
+        return -1;
+    for (int i = 0; i < 3; i++)
+        ph[i] = fdt32_ld(&mr[i]);
+    if (!ph[0] || !ph[1] || !ph[2] || ph[0] == ph[1] || ph[0] == ph[2] || ph[1] == ph[2])
+        return -1;
+    const char *names = fdt_getprop(dt, node, "memory-region-names", &len);
+    if (!names || len != sizeof(mr_names) || memcmp(names, mr_names, sizeof(mr_names)))
+        return -1;
+    for (int i = 0; i < 3; i++) {
+        int region = fdt_node_offset_by_phandle(dt, ph[i]);
+        const char *status = region < 0 ? NULL : fdt_getprop(dt, region, "status", NULL);
+        const fdt64_t *r = region < 0 ? NULL : fdt_getprop(dt, region, "reg", &len);
+        if (!status || strcmp(status, "disabled") ||
+            fdt_node_check_compatible(dt, region, "apple,asc-mem") ||
+            !fdt_getprop(dt, region, "no-map", NULL) ||
+            fdt_getprop(dt, region, "iommu-addresses", NULL) || !r ||
+            len != 2 * (int)sizeof(fdt64_t) || fdt64_ld(r) || fdt64_ld(&r[1]) != SZ_16K)
+            return -1;
+    }
+
+    int nub = adt_path_offset(adt, ext->nub_path);
+    u32 seg_len = 0, names_len = 0, preloaded, running;
+    const struct adt_segment_ranges *ranges =
+        nub < 0 ? NULL : adt_getprop(adt, nub, "segment-ranges", &seg_len);
+    const char *seg_names = nub < 0 ? NULL : adt_getprop(adt, nub, "segment-names", &names_len);
+    if (!ranges || seg_len != DCPEXT6_SEGS * sizeof(*ranges) || !seg_names ||
+        !dcp6_seg_name_is(seg_names, names_len, SEG_TEXT, "__TEXT") ||
+        !dcp6_seg_name_is(seg_names, names_len, SEG_DATA, "__DATA") ||
+        !dcp6_seg_name_is(seg_names, names_len, SEG_OSLOG, "__OS_LOG") ||
+        dcp6_adt_u32(nub, "pre-loaded", &preloaded) || preloaded != 1 ||
+        dcp6_adt_u32(nub, "running", &running) || running != 1 || dcp6_dram(&dram, &dram_size))
+        return -1;
+    ram_end = kboot_ram_base() + kboot_ram_size();
+    if (ram_end < kboot_ram_base())
+        return -1;
+    struct dcp6_seg segs[DCPEXT6_SEGS];
+    for (int i = 0; i < DCPEXT6_SEGS; i++) {
+        struct adt_segment_ranges r;
+        memcpy(&r, &ranges[i], sizeof(r));
+        segs[i] = (struct dcp6_seg){r.phys, ALIGN_UP((u64)r.size, SZ_16K), r.remap, r.unk};
+        const struct dcp6_seg *s = &segs[i];
+        if (s->flags != flags[i] || !r.size || s->size > DCP6_SEG_MAX_SIZE ||
+            (s->phys & (SZ_16K - 1)) || s->phys < dram || s->phys + s->size < s->phys ||
+            s->phys + s->size > dram + dram_size)
+            return -1;
+        if (i == SEG_OSLOG) {
+            if (s->remap != s->phys || s->size > DCP6_OSLOG_MAX)
+                return -1;
+        } else if (s->remap < DCP6_DART_VM_BASE ||
+                   s->remap - DCP6_DART_VM_BASE > DCP6_DART_VM_SIZE - s->size ||
+                   (s->remap & (SZ_16K - 1)) ||
+                   !(s->phys + s->size <= kboot_ram_base() || s->phys >= ram_end) ||
+                   dcp6_carveout_conflict(s->phys, s->size, ext->name)) {
+            return -1;
+        }
+        for (int j = 0; j < i; j++)
+            if (dcp6_overlaps(s->phys, s->size, segs[j].phys, segs[j].size) ||
+                (i != SEG_OSLOG && j != SEG_OSLOG &&
+                 dcp6_overlaps(s->remap, s->size, segs[j].remap, segs[j].size)))
+                return -1;
+    }
+    /* The two external processors and the panel share immutable TEXT. */
+    if (segs[SEG_TEXT].phys != dcp6.segs[SEG_TEXT].phys ||
+        segs[SEG_TEXT].size != dcp6.segs[SEG_TEXT].size)
+        return -1;
+
+    u32 owner = dcp6_phandle(dt, ext->dt_path);
+    if (!owner)
+        return -1;
+    /*
+     * TEXT is the panel's own region: give it this processor's mapping and
+     * point the text entry at it, as dcpext6 does, instead of describing the
+     * same memory a second time. The text placeholder is then deleted.
+     */
+    char text_name[64];
+    const struct dcp6_seg *text = &segs[SEG_TEXT];
+    snprintf(text_name, sizeof(text_name), "dcp-text@%lx", text->phys);
+    int shared = dcp6_find_resv(dt, text_name, text->phys, text->size);
+    if (shared < 0 || fdt_node_check_compatible(dt, shared, "apple,asc-mem") ||
+        dcp6_append_iommu_addr(dt, shared, owner, DCP6_DART_VM_BASE,
+                               text->remap - DCP6_DART_VM_BASE, text->size))
+        return -1;
+    shared = dcp6_find_resv(dt, text_name, text->phys, text->size);
+    u32 shared_ph = shared < 0 ? 0 : fdt_get_phandle(dt, shared);
+    if (!shared_ph)
+        return -1;
+    for (int i = 1; i < 3; i++) {
+        const struct dcp6_seg *s = &segs[seg_index[i]];
+        char name[64];
+        fdt64_t region_reg[2] = {cpu_to_fdt64(s->phys), cpu_to_fdt64(s->size)};
+        if (dcp6_resv_conflict(dt, s->phys, s->size, ext->name))
+            return -1;
+        snprintf(name, sizeof(name), "%s-%s@%lx", ext->name, parts[i], s->phys);
+        int region = fdt_node_offset_by_phandle(dt, ph[i]);
+        if (region < 0 || fdt_set_name(dt, region, name))
+            return -1;
+        region = fdt_node_offset_by_phandle(dt, ph[i]);
+        if (region < 0 || fdt_setprop(dt, region, "reg", region_reg, sizeof(region_reg)) ||
+            dcp6_append_iommu_addr(dt, region, owner, DCP6_DART_VM_BASE,
+                                   s->remap - DCP6_DART_VM_BASE, s->size) ||
+            fdt_setprop_string(dt, region, "status", "okay"))
+            return -1;
+    }
+    fdt32_t mr_new[3] = {cpu_to_fdt32(shared_ph), cpu_to_fdt32(ph[1]), cpu_to_fdt32(ph[2])};
+    node = fdt_path_offset(dt, ext->dt_path);
+    if (node < 0 || fdt_setprop(dt, node, "memory-region", mr_new, sizeof(mr_new)))
+        return -1;
+    int placeholder = fdt_node_offset_by_phandle(dt, ph[0]);
+    if (placeholder < 0 || fdt_del_node(dt, placeholder))
+        return -1;
+    node = fdt_path_offset(dt, ext->dt_path);
+    if (node < 0 || firmware_set_fdt(dt, node, "apple,firmware-version", &os_firmware) ||
+        firmware_set_fdt(dt, node, "apple,firmware-compat", &os_firmware))
+        return -1;
+    return 0;
+}
+
+static void t6041_ext_handoffs(void *dt)
+{
+    int panel = fdt_path_offset(dt, "dcp");
+    if (panel < 0 || !fdt_getprop(dt, panel, dcp6.soc->marker, NULL))
+        return;
+    for (size_t i = 0; i < ARRAY_SIZE(t6041_exts); i++) {
+        void *scratch = dcp6_scratch(dt);
+        if (!scratch)
+            return;
+        int ret = t6041_ext_fill(scratch, &t6041_exts[i]);
+        if (ret) {
+            if (ret < 0)
+                dlog("%s firmware memory refused; placeholder remains disabled\n",
+                     t6041_exts[i].name);
+            free(scratch);
+            continue;
+        }
+        if (!dcp6_commit(dt, scratch))
+            dlog("%s firmware memory published; processor remains disabled\n", t6041_exts[i].name);
+    }
+}
+
+/*
+ * For an SoC without an opt-in: the device tree has the display block the handoff is for, the dcp
+ * and disp0 aliases naming nodes of the SoC's compatibles. Only the presence is checked here;
+ * dcp6_check_dt() checks the rest before anything is published.
+ */
+static bool dcp6_dt_describes(void *dt)
+{
+    const char *dcp = fdt_get_alias(dt, "dcp");
+    const char *disp = fdt_get_alias(dt, "disp0");
+    int dcp_node = dcp ? fdt_path_offset(dt, dcp) : -1;
+    int disp_node = disp ? fdt_path_offset(dt, disp) : -1;
+    return dcp_node >= 0 && disp_node >= 0 &&
+           !fdt_node_check_compatible(dt, dcp_node, dcp6.soc->dcp_compat) &&
+           !fdt_node_check_compatible(dt, disp_node, dcp6.soc->disp_compat);
 }
 
 /* Always returns 0: nothing here may stop the boot */
@@ -2754,6 +3082,20 @@ int dt_set_display_handoff(void *dt)
 
     if (dcp6.soc->board_gate && (chip_id != dcp6.soc->chip || !dcp6_board_ok(dt))) {
         dlog("not a %s (chip 0x%x): nothing done\n", dcp6.soc->boards_desc, chip_id);
+        return 0;
+    }
+
+    /* Reject unsupported firmware before reserving __OS_LOG or touching registers. */
+    if (!dcp6.soc->optin &&
+        (dcp6.soc->os_fw == V_UNKNOWN || os_firmware.version != dcp6.soc->os_fw)) {
+        dlog("no qualified OS firmware for %s: nothing done\n", dcp6.soc->dcp_compat);
+        return 0;
+    }
+
+    if (!dcp6.soc->optin && !dcp6_dt_describes(dt)) {
+        dlog("the device tree does not describe the display block (dcp %s, disp0 %s): nothing "
+             "done\n",
+             dcp6.soc->dcp_compat, dcp6.soc->disp_compat);
         return 0;
     }
 
@@ -2780,5 +3122,7 @@ int dt_set_display_handoff(void *dt)
         dlog("not armed (no chosen.%s=1): no display handoff\n", dcp6.soc->optin);
     if (dcp6.soc->ext)
         dcpext6_handoffs(dt);
+    if (dcp6.soc == &dcp_soc_t6041)
+        t6041_ext_handoffs(dt);
     return 0;
 }

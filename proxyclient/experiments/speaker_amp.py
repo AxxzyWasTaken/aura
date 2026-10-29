@@ -13,13 +13,13 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 # (expects mono, 24-bit signed samples padded to 32 bits on the msb side)
 
 import argparse
-from m1n1.setup import *
-from m1n1.hw.dart import DART, DARTRegs
-from m1n1.hw.i2c import I2C
-from m1n1.hw.pmgr import PMGR
-from m1n1.hw.nco import NCO
-from m1n1.hw.admac import *
-from m1n1.hw.mca import *
+from aura.setup import *
+from aura.hw.dart import DART, DARTRegs
+from aura.hw.i2c import I2C
+from aura.hw.pmgr import PMGR
+from aura.hw.nco import NCO
+from aura.hw.admac import *
+from aura.hw.mca import *
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument("-f", "--file", "--input", "--samples",

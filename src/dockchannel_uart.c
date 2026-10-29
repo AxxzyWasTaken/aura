@@ -48,8 +48,16 @@ void dockchannel_uart_putbyte(u8 c)
     if (!uart_base)
         return;
 
-    while (read32(uart_base + DATA_TX_FREE) == 0)
-        ;
+    /*
+     * A stalled or undrained FIFO must not block every printf. Wait up to
+     * 1 s, which is long enough for a host that drains in bursts not to
+     * lose proxy replies, then drop the byte.
+     */
+    u64 deadline = mrs(CNTPCT_EL0) + mrs(CNTFRQ_EL0);
+    while (read32(uart_base + DATA_TX_FREE) == 0) {
+        if ((s64)(mrs(CNTPCT_EL0) - deadline) >= 0)
+            return;
+    }
 
     write32(uart_base + DATA_TX8, c);
 }

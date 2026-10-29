@@ -6,16 +6,16 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import atexit, sys
 
-from m1n1.setup import *
-from m1n1.constructutils import Ver
-from m1n1.utils import *
+from aura.setup import *
+from aura.constructutils import Ver
+from aura.utils import *
 
 Ver.set_version(u)
 
-from m1n1.agx import AGX
-from m1n1.agx.render import *
+from aura.agx import AGX
+from aura.agx.render import *
 
-from m1n1 import asm
+from aura import asm
 
 p.pmgr_adt_power_enable("/arm-io/gfx-asc")
 p.pmgr_adt_power_enable("/arm-io/sgx")

@@ -179,6 +179,7 @@ static int dt_reserve_asc_firmware(const char *path, const char *alt,
 { reservations++; return 0; }
 static int dt_set_dcp_firmware(const char *alias) { versions++; return 0; }
 static int dt_reserve_t8122_dcpext_one(unsigned int n) { assert(0); return -1; }
+static bool dt_t8122_dcpext_armed(void) { assert(0); return false; }
 static int dt_display_transaction(int (*apply)(unsigned int), unsigned int n)
 { assert(0); return -1; }
 static int enable(void *tree, int node, const char *name, const char *value)
@@ -228,9 +229,9 @@ def test_reservation_caller_never_publishes_routes_after_failure(tmp_path):
 #include <string.h>
 #include "libfdt.h"
 typedef uint32_t u32;
-/* Match m1n1's aarch64-linux-gnu target, not the host libc's uint64_t alias. */
+/* Match aura's aarch64-linux-gnu target, not the host libc's uint64_t alias. */
 typedef unsigned long u64;
-_Static_assert(sizeof(u64) == 8, "the m1n1 host fixture requires an LP64 host");
+_Static_assert(sizeof(u64) == 8, "the aura host fixture requires an LP64 host");
 typedef int dart_dev_t;
 #define T6000 0x6000
 #define T6001 0x6001

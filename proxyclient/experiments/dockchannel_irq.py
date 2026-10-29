@@ -3,8 +3,8 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.hw.dockchannel import DockChannel
+from aura.setup import *
+from aura.hw.dockchannel import DockChannel
 
 NUM_IRQS=4096
 ITER=10

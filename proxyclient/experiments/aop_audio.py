@@ -6,15 +6,15 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 import struct
 from construct import *
 
-from m1n1.setup import *
-from m1n1.shell import run_shell
-from m1n1.hw.dart import DART
-from m1n1.fw.aop.client import AOPClient
-from m1n1.fw.aop.ipc import *
+from aura.setup import *
+from aura.shell import run_shell
+from aura.hw.dart import DART
+from aura.fw.aop.client import AOPClient
+from aura.fw.aop.ipc import *
 
-# on the first terminal: M1N1DEVICE=/dev/ttyACM0 python3 experiments/aop_audio.py
+# on the first terminal: AURADEVICE=/dev/ttyACM0 python3 experiments/aop_audio.py
 # at that point (hpai at pw1), aop powers on admac and you should be dropped into a shell
-# on a second terminal in parallel: M1N1DEVICE=/dev/ttyACM1 tools/admac_stream.py --node admac-aop-audio --channel 1 -v | xxd -g 4 -c 12 -e
+# on a second terminal in parallel: AURADEVICE=/dev/ttyACM1 tools/admac_stream.py --node admac-aop-audio --channel 1 -v | xxd -g 4 -c 12 -e
 # inside the shell (on the first terminal), aop_start()
 # there should now be microphone samples streamed to admac
 # see povik's commit #fc66046

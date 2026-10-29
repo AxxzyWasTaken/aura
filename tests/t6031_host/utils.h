@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * Host stand-in for src/utils.h, for tests/t6031_host.c: register and memory accesses go to the
- * test's simulated bus, and printf() to the test's m1n1 log.
+ * test's simulated bus, and printf() to the test's aura log.
  */
 #ifndef UTILS_H
 #define UTILS_H

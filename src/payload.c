@@ -33,15 +33,21 @@ static const u8 fdt_magic[] = {0xd0, 0x0d, 0xfe, 0xed};
 static const u8 kernel_magic[] = {'A', 'R', 'M', 0x64};          // at 0x38
 static const u8 cpio_magic[] = {'0', '7', '0', '7', '0'};        // '1' or '2' next
 static const u8 img4_magic[] = {0x16, 0x04, 'I', 'M', 'G', '4'}; // IA5String 'IMG4'
-static const u8 sig_magic[] = {'m', '1', 'n', '1', '_', 's', 'i', 'g'};
-static const u8 initramfs_magic[] = {
-    'm', '1', 'n', '1', '_', 'i', 'n',
-    'i', 't', 'r', 'a', 'm', 'f', 's'}; // followed by size as little endian uint32_t
+/*
+ * aura's own payload records start "aura_". Payloads made for the bootloader aura replaced
+ * start "m1n1_" instead; both are accepted so existing installs and payload builders keep
+ * working. The two prefixes are the same length, so the record layout is unchanged.
+ */
+#define PAYLOAD_PREFIX_LEN 5
+static const u8 payload_prefix[PAYLOAD_PREFIX_LEN] = {'a', 'u', 'r', 'a', '_'};
+static const u8 legacy_payload_prefix[PAYLOAD_PREFIX_LEN] = {'m', '1', 'n', '1', '_'};
+static const u8 sig_magic[] = {'s', 'i', 'g'};
+static const u8 initramfs_magic[] = {'i', 'n', 'i', 't', 'r', 'a', 'm', 'f', 's'};
+// followed by size as little endian uint32_t
 static const u8 empty[] = {0, 0, 0, 0};
 
 // custom logo is RGBA with 256x256 retina logo followed by half resolution
-static const u8 custom_logo_magic[] = {'m', '1', 'n', '1', '_', 'l', 'o', 'g',
-                                       'o', '_', '2', '5', '6', '1', '2', '8'};
+static const u8 custom_logo_magic[] = {'l', 'o', 'g', 'o', '_', '2', '5', '6', '1', '2', '8'};
 #define CUSTOM_LOGO_SIZE (4 * ((256 * 256) + (128 * 128)))
 
 static char expect_compatible[256];
@@ -57,6 +63,17 @@ static char stage1_esp_chosen[96];
 #endif
 
 static void *load_one_payload(void *start, size_t size);
+
+/* Length of the "aura_<tag>" (or legacy "m1n1_<tag>") record header at p, or 0. */
+static size_t payload_record(const u8 *p, const u8 *tag, size_t tag_len)
+{
+    if (memcmp(p, payload_prefix, PAYLOAD_PREFIX_LEN) &&
+        memcmp(p, legacy_payload_prefix, PAYLOAD_PREFIX_LEN))
+        return 0;
+    if (memcmp(p + PAYLOAD_PREFIX_LEN, tag, tag_len))
+        return 0;
+    return PAYLOAD_PREFIX_LEN + tag_len;
+}
 
 static void finalize_uncompression(void *dest, size_t dest_len)
 {
@@ -178,41 +195,86 @@ static void *load_kernel(void *p, size_t size)
 #define IS_VAR(x) !strncmp((char *)*p, x, strlen(x))
 
 #define MAX_CHOSEN_VARS 16
+/* Passed after every other line to a chainloaded stage when a config line was lost */
+#define CONFIG_LOST_VAR "m1n1.config-lost=1"
 
+/* The two extra slots carry CONFIG_LOST_VAR and nvme.adopt without reducing the chosen limit. */
 #ifdef CHAINLOADING
 static size_t chosen_cnt = 1;
-/* The extra slot carries nvme.adopt without reducing the chosen-variable limit. */
-static char *chosen[MAX_CHOSEN_VARS + 1] = {
+static char *chosen[MAX_CHOSEN_VARS + 2] = {
     "chosen.asahi,m1n1-stage1-version=" BUILD_TAG,
 };
 #else
 static size_t chosen_cnt = 0;
-static char *chosen[MAX_CHOSEN_VARS + 1];
+static char *chosen[MAX_CHOSEN_VARS + 2];
 #endif
 
 static bool enable_tso = false;
+
+/*
+ * A config line that cannot be kept or read: a chosen. line past the end of chosen[]; a line of a
+ * variable m1n1 knows that has no newline or a name or value too long (the scan stops there), or
+ * that a line without '=' took into its name; or a stop at unknown data after the kernel or a
+ * config line, before config that may follow. A chainloading stage 1 that lost one says so with
+ * CONFIG_LOST_VAR. The value the config set before the lost line still stands, an owner's
+ * chosen.<switch>=1 against a lost =0 perhaps, so on the Macs with M3 graphics defaults kboot
+ * then hands no graphics over (kboot_set_config_lost()). Everything else boots as before.
+ */
+static bool config_lost = false;
+static bool config_seen = false;
+static bool config_lost_passed = false;
+
+static const char *const config_names[] = {
+    "chosen.",  "chainload=",   "boot=", "nvme.adopt=",
+    "display=", "mitigations=", "tso=",  "m1n1.config-lost="};
+
+/* The start of a line of a variable m1n1 knows */
+static bool config_line(const char *s)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(config_names); i++)
+        if (!strncmp(s, config_names[i], strlen(config_names[i])))
+            return true;
+    return false;
+}
+
+/* check_var() cannot read this line: lost if it is one of m1n1's */
+static bool config_unreadable(u8 *p)
+{
+    if (config_line((char *)p))
+        config_lost = true;
+    return false;
+}
 
 static bool check_var(u8 **p)
 {
     char *val = memchr(*p, '=', strnlen((char *)*p, MAX_VAR_NAME + 1));
     if (!val)
-        return false;
+        return config_unreadable(*p);
+    /* A line without '=' took the lines after it into this name */
+    for (char *nl = memchr(*p, '\n', val - (char *)*p); nl; nl = memchr(nl + 1, '\n', val - nl - 1))
+        if (config_line(nl + 1))
+            config_lost = true;
 
     val++;
 
     char *end = memchr(val, '\n', strnlen(val, MAX_VAR_SIZE + 1));
     if (!end)
-        return false;
+        return config_unreadable(*p);
 
     *end = 0;
     printf("Found variable %.*s\n", (int)(val - (char *)*p - 1), (char *)*p);
 
     if (IS_VAR("chosen.")) {
-        if (chosen_cnt >= MAX_CHOSEN_VARS)
+        if (chosen_cnt >= MAX_CHOSEN_VARS) {
             printf("Too many chosen vars, ignoring %.*s\n", (int)(val - (char *)*p - 1),
                    (char *)*p);
-        else
+            config_lost = true;
+        } else {
             chosen[chosen_cnt++] = (char *)*p;
+        }
+    } else if (IS_VAR("m1n1.config-lost=")) {
+        /* Any value: an earlier stage lost a line, and nothing after it can take that back */
+        config_lost = true;
     } else if (IS_VAR("chainload=")) {
         chainload_spec = val;
     } else if (IS_VAR("boot=")) {
@@ -223,6 +285,8 @@ static bool check_var(u8 **p)
             nvme_adopt_live_session = true;
     } else if (IS_VAR("display=")) {
         display_configure(val);
+    } else if (IS_VAR("display2=")) {
+        display_configure_second(val);
     } else if (IS_VAR("mitigations=")) {
         mitigations_configure(val);
     } else if (IS_VAR("tso=")) {
@@ -232,12 +296,14 @@ static bool check_var(u8 **p)
     }
 
     *p = (u8 *)(end + 1);
+    config_seen = true;
     return true;
 }
 
 static void *load_one_payload(void *start, size_t size)
 {
     u8 *p = start;
+    size_t hdr;
 
     if (!start)
         return NULL;
@@ -256,29 +322,33 @@ static void *load_one_payload(void *start, size_t size)
     } else if (!memcmp(p + 0x38, kernel_magic, sizeof kernel_magic)) {
         printf("Found a kernel at %p\n", p);
         return load_kernel(p, size);
-    } else if (!memcmp(p, sig_magic, sizeof sig_magic)) {
+    } else if ((hdr = payload_record(p, sig_magic, sizeof sig_magic))) {
         u32 size;
-        memcpy(&size, p + 8, 4);
+        memcpy(&size, p + hdr, 4);
 
-        printf("Found a m1n1 signature at %p, skipping 0x%x bytes\n", p, size);
+        printf("Found a signature at %p, skipping 0x%x bytes\n", p, size);
         return p + size;
-    } else if (!memcmp(p, initramfs_magic, sizeof(initramfs_magic))) {
+    } else if ((hdr = payload_record(p, initramfs_magic, sizeof initramfs_magic))) {
         u32 size;
-        memcpy(&size, p + sizeof(initramfs_magic), 4);
-        printf("Found a m1n1 initramfs payload at %p, 0x%x bytes\n", p, size);
-        p += sizeof(initramfs_magic) + 4;
+        memcpy(&size, p + hdr, 4);
+        printf("Found an initramfs payload at %p, 0x%x bytes\n", p, size);
+        p += hdr + 4;
         return load_cpio(p, size);
-    } else if (!memcmp(p, custom_logo_magic, sizeof(custom_logo_magic))) {
-        printf("Found a m1n1 custom logo payload at %p, skipping 0x%lx bytes\n", p,
-               sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE);
-        return p + sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE;
-    } else if (check_var(&p)) {
-        return p;
+    } else if ((hdr = payload_record(p, custom_logo_magic, sizeof custom_logo_magic))) {
+        printf("Found a custom logo payload at %p, skipping 0x%lx bytes\n", p,
+               hdr + CUSTOM_LOGO_SIZE);
+        return p + hdr + CUSTOM_LOGO_SIZE;
     } else if (!memcmp(p, empty, sizeof empty) ||
-               !memcmp(p + 0x05, img4_magic, sizeof img4_magic)) { // SEPFW after m1n1
+               !memcmp(p + 0x05, img4_magic, sizeof img4_magic)) { // SEPFW after aura
+        /* Before check_var(): an end whose bytes also read as a line is still the end */
         printf("No more payloads at %p\n", p);
         return NULL;
+    } else if (check_var(&p)) {
+        return p;
     } else {
+        /* After the kernel or a config line, more config may follow (update-m1n1 puts it last) */
+        if (kernel || config_seen)
+            config_lost = true;
         printf("Unknown payload at %p (magic: %02x%02x%02x%02x)\n", p, p[0], p[1], p[2], p[3]);
         return NULL;
     }
@@ -323,9 +393,10 @@ bool payload_logo(void **custom_128, void **custom_256)
     *custom_128 = NULL;
     *custom_256 = NULL;
 
-    if (!memcmp(p, custom_logo_magic, sizeof(custom_logo_magic))) {
-        void *data = p + sizeof(custom_logo_magic);
-        printf("Found a m1n1 custom logo payload at %p\n", p);
+    size_t hdr = payload_record(p, custom_logo_magic, sizeof custom_logo_magic);
+    if (hdr) {
+        void *data = p + hdr;
+        printf("Found a custom logo payload at %p\n", p);
         *custom_256 = data;
         *custom_128 = data + 4 * 256 * 256;
 
@@ -385,16 +456,14 @@ int payload_run(void)
         return -1;
     }
 
-#ifdef J613_ESP_STAGE1
-    /* main.c admits only J613/26.6.2 before invoking payload_run. */
-    const char *configured = stage1_config_target();
-    if (configured) {
-        chainload_spec = (char *)configured;
-    }
-#endif
-
     if (chainload_spec) {
         next_stage.entry = NULL;
+        /* Last, after every owner line, in a slot of its own: the next stage cannot miss it */
+        if (config_lost && !config_lost_passed) {
+            printf("Payload: a config line was lost: telling the next stage\n");
+            chosen[chosen_cnt++] = CONFIG_LOST_VAR;
+            config_lost_passed = true;
+        }
         int ret = chainload_load(chainload_spec, chosen, &chosen_cnt, ARRAY_SIZE(chosen));
         if (ret) {
             next_stage.entry = NULL;
@@ -414,6 +483,12 @@ int payload_run(void)
     }
 
     if (kernel && fdt) {
+        /* The shared post-M4 U-Boot driver adopts ANS instead of starting it.
+         * An inline ESP payload has not gone through boot_storage_load(). */
+        if (chip_id == T8132 && !fdt_node_check_compatible(fdt, 0, "apple,j713") && !nvme_init()) {
+            printf("Payload: cannot prepare the M4 ANS session\n");
+            goto boot_failed;
+        }
         cpufreq_init();
         if (smp_start_secondaries() && chip_id == T8140) {
             printf("SMP: refusing payload handoff with missing T8140 CPUs\n");
@@ -459,6 +534,8 @@ int payload_run(void)
                 printf("Failed to kboot set %s\n", var + 7);
         }
 
+        if (config_lost)
+            kboot_set_config_lost();
         if (kboot_prepare_dt(fdt)) {
             printf("Failed to prepare FDT!\n");
             goto boot_failed;

@@ -3,10 +3,10 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.shell import run_shell
+from aura.setup import *
+from aura.shell import run_shell
 
-from m1n1.fw.ane import ANE
+from aura.fw.ane import ANE
 
 import numpy as np
 from anect import anect_convert  # pip install anect

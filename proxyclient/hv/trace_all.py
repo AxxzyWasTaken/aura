@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1.utils import irange
+from aura.utils import irange
 
 # Map the entire MMIO range as traceable
 for r in hv.adt["/arm-io"].ranges:

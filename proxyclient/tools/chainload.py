@@ -5,7 +5,7 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import argparse, pathlib, time
 
-parser = argparse.ArgumentParser(description='Mach-O loader for m1n1')
+parser = argparse.ArgumentParser(description='Mach-O loader for aura')
 parser.add_argument('-q', '--quiet', action="store_true", help="Disable framebuffer")
 parser.add_argument('-n', '--no-sepfw', action="store_true", help="Do not preserve SEPFW")
 parser.add_argument('-c', '--call', action="store_true", help="Use call mode")
@@ -23,11 +23,11 @@ if args.vector_only and args.call:
 if args.capture and not args.vector_only:
     parser.error('--capture requires --vector-only')
 
-from m1n1.setup import *
-from m1n1.tgtypes import BootArgs_r1, BootArgs_r2, BootArgs_r3
-from m1n1.macho import MachO
-from m1n1 import asm
-from m1n1.bootmem import BOOT_BLOBS, find_boot_blobs, copy_boot_blobs
+from aura.setup import *
+from aura.tgtypes import BootArgs_r1, BootArgs_r2, BootArgs_r3
+from aura.macho import MachO
+from aura import asm
+from aura.bootmem import BOOT_BLOBS, find_boot_blobs, copy_boot_blobs
 from construct import Array, Int64ul
 
 new_base = u.base
@@ -170,7 +170,7 @@ if len(args.boot_args) > 0:
     tba.cmdline = boot_args
 
 if args.xnu:
-    # Fix virt_base, since we often install m1n1 with it set to 0 which xnu does not like
+    # Fix virt_base, since we often install aura with it set to 0 which xnu does not like
     tba.virt_base = 0xfffffe0010000000 + (tba.phys_base & (32 * 1024 * 1024 - 1))
     tba.devtree = u.ba.devtree - u.ba.virt_base + tba.virt_base
 

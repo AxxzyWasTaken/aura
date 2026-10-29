@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1.utils import RegMap
-from m1n1.trace.i2c import I2CTracer, I2CRegMapTracer
-from m1n1.hw.codecs import *
+from aura.utils import RegMap
+from aura.trace.i2c import I2CTracer, I2CRegMapTracer
+from aura.hw.codecs import *
 
 hv.p.hv_set_time_stealing(0, 1)
 

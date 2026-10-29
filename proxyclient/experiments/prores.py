@@ -3,10 +3,10 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.hw.dart8110 import DART8110, DART8110Regs
-from m1n1.hw.prores import *
-from m1n1.utils import *
+from aura.setup import *
+from aura.hw.dart8110 import DART8110, DART8110Regs
+from aura.hw.prores import *
+from aura.utils import *
 import time
 
 

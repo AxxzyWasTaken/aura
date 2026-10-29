@@ -18,7 +18,7 @@
 
 #define SPRR_N_INDICES 16
 
-/* Must be kept in sync with HV_VREGS in proxyclient/m1n1/hv/sprr.py. */
+/* Must be kept in sync with HV_VREGS in proxyclient/aura/hv/sprr.py. */
 enum hv_vreg {
     HV_VREG_SPRR_CONFIG_EL1 = 0,
     HV_VREG_GXF_CONFIG_EL1,

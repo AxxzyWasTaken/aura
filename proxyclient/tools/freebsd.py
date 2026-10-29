@@ -10,14 +10,14 @@ import argparse, pathlib
 #
 # 1.) We pretend our kernel is an initramfs and pick it up as such in a modified
 #    loader build.  This is the simplest way to avoid having ad-hoc
-#    interpretations of stuff in m1n1 for our quirky development setup.
+#    interpretations of stuff in aura for our quirky development setup.
 #
 # 2.) U-Boot and dtb are required, loader/kernel are not.  The latter are
 #    assumed to be discoverable by the standard U-Boot process on disk if they
 #    are not specified.  Otherwise, we'll load them from memory if they are
 #    provided.
 #
-parser = argparse.ArgumentParser(description='(FreeBSD) kernel loader for m1n1')
+parser = argparse.ArgumentParser(description='(FreeBSD) kernel loader for aura')
 parser.add_argument('u_boot', type=pathlib.Path, help="load u-boot before linux")
 parser.add_argument('dtb', type=pathlib.Path)
 parser.add_argument('-l', '--loader', type=pathlib.Path)
@@ -26,7 +26,7 @@ parser.add_argument('-b', '--bootargs', type=str, metavar='"boot arguments"')
 parser.add_argument('-t', '--tty', type=str)
 args = parser.parse_args()
 
-from m1n1.setup import *
+from aura.setup import *
 
 if args.tty is not None:
     tty_dev = serial.Serial(args.tty)

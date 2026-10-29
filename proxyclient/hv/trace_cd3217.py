@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from m1n1.trace.i2c import I2CTracer, I2CDevTracer
+from aura.trace.i2c import I2CTracer, I2CDevTracer
 
 class HpmTracer(I2CDevTracer):
     class State(Enum):

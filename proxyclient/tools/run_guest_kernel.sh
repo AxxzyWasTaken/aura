@@ -56,37 +56,37 @@ fi
 
 base="$(dirname "$0")"
 
-echo "Creating m1n1+kernel image"
-cp "$base"/../../build/m1n1.bin "$TMPDIR/m1n1-linux.bin"
+echo "Creating aura+kernel image"
+cp "$base"/../../build/aura.bin "$TMPDIR/aura-linux.bin"
 if [ -n "$args" ]; then
-    echo "chosen.bootargs=$args" >>"$TMPDIR/m1n1-linux.bin"
+    echo "chosen.bootargs=$args" >>"$TMPDIR/aura-linux.bin"
 fi
 if [ -n "${esp}" ]; then
-    echo "chosen.asahi,efi-system-partition=${esp}" >>"$TMPDIR/m1n1-linux.bin"
+    echo "chosen.asahi,efi-system-partition=${esp}" >>"$TMPDIR/aura-linux.bin"
 fi
 
-cat "$kernel_base"/arch/arm64/boot/dts/apple/*.dtb >>"$TMPDIR/m1n1-linux.bin"
+cat "$kernel_base"/arch/arm64/boot/dts/apple/*.dtb >>"$TMPDIR/aura-linux.bin"
 if [[ "$kernel" == *.gz ]]; then
-    cat "$kernel" >>"$TMPDIR/m1n1-linux.bin"
+    cat "$kernel" >>"$TMPDIR/aura-linux.bin"
 else
-    gzip -c <"$kernel" >>"$TMPDIR/m1n1-linux.bin"
+    gzip -c <"$kernel" >>"$TMPDIR/aura-linux.bin"
 fi
 
 if [ -n "$initramfs" ]; then
     initramfs_size=$(stat --printf='%s' "$initramfs")
-    python3 - << EOF >>"$TMPDIR/m1n1-linux.bin"
+    python3 - << EOF >>"$TMPDIR/aura-linux.bin"
 import os, sys
 
-magic = b'm1n1_initramfs'
+magic = b'aura_initramfs'
 size = int(${initramfs_size}).to_bytes(4, byteorder='little')
 os.write(sys.stdout.fileno(), magic + size)
 EOF
-    cat "$initramfs" >>"$TMPDIR/m1n1-linux.bin"
+    cat "$initramfs" >>"$TMPDIR/aura-linux.bin"
 fi
 
-echo "Chainloading to updated m1n1..."
-python3 "$base"/chainload.py -r "$base"/../../build/m1n1.bin
+echo "Chainloading to updated aura..."
+python3 "$base"/chainload.py -r "$base"/../../build/aura.bin
 echo "Starting guest..."
 exec python3 "$base"/run_guest.py \
     -c "load_system_map('$kernel_base/System.map')" "$@" \
-    -r "$TMPDIR/m1n1-linux.bin"
+    -r "$TMPDIR/aura-linux.bin"

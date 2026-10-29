@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Decode local T8122 diagnostic metadata; never access hardware or enable it.
 
-Layouts follow proxyclient/m1n1/adt.py and src/pmgr.c. The arm-io ranges
+Layouts follow proxyclient/aura/adt.py and src/pmgr.c. The arm-io ranges
 use the Apple ADT 64-bit bus/parent/size layout. Output is evidence for
 bring-up, not a Linux DT binding or a usable firmware handoff.
 """

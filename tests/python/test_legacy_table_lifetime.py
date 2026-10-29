@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
-# PR6 J293 (T8103/T8020) legacy-display-DART lifetime / ownership host tests.
+# Lifetime / ownership host tests for the tables the display DART view publishes
+# into a locked DART's inherited roots (first found on J293, T8103/T8020).
 #
 # Scope:
 #   - Lifetime, reservations and ownership of the retained legacy
@@ -105,12 +106,12 @@ DCP_LABELS = _text[_text.index("out_afk:"):_ret + len("return NULL;")]
 KBOOT_GUARD = extract_span(
     KBOOT_C,
     "if (dart_reserve_legacy_tables(dt, cur_boot_args.phys_base, cur_boot_args.mem_size))",
-    'bail("FDT: couldn\'t reserve legacy DCP translation tables\\n");',
+    'bail("FDT: couldn\'t reserve inherited display translation tables\\n");',
     include_end=True,
 )
 
 # ---------------------------------------------------------------------------
-# shared C preamble (m1n1-faithful macros/types)
+# shared C preamble (aura-faithful macros/types)
 # ---------------------------------------------------------------------------
 PRE = r"""
 #include <stdint.h>
@@ -274,10 +275,10 @@ static void set_pages(const u64 *p, size_t n) { legacy_l2_count = n; for (size_t
 int main(void) {
     u64 ok4[4] = { DRAM_BASE, DRAM_BASE + SZ_16K, DRAM_BASE + 2*SZ_16K, DRAM_BASE + 3*SZ_16K };
 
-    /* off-chip: no-op even with pages recorded, zero reservations */
-    chip_id = 0; fresh(big, sizeof big); set_pages(ok4, 4);
-    CHECK(dart_reserve_legacy_tables(big, DRAM_BASE, 0x40000000UL) == 0, "reserve.offchip.returns_0");
-    CHECK(fdt_num_mem_rsv(big) == 0, "reserve.offchip.no_reservations");
+    /* any chip: the rule is not chip-specific, recorded pages are reserved */
+    chip_id = 0x6000; fresh(big, sizeof big); set_pages(ok4, 4);
+    CHECK(dart_reserve_legacy_tables(big, DRAM_BASE, 0x40000000UL) == 0, "reserve.anychip.returns_0");
+    CHECK(fdt_num_mem_rsv(big) == 4, "reserve.anychip.four_reservations");
 
     /* empty record: no-op */
     chip_id = T8103; fresh(big, sizeof big); legacy_l2_count = 0;
@@ -352,7 +353,7 @@ int main(void) {
 # C3 : kboot caller contract -- verbatim guard + verbatim bail macro
 # ---------------------------------------------------------------------------
 C_KBOOT = PRE + r"""
-/* verbatim m1n1 bail() macro (src/kboot.c) */
+/* verbatim aura bail() macro (src/kboot.c) */
 #define bail(...)                                                                                  \
     do {                                                                                           \
         printf(__VA_ARGS__);                                                                       \

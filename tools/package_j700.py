@@ -16,7 +16,7 @@ REQUIRED = ("#define RELEASE", "#define CHAINLOADING")
 def build_identity(folder: Path, commit: str, stage: str) -> tuple[str, str]:
     info = (folder / "BUILD-INFO.txt").read_text()
     fields = dict(line.split(": ", 1) for line in info.splitlines() if ": " in line)
-    if fields.get("kind") not in {"aura", "m1n1"} or fields.get("commit") != commit:
+    if fields.get("kind") not in {"aura", "aura"} or fields.get("commit") != commit:
         raise ValueError(f"{folder}: source commit mismatch")
     if fields.get("dirty-files") != "0":
         raise ValueError(f"{folder}: dirty build")
@@ -55,8 +55,8 @@ def main() -> None:
     args.output.mkdir(parents=True)
 
     for stage, folder in (("stage1", args.stage1_out), ("stage2", args.stage2_out)):
-        shutil.copy2(folder / "aura.bin", args.output / f"m1n1-{stage}.bin")
-        shutil.copy2(folder / "aura-raw.elf", args.output / f"m1n1-{stage}-raw.elf")
+        shutil.copy2(folder / "aura.bin", args.output / f"aura-{stage}.bin")
+        shutil.copy2(folder / "aura-raw.elf", args.output / f"aura-{stage}-raw.elf")
         shutil.copy2(folder / "BUILD-INFO.txt", args.output / f"BUILD-INFO-{stage}.txt")
         shutil.copy2(folder / "build_cfg.h", args.output / f"build_cfg-{stage}.h")
 

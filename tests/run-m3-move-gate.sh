@@ -24,16 +24,9 @@ clang --target=aarch64-none-elf -c -O2 -ffreestanding -fpic -nostdinc \
 llvm-objcopy -O binary -j .init "$tmp/start.o" "$tmp/init.bin"
 llvm-objdump -d --no-show-raw-insn -j .init "$tmp/start.o" > "$tmp/init.dis"
 
-# The separate J613 stage1 must stay at the iBoot placement. Check actual
-# preprocessed assembly, rather than assuming the build flag reaches start.S.
-printf '%s\n' '#define J613_ESP_STAGE1' > "$tmp/build/build_cfg.h"
-clang --target=aarch64-none-elf -c -O2 -ffreestanding -fpic -nostdinc \
-    -isystem "$(clang -print-file-name=include)" -isystem sysinc -Isrc -Isrc/hv -I"$tmp" \
-    -march=armv8.2-a -o "$tmp/stage1.o" "$tmp/src/start.S"
-llvm-objdump -d --no-show-raw-insn -j .init "$tmp/stage1.o" > "$tmp/stage1.dis"
-# The old move writes top_of_kernel_data after loading it at BootArgs+32.
-if grep -Eq 'ldr[[:space:]]+x21, \[x19, #0x20\]' "$tmp/stage1.dis"; then
-    echo 'FAIL: optional J613 stage1 still runs the stage2 self-move'
+# A Stage 1 must stay at the iBoot placement: only an ESP Stage 2 sets stage2_relocates.
+if ! awk '/^#ifdef ESP_STAGE2$/{s=1} s&&/stage2_relocates = 1;/{one=1} s&&/^#else$/{e=1} e&&/stage2_relocates = 0;/{zero=1} END{exit !(one&&zero)}' src/payload.c; then
+    echo 'FAIL: stage2_relocates is not 1 only for ESP_STAGE2 builds'
     exit 1
 fi
 
@@ -47,13 +40,16 @@ ins = []
 for l in lines[start + 1:]:
     m = re.match(r"\s*([0-9a-f]+):\s+(.*)", l)
     if not m:
-        break
+        # The chainload header and local labels can interrupt objdump's listing
+        # before the M3 move. They are not the end of the .init section.
+        continue
     ins.append((int(m.group(1), 16), m.group(2).split("//")[0].strip()))
 mrs = next(i for i, (_, t) in enumerate(ins) if re.fullmatch(r"mrs\s+x1, MIDR_EL1", t))
 ldr = next(i for i, (_, t) in enumerate(ins) if i > mrs and re.match(r"ldr\s+x21, \[x19, #0x20\]", t))
 gate = ins[mrs + 1:ldr]
 targets = {int(re.search(r"0x([0-9a-f]+)", t).group(1), 16) for _, t in gate if t.startswith("b.")}
 assert len(gate) == 7 and len(targets) == 1, (gate, targets)
+assert all(gate[i][0] == gate[0][0] + 4 * i for i in range(len(gate))), gate
 lo, skip = gate[0][0], targets.pop()
 assert skip > ins[ldr][0], "the gate must skip the whole move"
 blob = open(f"{tmp}/init.bin", "rb").read()

@@ -6,14 +6,14 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 import struct
 from construct import *
 
-from m1n1.setup import *
-from m1n1.shell import run_shell
-from m1n1 import asm
-from m1n1.hw.dart import DART
-from m1n1.fw.dcp.client import DCPClient
-from m1n1.fw.dcp.manager import DCPManager
-from m1n1.fw.dcp.ipc import ByRef
-from m1n1.proxyutils import RegMonitor
+from aura.setup import *
+from aura.shell import run_shell
+from aura import asm
+from aura.hw.dart import DART
+from aura.fw.dcp.client import DCPClient
+from aura.fw.dcp.manager import DCPManager
+from aura.fw.dcp.ipc import ByRef
+from aura.proxyutils import RegMonitor
 
 disp_name = "/arm-io/disp0"
 

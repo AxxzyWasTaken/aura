@@ -3,10 +3,10 @@
 import sys, pathlib, time
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
+from aura.setup import *
 
-from m1n1.fw.isp_base import ISP
-from m1n1.fw.isp.isp_vid import ISPFrameReceiver
+from aura.fw.isp.isp_base import ISP
+from aura.fw.isp.isp_vid import ISPFrameReceiver
 
 
 isp = ISP(u)

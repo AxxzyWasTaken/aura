@@ -332,7 +332,7 @@ int hv_map(u64 from, u64 to, u64 size, u64 incr)
     // L3 mappings to boundary
     u64 boundary = ALIGN_UP(from, MASK(VADDR_L2_OFFSET_BITS));
     // CPU CTRR doesn't like L2 mappings crossing CTRR boundaries!
-    // Map everything below the m1n1 base as L3
+    // Map everything below the aura base as L3
     if (boundary >= ram_base && boundary < (u64)_base)
         boundary = ALIGN_UP((u64)_base, MASK(VADDR_L2_OFFSET_BITS));
     chunk = ALIGN_DOWN(min(size, boundary - from), BIT(VADDR_L3_OFFSET_BITS));

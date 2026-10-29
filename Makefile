@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: MIT AND GPL-2.0-only
 RUSTARCH ?= aarch64-unknown-none-softfloat
+# Built-in boot logo. The stock logo is Aurora. A fork or distribution can link its own by
+# putting <name>_48.bin, <name>_128.bin and <name>_256.bin (raw RGBA, see data/makelogo.py)
+# in a directory and building with LOGO_DIR=<directory> BUILTIN_LOGO=<name>.
 BUILTIN_LOGO ?= aurora
+LOGO_DIR ?= data
 
-ifneq ($(BUILTIN_LOGO),bootlogo)
-ifneq ($(words $(wildcard data/$(BUILTIN_LOGO)_128.bin data/$(BUILTIN_LOGO)_256.bin)),2)
-$(error BUILTIN_LOGO assets are missing)
-endif
+ifneq ($(words $(wildcard $(LOGO_DIR)/$(BUILTIN_LOGO)_48.bin $(LOGO_DIR)/$(BUILTIN_LOGO)_128.bin $(LOGO_DIR)/$(BUILTIN_LOGO)_256.bin)),3)
+$(error BUILTIN_LOGO assets $(LOGO_DIR)/$(BUILTIN_LOGO)_{48,128,256}.bin are missing)
 endif
 
 ifeq ($(shell uname),Darwin)
@@ -77,12 +79,6 @@ BASE_CFLAGS := -O2 -Wall -g -Wundef -Werror=strict-prototypes -fno-common -fno-P
 CFLAGS := $(BASE_CFLAGS) -mgeneral-regs-only
 
 CFG :=
-ifeq ($(J613_ESP_STAGE1),1)
-ifneq ($(CHAINLOADING),1)
-$(error J613_ESP_STAGE1 requires CHAINLOADING=1)
-endif
-CFG += J613_ESP_STAGE1
-endif
 ifeq ($(RELEASE),1)
 CFG += RELEASE
 endif
@@ -165,12 +161,13 @@ OBJECTS := \
 	afk.o \
 	aic.o \
 	asc.o \
-	bootlogo_48.o $(BUILTIN_LOGO)_128.o $(BUILTIN_LOGO)_256.o \
+	$(BUILTIN_LOGO)_48.o $(BUILTIN_LOGO)_128.o $(BUILTIN_LOGO)_256.o \
 	chainload.o \
 	chainload_asm.o \
 	chickens.o \
 	clk.o \
 	cpufreq.o \
+	cpufreq_t6040.o \
 	dapf.o \
 	dart.o \
 	dcp.o \
@@ -187,6 +184,7 @@ OBJECTS := \
 	iodev.o \
 	iova.o \
 	isp.o \
+	j873.o \
 	kboot.o kboot_atc.o kboot_gpu_t8122.o kboot_gpu_t8122_power.o kboot_pmp_t8122.o \
 	kboot_t6020_compat.o \
 	kboot_display_handoff.o kboot_display_facts.o kboot_gpu26.o kboot_gpu_t6031.o kboot_t6031.o \
@@ -196,7 +194,7 @@ OBJECTS := \
 	memory.o memory_asm.o \
 	nvme.o \
 	payload.o \
-	pcie.o \
+	pcie.o pcie_fdt.o \
 	pmgr.o \
 	proxy.o \
 	ringbuffer.o \
@@ -208,7 +206,7 @@ OBJECTS := \
 	sio.o \
 	smc.o \
 	smp.o \
-	spmi.o ace3.o \
+	spmi.o pmu_counter.o ace3.o \
 	start.o \
 	startup.o \
 	string.o \
@@ -226,7 +224,7 @@ OBJECTS := \
 	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS)
 
 FP_OBJECTS := \
-	kboot_gpu.o \
+	kboot_gpu.o kboot_gpu_m4.o \
 	math/expf.o \
 	math/exp2f_data.o \
 	math/powf.o \
@@ -243,7 +241,10 @@ TARGET_RAW := aura.bin
 DEPDIR := build/.deps
 
 .PHONY: all clean format invoke_cc always_rebuild
-all: build/$(TARGET) build/$(TARGET_RAW)
+all: build/$(TARGET) build/$(TARGET_RAW) verify-logo
+.PHONY: verify-logo
+verify-logo: build/$(TARGET_RAW)
+	$(QUIET)python3 tools/verify_builtin_logo.py $< $(BUILTIN_LOGO) --logo-dir $(LOGO_DIR)
 clean:
 	rm -rf build/* build/.deps
 format:
@@ -280,7 +281,7 @@ build/%.o: src/%.c build-tag build-cfg
 	$(QUIET)mkdir -p "$(dir $@)"
 	$(QUIET)$(CC) -c $(CFLAGS) -MMD -MF $(DEPDIR)/$(*F).d -MQ "$@" -MP -o $@ $<
 
-# special target for usage by m1n1.loadobjs
+# special target for usage by aura.loadobjs
 invoke_cc:
 	$(QUIET)$(CC) -c $(CFLAGS) -Isrc -Isrc/hv -o $(OBJFILE) $(CFILE)
 
@@ -325,19 +326,11 @@ build-cfg src/../build/build_cfg.h &:
 	$(QUIET)cmp -s build/build_cfg.h build/build_cfg.tmp 2>/dev/null || \
 	( mv -f build/build_cfg.tmp build/build_cfg.h && echo "  CFG   build/build_cfg.h" )
 
-# The built-in boot logos are linked gzip-compressed; fb.c inflates them on first use
-build/bootlogo_%.bin.gz: data/bootlogo_%.bin
-	$(QUIET)echo "  GZIP  $@"
-	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)gzip -9 -n -c $< > $@
-
-build/bootlogo_%.o: build/bootlogo_%.bin.gz
-	$(QUIET)echo "  BIN   $@"
-	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
-
-ifneq ($(BUILTIN_LOGO),bootlogo)
-build/$(BUILTIN_LOGO)_%.bin.gz: data/$(BUILTIN_LOGO)_%.bin
+# The built-in boot logos are linked gzip-compressed; fb.c inflates them on first use.
+# They are only read, so they go in .rodata: its 64 KiB alignment padding has room for them,
+# while .data counts towards the file part limit in aura-raw.ld.
+LOGO_OBJCOPY_FLAGS := --rename-section .data=.rodata,alloc,load,readonly,data,contents
+build/$(BUILTIN_LOGO)_%.bin.gz: $(LOGO_DIR)/$(BUILTIN_LOGO)_%.bin
 	$(QUIET)echo "  GZIP  $@"
 	$(QUIET)mkdir -p "$(dir $@)"
 	$(QUIET)gzip -9 -n -c $< > $@
@@ -345,8 +338,7 @@ build/$(BUILTIN_LOGO)_%.bin.gz: data/$(BUILTIN_LOGO)_%.bin
 build/$(BUILTIN_LOGO)_%.o: build/$(BUILTIN_LOGO)_%.bin.gz
 	$(QUIET)echo "  BIN   $@"
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
-endif
+	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $(LOGO_OBJCOPY_FLAGS) $< $@
 
 build/%.bin: data/%.bin
 	$(QUIET)echo "  IMG   $@"
@@ -372,7 +364,7 @@ build/%.rgba: data/%.png
 build/%.logo: build/%_256.rgba build/%_128.rgba
 	$(QUIET)echo "  PAYLOAD $@"
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)echo -n "m1n1_logo_256128" > $@
+	$(QUIET)echo -n "aura_logo_256128" > $@
 	$(QUIET)cat $^ >> $@
 
 -include $(DEPDIR)/*

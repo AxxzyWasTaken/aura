@@ -3,8 +3,8 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.hw.pmu import PMU
+from aura.setup import *
+from aura.hw.pmu import PMU
 
 PMU(u).reset_panic_counter()
 

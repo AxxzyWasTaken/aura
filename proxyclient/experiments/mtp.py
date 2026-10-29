@@ -5,13 +5,13 @@ import time
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import struct
-from m1n1.setup import *
-from m1n1.fw.asc import StandardASC
-from m1n1.hw.dart import DART
-from m1n1.hw.dockchannel import DockChannel
-from m1n1.fw.smc import SMCClient, SMCError
-from m1n1.shell import run_shell
-from m1n1.fw.mtp import *
+from aura.setup import *
+from aura.fw.asc import StandardASC
+from aura.hw.dart import DART
+from aura.hw.dockchannel import DockChannel
+from aura.fw.smc import SMCClient, SMCError
+from aura.shell import run_shell
+from aura.fw.mtp import *
 
 from construct import *
 

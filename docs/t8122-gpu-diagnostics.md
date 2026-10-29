@@ -10,7 +10,7 @@ Append this option when constructing a **stage-2** boot.bin:
 chosen.asahi,t8122-gpu-diag=1
 ```
 
-On T8122 only, after mandatory device-tree fixups, m1n1 copies selected fields
+On T8122 only, after mandatory device-tree fixups, aura copies selected fields
 from the iBoot ADT into `/chosen/asahi,t8122-gpu-diagnostics`. It reads ADT RAM
 only: no GPU registers, power changes, firmware reads, memory reservations or
 GPU enablement. The exported metadata is not a driver handoff.
@@ -57,7 +57,7 @@ may require `ASAN_OPTIONS=detect_leaks=0`; ASan and UBSan remain enabled.
 
 Before replacing boot.bin, preserve the current stage-2 image independently
 and prepare restoration from a known-working environment. A fallback GRUB
-kernel cannot recover a failure in m1n1 that occurs before GRUB. Do not alter
+kernel cannot recover a failure in aura that occurs before GRUB. Do not alter
 macOS/recovery partitions, stage 1, or boot policy for this experiment.
 
 ## Decode captured resources locally
@@ -68,7 +68,7 @@ python3 tools/t8122_gpu_resources.py /path/outside/repo/t8122-gpu.json \
 python3 tests/test_t8122_gpu_resources.py
 ```
 
-The decoder uses the layouts in `proxyclient/m1n1/adt.py` and `src/pmgr.c`:
+The decoder uses the layouts in `proxyclient/aura/adt.py` and `src/pmgr.c`:
 64-bit little-endian arm-io range triples, register pairs, 48-byte PMGR
 records, and frequency/voltage pairs. It checks full register extents against
 arm-io ranges, follows GPU power-gate parent chains, and resolves state-register
@@ -188,7 +188,7 @@ The expected values are owner-supplied and must stay outside source control.
 The stage compares the UUID with the loaded image header and the RTKit string
 with the loaded firmware version. These fields are metadata, not a
 cryptographic signature. The `abi-ack` is the owner's explicit assertion that
-the image in use carries the 14.8.3 ABI; m1n1 cannot prove that ABI from the
+the image in use carries the 14.8.3 ABI; aura cannot prove that ABI from the
 header alone.
 
 The stage clears any input `apple,firmware-compat` claim before checking these

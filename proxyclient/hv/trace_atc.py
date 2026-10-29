@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1.hv import TraceMode
-from m1n1.hw.dwc3 import XhciRegs, Dwc3CoreRegs, PipehandlerRegs
-from m1n1.hw.atc import Usb2PhyRegs, AtcPhyRegs
-from m1n1.trace import ADTDevTracer
-from m1n1.utils import *
+from aura.hv import TraceMode
+from aura.hw.dwc3 import XhciRegs, Dwc3CoreRegs, PipehandlerRegs
+from aura.hw.atc import Usb2PhyRegs, AtcPhyRegs
+from aura.trace import ADTDevTracer
+from aura.utils import *
 
 
 class PhyTracer(ADTDevTracer):

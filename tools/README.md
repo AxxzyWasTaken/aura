@@ -1,7 +1,7 @@
 # Register definition tools
 
 This folder contains various scripts that handle ARM and Apple register
-symbolic definition used by `proxyclient` (see `proxyclient/m1n1/sysreg.py`).
+symbolic definition used by `proxyclient` (see `proxyclient/aura/sysreg.py`).
 
 ## Script description
 
@@ -16,5 +16,5 @@ symbolic definition used by `proxyclient` (see `proxyclient/m1n1/sysreg.py`).
 There's two register definition files, `apple_regs.json` and `arm_regs.json`,
 that were initially stored alongside these scripts.
 
-Register now resides in the `proxyclient/m1n1` folder, so that `proxyclient`
+Register now resides in the `proxyclient/aura` folder, so that `proxyclient`
 can load them while avoiding path traversal, using Python's resource loader.

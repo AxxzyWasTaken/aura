@@ -193,7 +193,6 @@ _start:
      * other SoC runs where stage 1 put it, as before this move existed.
      */
 
-#ifndef J613_ESP_STAGE1
     adrp x1, stage2_relocates
     ldr w1, [x1, :lo12:stage2_relocates]
     cbz w1, 3f
@@ -263,7 +262,6 @@ _start:
     sub x1, x1, x20
     add x1, x1, x21
     br x1
-#endif
 3:
     mov w0, 'm'
     bl debug_putc

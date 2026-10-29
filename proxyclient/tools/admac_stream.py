@@ -5,8 +5,8 @@ import time
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import argparse
-from m1n1.hw.dart import DART
-from m1n1.hw.admac import *
+from aura.hw.dart import DART
+from aura.hw.admac import *
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument("-b", "--bufsize", type=int, default=1024*32,
@@ -20,7 +20,7 @@ argparser.add_argument("-w", "--buswidth", type=E_BUSWIDTH, default=E_BUSWIDTH.W
 argparser.add_argument("-v", "--verbose", action='store_true')
 args = argparser.parse_args()
 
-from m1n1.setup import p, u
+from aura.setup import p, u
 
 # find full ADT path
 path = None
@@ -50,7 +50,7 @@ dart_idx = mapper.reg
 
 if "clock-gates" in u.adt[dart_path]._properties:
     print(f"Enabling {dart_path}", file=sys.stderr)
-    p.pmgr_adt_power_enable(path)
+    p.pmgr_adt_power_enable(dart_path)
 
 dart = DART.from_adt(u, dart_path)
 admac = ADMAC(u, path, dart,

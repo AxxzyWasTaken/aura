@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Build a binary ADT, in the layout m1n1's ADT reader (rust/src/adt.rs) walks, from the
+"""Build a binary ADT, in the layout aura's ADT reader (rust/src/adt.rs) walks, from the
 allowlist an aurora-adt-extract report prints (adt-allowlist.txt), for tests/t6031_host.c.
 
     t6031_adt.py <adt-allowlist.txt> <out.adt>

@@ -15,7 +15,7 @@ import pytest
 
 
 REPO = Path(__file__).resolve().parents[2]
-RUNNER = Path(os.environ.get("M1N1_G15_RUNNER_SOURCE", REPO / "tests/run-kboot-gpu-g15.sh"))
+RUNNER = Path(os.environ.get("AURA_G15_RUNNER_SOURCE", REPO / "tests/run-kboot-gpu-g15.sh"))
 STANDINS = ["t8122-j613-standin-10", "t8122-j613-standin-8"]
 
 # A compiler can deliberately leave an executable and still fail. The executable

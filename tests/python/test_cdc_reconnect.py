@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from proxyclient.m1n1 import cdc_reconnect as cdc
+from proxyclient.aura import cdc_reconnect as cdc
 
 
 def port(path, vid, pid, interface=None):
@@ -54,12 +54,12 @@ def candidate_artifact(folder, image):
     struct.pack_into("<IIQQQQQQ", elf, 64, 1, 4, 0x100, 0, 0,
                      len(image), len(image), 0x100)
     elf[0x100:] = image
-    (folder / "m1n1-raw.elf").write_bytes(elf)
-    (folder / "m1n1.bin").write_bytes(image)
+    (folder / "aura-raw.elf").write_bytes(elf)
+    (folder / "aura.bin").write_bytes(image)
 
 
 def test_capture_and_verify_full_adt_and_immutable_image(tmp_path):
-    tag = b"##m1n1_ver##candidate-v1"
+    tag = b"##aura_ver##candidate-v1"
     image = tag + b"\0" * 17
     adt = b"full ADT bytes with private IDs"
     interface = SimpleNamespace(readmem=lambda addr, size: image[:size])
@@ -76,8 +76,17 @@ def test_capture_and_verify_full_adt_and_immutable_image(tmp_path):
         cdc.verify_identity(utils, identity)
 
 
+def test_legacy_version_marker_is_still_recognised(tmp_path):
+    image = b"##m1n1_ver##candidate-v1" + b"\0" * 17
+    interface = SimpleNamespace(readmem=lambda addr, size: image[:size])
+    utils = SimpleNamespace(iface=interface, base=0x1000, get_adt=lambda: b"adt")
+    candidate_artifact(tmp_path, image)
+    identity = cdc.capture_identity(utils, "candidate-v1", [(0, len(image))], tmp_path)
+    cdc.verify_identity(utils, identity)
+
+
 def test_matching_tag_with_altered_kis_image_fails_before_schedule(tmp_path):
-    image = b"##m1n1_ver##candidate-v1" + b"stable bytes"
+    image = b"##aura_ver##candidate-v1" + b"stable bytes"
     candidate_artifact(tmp_path, image)
     altered = image[:-1] + b"!"
     utils = SimpleNamespace(

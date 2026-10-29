@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1 import asm
-from m1n1.trace import Tracer
-from m1n1.utils import *
-from m1n1.proxy import *
-from m1n1.sysreg import *
-from m1n1.proxyutils import RegMonitor
-from m1n1.trace.dart import DARTTracer
-from m1n1.trace.asc import ASCTracer, EP, msg, msg_log, DIR
-from m1n1.fw.pmp import *
+from aura import asm
+from aura.trace import Tracer
+from aura.utils import *
+from aura.proxy import *
+from aura.sysreg import *
+from aura.proxyutils import RegMonitor
+from aura.trace.dart import DARTTracer
+from aura.trace.asc import ASCTracer, EP, msg, msg_log, DIR
+from aura.fw.pmp import *
 
 #trace_device("/arm-io/pmgr", False)
 #trace_device("/arm-io/jpeg0")

@@ -6,10 +6,10 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 import struct
 from construct import *
 
-from m1n1.setup import *
-from m1n1.hw.dart import DART
-from m1n1.fw.aop.client import AOPClient
-from m1n1.fw.aop.ipc import *
+from aura.setup import *
+from aura.hw.dart import DART
+from aura.fw.aop.client import AOPClient
+from aura.fw.aop.ipc import *
 
 # aop nodes have no clocks described in adt for j293. it does it itself
 p.pmgr_adt_power_enable("/arm-io/aop")

@@ -6,12 +6,12 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 import struct
 from construct import *
 from copy import deepcopy
-from m1n1.setup import *
-from m1n1.shell import run_shell
-from m1n1.fw.asc import StandardASC
-from m1n1.fw.asc.base import ASCBaseEndpoint, msg_handler
-from m1n1.utils import *
-from m1n1.hw.dart import DART
+from aura.setup import *
+from aura.shell import run_shell
+from aura.fw.asc import StandardASC
+from aura.fw.asc.base import ASCBaseEndpoint, msg_handler
+from aura.utils import *
+from aura.hw.dart import DART
 
 def round_up(x, y): return ((x + (y - 1)) & (-y))
 def round_down(x, y): return (x - (x % y))
