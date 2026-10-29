@@ -6935,6 +6935,24 @@ struct iodev iodev_log = {
     .lock = SPINLOCK_INIT,
 };
 
+/* "0x..." to a number; 0 for anything else. */
+static u64 parse_hex_u64(const char *s)
+{
+    u64 v = 0;
+    if (!s || s[0] != '0' || (s[1] != 'x' && s[1] != 'X') || !s[2])
+        return 0;
+    for (s += 2; *s; s++) {
+        int d = (*s >= '0' && *s <= '9')   ? *s - '0'
+                : (*s >= 'a' && *s <= 'f') ? *s - 'a' + 10
+                : (*s >= 'A' && *s <= 'F') ? *s - 'A' + 10
+                                           : -1;
+        if (d < 0 || v >> 60)
+            return 0;
+        v = (v << 4) | d;
+    }
+    return v;
+}
+
 static int dt_setup_mtd_phram(void)
 {
     char node_name[64];
@@ -6961,6 +6979,20 @@ static int dt_setup_mtd_phram(void)
         int ret = fdt_setprop_string(dt, node, "label", "aura_stage2.log");
         if (ret)
             bail("FDT: failed to setup aura log MTD phram label\n");
+    }
+
+    /* Stage 1 left its console in a page it took off the top of RAM. */
+    for (int i = 0; i < MAX_CHOSEN_PARAMS && chosen_params[i][0]; i++) {
+        if (strcmp(chosen_params[i][0], "aurora,stage1-log") || !chosen_params[i][1])
+            continue;
+        u64 pa = parse_hex_u64(chosen_params[i][1]);
+        if (!pa || pa & (SZ_16K - 1))
+            break;
+        snprintf(node_name, sizeof(node_name), "flash@%lx", pa);
+        node = dt_get_or_add_reserved_mem(node_name, "phram", false, pa, SZ_16K);
+        if (node > 0 && fdt_setprop_string(dt, node, "label", "aura_stage1.log"))
+            bail("FDT: failed to setup aura stage 1 log label\n");
+        break;
     }
 
     return 0;

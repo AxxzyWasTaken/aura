@@ -256,6 +256,34 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
 
 #ifdef CHAINLOADING
 
+#ifndef ESP_STAGE2
+extern char con_buf[];
+extern size_t con_wp;
+#define STAGE1_LOG_SIZE  SZ_16K
+#define CON_BUFFER_BYTES 8192
+
+/*
+ * Keep Stage 1's console for the next stage: its ring, oldest line first, in a page taken off
+ * the top of RAM (so the next stage never reuses it), named by chosen.aurora,stage1-log.
+ */
+static char stage1_log_var[64];
+
+static void stage1_log_handoff(char **vars, size_t *var_cnt, size_t var_capacity)
+{
+    if (*var_cnt >= var_capacity)
+        return;
+    size_t len = min(con_wp, (size_t)CON_BUFFER_BYTES);
+    char *log = (char *)top_of_memory_alloc(STAGE1_LOG_SIZE);
+    if (!log)
+        return;
+    memset(log, 0, STAGE1_LOG_SIZE);
+    for (size_t i = 0; i < len; i++)
+        log[i] = con_buf[(con_wp - len + i) % CON_BUFFER_BYTES];
+    snprintf(stage1_log_var, sizeof(stage1_log_var), "chosen.aurora,stage1-log=0x%lx", (u64)log);
+    vars[(*var_cnt)++] = stage1_log_var;
+}
+#endif
+
 int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_capacity)
 {
     static char adopt_var[] = "nvme.adopt=live-rtkit-v1";
@@ -306,6 +334,8 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
         }
         ret = rust_load_image(spec, &image, &size, NULL);
     }
+    if (ret == 0)
+        stage1_log_handoff(vars, var_cnt, var_capacity);
 #endif
     if (ret == 0) {
         ret = chainload_image(image, size, vars, *var_cnt);

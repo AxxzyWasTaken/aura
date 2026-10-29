@@ -75,15 +75,25 @@ int debug_printf(const char *fmt, ...)
 {
     va_list args;
     char buffer[512];
-    int i;
+    static bool line_start = true;
+    int prefix = 0, i;
 
+    /* Each line carries the time since power-on, from the architectural counter. */
+    if (line_start) {
+        u64 freq = mrs(CNTFRQ_EL0);
+        u64 us = freq ? mrs(CNTPCT_EL0) / (freq / 1000000) : 0;
+        prefix = snprintf(buffer, sizeof(buffer), "[%3lu.%06lu] ", (unsigned long)(us / 1000000),
+                          (unsigned long)(us % 1000000));
+    }
     va_start(args, fmt);
-    i = vsnprintf(buffer, sizeof(buffer), fmt, args);
+    i = vsnprintf(buffer + prefix, sizeof(buffer) - prefix, fmt, args);
     va_end(args);
+    i = min(i + prefix, (int)(sizeof(buffer) - 1));
+    line_start = i > 0 && buffer[i - 1] == '\n';
 
-    iodev_console_write(buffer, min(i, (int)(sizeof(buffer) - 1)));
+    iodev_console_write(buffer, i);
 
-    return i;
+    return i - prefix;
 }
 
 void __assert_fail(const char *assertion, const char *file, unsigned int line, const char *function)

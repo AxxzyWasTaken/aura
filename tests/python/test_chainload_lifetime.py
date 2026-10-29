@@ -46,6 +46,8 @@ static void rust_free_image(void *data, size_t size)
     assert(data == image && size == sizeof(image) && freed < loads);
     freed++;
 }
+/* The Stage 1 log handoff is out of scope here: it only adds a variable. */
+static void stage1_log_handoff(char **vars, size_t *var_cnt, size_t var_capacity) {}
 static bool stage1_proxy_request_window(void)
 {
     windows++;
