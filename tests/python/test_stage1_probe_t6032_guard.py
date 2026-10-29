@@ -35,8 +35,8 @@ def tool(monkeypatch):
     if not ROOT or not os.path.isdir(os.path.join(ROOT, "proxyclient")):
         pytest.skip("PROBE_REPO_ROOT not set")
     sys.path.insert(0, os.path.join(ROOT, "proxyclient"))
-    from m1n1 import proxy as real_proxy
-    from m1n1 import proxyutils as real_proxyutils
+    from aura import proxy as real_proxy
+    from aura import proxyutils as real_proxyutils
 
     calls = {"readmem": 0, "read32": 0, "power": 0, "guard": 0}
 
@@ -65,7 +65,7 @@ def tool(monkeypatch):
 
     monkeypatch.setattr(real_proxy, "GUARD", types.SimpleNamespace(MARK=2, SILENT=0x100, OFF=0))
     monkeypatch.setattr(real_proxy, "UartInterface", FakeIface)
-    monkeypatch.setattr(real_proxy, "M1N1Proxy", FakeProxy)
+    monkeypatch.setattr(real_proxy, "AuraProxy", FakeProxy)
     monkeypatch.setattr(real_proxyutils, "bootstrap_port", lambda iface, p: None)
 
     spec = importlib.util.spec_from_file_location(

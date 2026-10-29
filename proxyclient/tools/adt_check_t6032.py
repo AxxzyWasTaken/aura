@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Verify m1n1's T6032 (M3 Ultra, J575D) CPU-side assumptions against a real ADT.
+"""Verify aura's T6032 (M3 Ultra, J575D) CPU-side assumptions against a real ADT.
 
 Usage: adt_check_t6032.py <ADT-file>
 
@@ -23,9 +23,9 @@ import pathlib
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.adt import load_adt
+from aura.adt import load_adt
 
-# Restated m1n1 constants (keep in sync with the sources named above)
+# Restated aura constants (keep in sync with the sources named above)
 PMGR_DIE_OFFSET = 0x2000000000  # src/pmgr.h
 CPU_REG_CORE = 0xFF             # GENMASK(7, 0), src/smp.c
 CPU_REG_CLUSTER = 0x700         # GENMASK(10, 8)
@@ -148,7 +148,7 @@ def main():
         check("mcc plane-count-per-amcc", mcc.plane_count_per_amcc == 4, mcc.plane_count_per_amcc)
         check("mcc reg count 20 (3 header + 8 instances/die)", len(mcc.reg) == 20,
               f"{len(mcc.reg)} entries")
-        # Physical (range-translated) addresses: this is what m1n1's adt_get_reg() hands out.
+        # Physical (range-translated) addresses: this is what aura's adt_get_reg() hands out.
         phys = [mcc.get_reg(i)[0] for i in range(len(mcc.reg))]
         check("mcc phys reg[3] == phys reg[2] + PMGR_DIE_OFFSET",
               phys[3] == phys[2] + PMGR_DIE_OFFSET,

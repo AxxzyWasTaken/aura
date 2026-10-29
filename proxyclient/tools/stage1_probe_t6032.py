@@ -27,7 +27,7 @@ import struct
 import sys
 
 # sgx offsets. 0xd04000/10/14 and the core mask 0xe01500 (3 words) are the ones src/kboot_gpu.c reads
-# (G15_SGX_ID_VERSION, ID_COUNTS_1, ID_COUNTS_2, CORE_MASK). 0xd04018/0xd0401c are NOT read by m1n1: they
+# (G15_SGX_ID_VERSION, ID_COUNTS_1, ID_COUNTS_2, CORE_MASK). 0xd04018/0xd0401c are NOT read by aura: they
 # come from the macOS kext reading in the layout notes (section 7); the probe reads them to test that reading.
 HWID = (0xD04000, 0xD04010, 0xD04014, 0xD04018, 0xD0401C, 0xE01500, 0xE01504, 0xE01508)
 TAG = b"GKTS"
@@ -105,12 +105,12 @@ def main():
     priv = os.path.join(out, "private")
     os.makedirs(priv, exist_ok=True)
     sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-    from m1n1.proxy import GUARD, M1N1Proxy, UartInterface
-    from m1n1.proxyutils import ProxyUtils, bootstrap_port
+    from aura.proxy import GUARD, AuraProxy, UartInterface
+    from aura.proxyutils import ProxyUtils, bootstrap_port
 
-    # Not m1n1.setup: that module writes the PMU panic counter at import time.
+    # Not aura.setup: that module writes the PMU panic counter at import time.
     iface = UartInterface()
-    p = M1N1Proxy(iface, debug=False)
+    p = AuraProxy(iface, debug=False)
     bootstrap_port(iface, p)
     u = ProxyUtils(p)
     rep = open(os.path.join(out, "probe.txt"), "w")

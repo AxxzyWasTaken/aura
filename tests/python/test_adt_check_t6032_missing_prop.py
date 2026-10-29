@@ -14,7 +14,7 @@ ADT = os.path.expanduser(os.environ.get("J575DAP_ADT", "~/scratch/w7c/m3u/26A434
 
 def _load_adt(path):
     sys.path.insert(0, os.path.join(ROOT, "proxyclient"))
-    from m1n1.adt import load_adt
+    from aura.adt import load_adt
     return load_adt(open(path, "rb").read())
 
 
