@@ -38,6 +38,10 @@ The raw format supports concatenated kernel, device-tree and initramfs
 payloads, including gzip and xz compression. Mach-O boot-object support
 from Aurora's x1n1 development will be reviewed separately.
 
+The built-in boot logo defaults to Aurora at 48, 128, and 256 pixels. Use
+`make BUILTIN_LOGO=bootlogo` to select the Asahi artwork explicitly. A normal
+build checks the compressed logos in `build/aura.bin` against the selected assets.
+
 ## License
 
 Aura combines inherited MIT code with Aurora Silicon contributions under

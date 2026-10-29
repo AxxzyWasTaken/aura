@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Reserve prior-stage tables after the chainload-local record has gone away.
 
+Any chip whose display DART is locked can have an earlier stage's tables in the
+inherited roots (display_dart_tables_inherited()); the rule is not chip-specific.
+
 The tested block and final reservation call are extracted from kboot_prepare_dt.
 Real in-tree libfdt validates the outgoing reservation. Boot arguments and image
 addresses are simulated; no actual chainload, firmware, or DMA is exercised.
@@ -18,7 +21,8 @@ SOURCE = Path(os.environ.get("DART_DISPLAY_SOURCE", Path(__file__).resolve().par
 def test_inherited_reservation(tmp_path):
     text = (SOURCE / "src/kboot.c").read_text()
     start = text.index("    u64 image_end = (u64)_end;", text.index("int kboot_prepare_dt("))
-    end = text.index("    if (chip_id == T8140)", start)
+    # The T8140 block may also cover other chips ("if (chip_id == T8140 ||").
+    end = text.index("    if (chip_id == T8140", start)
     block = text[start:end]
     call = re.search(
         r"    if \(fdt_add_mem_rsv\(dt, \(u64\)_base, image_end - \(u64\)_base\)\)\n"
@@ -28,6 +32,7 @@ def test_inherited_reservation(tmp_path):
     code = tmp_path / "inherited.c"
     code.write_text(r'''
 #include <assert.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -39,6 +44,8 @@ typedef uint64_t u64;
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
 static struct { u64 phys_base, mem_size, top_of_kernel_data; } cur_boot_args;
 static unsigned chip_id;
+static bool tables_inherited;
+static bool display_dart_tables_inherited(void) { (void)chip_id; return tables_inherited; }
 static u64 image_base, image_end_address;
 #define _base ((void *)(uintptr_t)image_base)
 #define _end ((void *)(uintptr_t)image_end_address)
@@ -55,6 +62,7 @@ static void reset(void)
     assert(!fdt_create_empty_tree(tree, sizeof(tree)));
     memcpy(before, tree, sizeof(tree));
     chip_id = T8103;
+    tables_inherited = true;
     cur_boot_args.phys_base = 0x800000000UL;
     cur_boot_args.mem_size = 0x20000000;
     image_base = cur_boot_args.phys_base + 0x100000;
@@ -95,7 +103,9 @@ int main(void)
     reset(); cur_boot_args.mem_size = 0; refused();
     reset(); cur_boot_args.phys_base = UINT64_MAX - 0x100; refused();
     reset(); image_base = cur_boot_args.phys_base - 0x4000; refused();
-    reset(); cur_boot_args.top_of_kernel_data = image_base - 1; refused();
+    /* A mark below our own base covers none of this image: image only. */
+    reset(); cur_boot_args.top_of_kernel_data = image_base - 1;
+    range(image_end_address);
     reset(); cur_boot_args.top_of_kernel_data =
         cur_boot_args.phys_base + cur_boot_args.mem_size + 1; refused();
     reset(); image_end_address = cur_boot_args.phys_base + cur_boot_args.mem_size + 1;
@@ -104,13 +114,17 @@ int main(void)
     fdt_set_totalsize(tree, fdt_off_dt_strings(tree) + fdt_size_dt_strings(tree));
     memcpy(before, tree, sizeof(tree));
     refused(); /* No room to add a reservation: handoff must fail. */
-    /* Other chips retain the old image-only reservation and do not interpret
-     * this inherited high-water mark as T8103 ownership. */
+    /* The same rule on another chip with a locked display DART. */
     reset(); chip_id = T8112;
+    range(cur_boot_args.top_of_kernel_data);
+    /* No locked display DART: the image-only reservation, the mark unused. */
+    reset(); chip_id = T8112; tables_inherited = false;
     range(image_end_address);
-    reset(); chip_id = T8112; cur_boot_args.top_of_kernel_data = image_base - 1;
+    reset(); tables_inherited = false; cur_boot_args.top_of_kernel_data = image_base - 1;
     range(image_end_address);
-    puts("PASS inherited reservation 12 cases");
+    reset(); tables_inherited = false; cur_boot_args.mem_size = 0;
+    range(image_end_address);
+    puts("PASS inherited reservation 14 cases");
     return 0;
 }
 ''')
@@ -128,4 +142,4 @@ int main(void)
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "PASS inherited reservation 12 cases" in result.stdout
+    assert "PASS inherited reservation 14 cases" in result.stdout

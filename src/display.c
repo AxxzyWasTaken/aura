@@ -267,6 +267,21 @@ const display_config_t *display_get_config(void)
 }
 
 /*
+ * Whether this stage or an earlier one may have mapped into the inherited tables
+ * of a locked display DART (dart_init_adt_display()). T8140 and T8132 never get
+ * that far: display_init() returns before any DCP or DART work on them, in every
+ * stage, and kboot keeps their retained heap separately.
+ */
+bool display_dart_tables_inherited(void)
+{
+    if (chip_id == T8140 || chip_id == T8132)
+        return false;
+
+    const display_config_t *conf = display_get_config();
+    return conf && (dart_adt_locked(conf->dcp_dart, 0) || dart_adt_locked(conf->disp_dart, 0));
+}
+
+/*
  * On T6030 the internal DCP is left exactly as iBoot started it (see kboot_display_handoff.c). The
  * modeset below is untested there, and its fallback config names a power domain T6030 does not
  * have, so it must never run (display= variable, non-retina heuristic, proxy).
@@ -750,8 +765,8 @@ int display_init(void)
     else
         printf("display: Display is internal\n");
 
-    if (chip_id == T8140) {
-        printf("display: preserving inherited T8140 display (%ldx%ld)\n", cur_boot_args.video.width,
+    if (chip_id == T8140 || chip_id == T8132) {
+        printf("display: preserving inherited display (%ldx%ld)\n", cur_boot_args.video.width,
                cur_boot_args.video.height);
         return 0;
     }
@@ -784,9 +799,9 @@ int display_init(void)
 
 int display_shutdown(dcp_shutdown_mode mode)
 {
-    /* Linux owns the live J700 controllers. Keep the inherited ASC session
+    /* Linux owns the live J700/J713 controllers. Keep the inherited ASC session
      * and scanout intact at both the Stage 1 and Linux boundaries. */
-    if (chip_id == T8140)
+    if (chip_id == T8140 || chip_id == T8132)
         return 0;
 
     /* We have no DCP, so just exit */

@@ -3,7 +3,7 @@ RUSTARCH ?= aarch64-unknown-none-softfloat
 BUILTIN_LOGO ?= aurora
 
 ifneq ($(BUILTIN_LOGO),bootlogo)
-ifneq ($(words $(wildcard data/$(BUILTIN_LOGO)_128.bin data/$(BUILTIN_LOGO)_256.bin)),2)
+ifneq ($(words $(wildcard data/$(BUILTIN_LOGO)_48.bin data/$(BUILTIN_LOGO)_128.bin data/$(BUILTIN_LOGO)_256.bin)),3)
 $(error BUILTIN_LOGO assets are missing)
 endif
 endif
@@ -165,12 +165,13 @@ OBJECTS := \
 	afk.o \
 	aic.o \
 	asc.o \
-	bootlogo_48.o $(BUILTIN_LOGO)_128.o $(BUILTIN_LOGO)_256.o \
+	$(BUILTIN_LOGO)_48.o $(BUILTIN_LOGO)_128.o $(BUILTIN_LOGO)_256.o \
 	chainload.o \
 	chainload_asm.o \
 	chickens.o \
 	clk.o \
 	cpufreq.o \
+	cpufreq_t6040.o \
 	dapf.o \
 	dart.o \
 	dcp.o \
@@ -196,7 +197,7 @@ OBJECTS := \
 	memory.o memory_asm.o \
 	nvme.o \
 	payload.o \
-	pcie.o \
+	pcie.o pcie_fdt.o \
 	pmgr.o \
 	proxy.o \
 	ringbuffer.o \
@@ -208,7 +209,7 @@ OBJECTS := \
 	sio.o \
 	smc.o \
 	smp.o \
-	spmi.o ace3.o \
+	spmi.o pmu_counter.o ace3.o \
 	start.o \
 	startup.o \
 	string.o \
@@ -226,7 +227,7 @@ OBJECTS := \
 	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS)
 
 FP_OBJECTS := \
-	kboot_gpu.o \
+	kboot_gpu.o kboot_gpu_m4.o \
 	math/expf.o \
 	math/exp2f_data.o \
 	math/powf.o \
@@ -243,7 +244,10 @@ TARGET_RAW := aura.bin
 DEPDIR := build/.deps
 
 .PHONY: all clean format invoke_cc always_rebuild
-all: build/$(TARGET) build/$(TARGET_RAW)
+all: build/$(TARGET) build/$(TARGET_RAW) verify-logo
+.PHONY: verify-logo
+verify-logo: build/$(TARGET_RAW)
+	$(QUIET)python3 tools/verify_builtin_logo.py $< $(BUILTIN_LOGO)
 clean:
 	rm -rf build/* build/.deps
 format:
@@ -325,7 +329,10 @@ build-cfg src/../build/build_cfg.h &:
 	$(QUIET)cmp -s build/build_cfg.h build/build_cfg.tmp 2>/dev/null || \
 	( mv -f build/build_cfg.tmp build/build_cfg.h && echo "  CFG   build/build_cfg.h" )
 
-# The built-in boot logos are linked gzip-compressed; fb.c inflates them on first use
+# The built-in boot logos are linked gzip-compressed; fb.c inflates them on first use.
+# They are only read, so they go in .rodata: its 64 KiB alignment padding has room for them,
+# while .data counts towards the file part limit in m1n1-raw.ld.
+LOGO_OBJCOPY_FLAGS := --rename-section .data=.rodata,alloc,load,readonly,data,contents
 build/bootlogo_%.bin.gz: data/bootlogo_%.bin
 	$(QUIET)echo "  GZIP  $@"
 	$(QUIET)mkdir -p "$(dir $@)"
@@ -334,7 +341,7 @@ build/bootlogo_%.bin.gz: data/bootlogo_%.bin
 build/bootlogo_%.o: build/bootlogo_%.bin.gz
 	$(QUIET)echo "  BIN   $@"
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
+	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $(LOGO_OBJCOPY_FLAGS) $< $@
 
 ifneq ($(BUILTIN_LOGO),bootlogo)
 build/$(BUILTIN_LOGO)_%.bin.gz: data/$(BUILTIN_LOGO)_%.bin
@@ -345,7 +352,7 @@ build/$(BUILTIN_LOGO)_%.bin.gz: data/$(BUILTIN_LOGO)_%.bin
 build/$(BUILTIN_LOGO)_%.o: build/$(BUILTIN_LOGO)_%.bin.gz
 	$(QUIET)echo "  BIN   $@"
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $< $@
+	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $(LOGO_OBJCOPY_FLAGS) $< $@
 endif
 
 build/%.bin: data/%.bin

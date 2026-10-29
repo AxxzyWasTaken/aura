@@ -34,6 +34,9 @@ typedef int sart_dev_t;
 #define USEC_PER_SEC 1000000
 #define ADT_GETPROP(...) (-1)
 #define T8140 0x8140
+#define T8132 0x8132
+#define T6040 0x6040
+#define T6041 0x6041
 static u32 chip_id = T8140;
 static void *adt;
 ''' + declarations + r'''
@@ -41,7 +44,8 @@ static int failure, queue_frees, asc_frees, publications, commands;
 static int shutdown_fault, disable_calls, shutdown_calls, cleared_ioq;
 static void *allocations[12];
 static unsigned allocated;
-static int asc, rtkit, sart, resets;
+static int asc, rtkit, sart, resets, boots;
+static bool started;
 static bool alloc_queue(struct nvme_queue *q)
 {
     q->tcbs = allocations[allocated++] = calloc(1, sizeof(*q->tcbs));
@@ -70,11 +74,19 @@ static int adt_get_reg(void *a, int *path, const char *p, int i, u64 *base, u64 
             *size = 0x8000;
         if (failure == 14 && i == 3)
             *size = NVMMU_TCB_STAT;
+        /* 23-27: the J713 (T8132) split BAR. */
+        if (failure >= 23) {
+            *base = i == 3 ? 0x485cc0000 : 0x4c5cc0000;
+            if (failure == 24 && i == 9)
+                *base += 0x10000;
+            if (failure == 25 && i == 9)
+                *size = 0x8000;
+        }
     }
     return 0;
 }
 static asc_dev_t *asc_init(const char *path) { return &asc; }
-static bool asc_cpu_running(asc_dev_t *a) { return failure != 1; }
+static bool asc_cpu_running(asc_dev_t *a) { return started || (failure != 1 && failure != 27); }
 static void asc_free(asc_dev_t *a) { asc_frees++; }
 static u32 read32(u64 addr)
 {
@@ -97,7 +109,7 @@ static sart_dev_t *sart_init(const char *path) { return &sart; }
 static void sart_free(sart_dev_t *s) {}
 static rtkit_dev_t *rtkit_init(const char *name, asc_dev_t *a, void *d, void *i,
                               sart_dev_t *s, bool sram) { return &rtkit; }
-static bool rtkit_boot(rtkit_dev_t *r) { return failure != 8; }
+static bool rtkit_boot(rtkit_dev_t *r) { boots++; started = failure != 8; return failure != 8; }
 static bool rtkit_sleep(rtkit_dev_t *r) { return true; }
 static void rtkit_free(rtkit_dev_t *r) {}
 static void pmgr_reset(u8 die, const char *name) { resets++; }
@@ -121,7 +133,7 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     failure = atoi(argv[1]);
-    if (failure >= 15) {
+    if (failure >= 15 && failure <= 22) {
         shutdown_fault = failure - 14;
         failure = 0;
         nvme_adopt_live_session = true;
@@ -151,13 +163,19 @@ int main(int argc, char **argv)
             free(allocations[i]);
         return 0;
     }
-    if (failure == 11)
-        chip_id = 0x8132;
-    nvme_adopt_live_session = failure != 8;
+    if (failure == 11 || failure >= 23)
+        chip_id = T8132;
+    nvme_adopt_live_session = failure != 8 && failure != 26 && failure != 27;
     nvme_keep_running_for_linux = failure == 9;
     assert(nvme_shutdown());
-    assert(nvme_init() == (failure == 0 || failure == 7 || failure == 9 || failure == 10));
-    if (failure == 1 || failure == 6 || failure >= 11) {
+    assert(nvme_init() == (failure == 0 || failure == 7 || failure == 9 || failure == 10 ||
+                           failure == 23 || failure == 26 || failure == 27));
+    if (failure == 26)
+        assert(boots == 0);
+    if (failure == 27)
+        assert(boots == 1);
+    if (failure == 1 || failure == 6 || (failure >= 11 && failure <= 14) || failure == 24 ||
+        failure == 25) {
         /* Rejection before publication does not poison a later attempt. */
         assert(publications == 0);
         assert(queue_frees == (failure == 1 ? 2 : 0));
@@ -205,5 +223,5 @@ int main(int argc, char **argv)
          "-Wno-unused-variable", "-Wno-format", "-x", "c", "-", "-o", str(binary)],
         input=harness, text=True, check=True,
     )
-    for failure in range(23):
+    for failure in range(28):
         subprocess.run([str(binary), str(failure)], check=True)

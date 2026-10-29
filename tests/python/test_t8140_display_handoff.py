@@ -12,11 +12,6 @@ def test_t8140_display_handoff(tmp_path):
     start = source.index("struct dt_t8140_dram {")
     end = source.index("/* T8142 display carveouts:", start)
     helper = source[start:end]
-    # The read-only metadata exporter has its own actual-C tests. Keep this
-    # fixture focused on carveouts, dependency state and handoff failures.
-    observe_start = helper.index("static void dt_t8140_external_metadata(void)")
-    observe_end = helper.index("static int dt_set_display_t8140(void)", observe_start)
-    helper = helper[:observe_start] + "static void dt_t8140_external_metadata(void) {}\n" + helper[observe_end:]
     iommu_node = source[source.index("static int dt_get_iommu_node("):
                         source.index("static dart_dev_t *dt_init_dart_by_node(")]
     asc_source = (repo / "src/asc.c").read_text()
@@ -189,6 +184,16 @@ static int adt_get_reg(void *a, int *trace, const char *prop, int index, u64 *ba
     *base = carveouts[0].pa; *size = carveouts[0].size;
     return 0;
 }
+static bool provider_present;
+static int provider_bad = -1, provider_missing = -1;
+static u32 provider_bad_size;
+static unsigned char provider_bytes[5][52];
+static const char *provider_names[] = {
+    "power-lut-data-x", "power-lut-data-y", "power-lut-data-xindex",
+    "power-lut-data-yindex", "power-lut-data-lut",
+};
+static const u32 provider_sizes[] = {4, 4, 52, 4, 52};
+static const char *provider_no_space;
 static int adt_path_offset(void *a, const char *path)
 {
     (void)a;
@@ -196,6 +201,7 @@ static int adt_path_offset(void *a, const char *path)
     if (!strcmp(path, "/arm-io/dcp/iop-dcp-nub")) return 4;
     if (!strcmp(path, "/arm-io/dcpext/iop-dcpext-nub")) return 5;
     if (!strcmp(path, "/chosen")) return 6;
+    if (!strcmp(path, "/arm-io/disp0") && provider_present) return 7;
     return -1;
 }
 static int adt_getprop_copy(void *a, int node, const char *prop, void *out, size_t len)
@@ -224,6 +230,14 @@ static int adt_array(int node, const char *prop, void *out, size_t len)
 static const void *adt_getprop(void *a, int node, const char *prop, u32 *len)
 {
     (void)a;
+    if (node == 7) {
+        for (int i = 0; i < 5; i++) {
+            if (strcmp(prop, provider_names[i]) || i == provider_missing) continue;
+            *len = i == provider_bad ? provider_bad_size : provider_sizes[i];
+            return provider_bytes[i];
+        }
+        return NULL;
+    }
     static struct adt_segment_ranges seg[7];
     if ((node != 4 && node != 5) || strcmp(prop, "segment-ranges")) return NULL;
     memset(seg, 0, sizeof(seg));
@@ -329,9 +343,25 @@ static int dt_get_or_add_reserved_mem(const char *name, const char *compat, bool
     if (fdt_setprop_string(dt, n, "compatible", compat)) return -1;
     return fdt_subnode_offset(dt, fdt_path_offset(dt, "/reserved-memory"), name);
 }
+static int provider_setprop(void *fdt, int node, const char *name, const void *value, int len)
+{
+    char path[64];
+    /* Fail the last property so rollback must also discard a copied prefix. */
+    if (provider_no_space && !strcmp(name, "apple,power-lut-data-lut") &&
+        !fdt_get_path(fdt, node, path, sizeof(path)) && !strcmp(path, provider_no_space))
+        return -FDT_ERR_NOSPACE;
+    return fdt_setprop(fdt, node, name, value, len);
+}
+#define fdt_setprop provider_setprop
 ''' + ('#define HAVE_DISPLAY_RECHECK 1\n' if 'static int dt_t8140_recheck_display(' in source else '') + helper + r'''
+#undef fdt_setprop
 static void setup(void)
 {
+    provider_present = false;
+    provider_bad = provider_missing = -1;
+    provider_no_space = NULL;
+    for (int i = 0; i < 5; i++)
+        for (int j = 0; j < 52; j++) provider_bytes[i][j] = 0x81 + i + j;
     memset(tree, 0, sizeof(tree));
     assert(fdt_create_empty_tree(dt, sizeof(tree)) == 0);
     assert(fdt_add_subnode(dt, 0, "aliases") >= 0);
@@ -449,6 +479,12 @@ static void setup(void)
 }
 static void check_claim(bool present)
 {
+    const char *observations[] = {
+        "asahi,external-display-metadata", "asahi,external-display-mappers",
+        "asahi,external-display-registers",
+    };
+    for (size_t i = 0; i < ARRAY_SIZE(observations); i++)
+        assert(!fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), observations[i], NULL));
     int len = 0;
     const u32 *cell = fdt_getprop(dt, fdt_path_offset(dt, "/chosen"),
                                   "apple,dcp-rtkit-live", &len);
@@ -505,8 +541,20 @@ int main(void)
     (void)dt_t8140_validate_dcp_asc;
     unsigned char before[sizeof(tree)];
     setup();
+    provider_present = true;
     quiesce_fault = 1;
     assert(dt_set_display_t8140() == 0);
+    for (int d = 0; d < 2; d++) {
+        int node = fdt_path_offset(dt, d ? "dcpext" : "dcp");
+        for (int i = 0; i < 5; i++) {
+            char name[64]; int len;
+            snprintf(name, sizeof(name), "apple,%s", provider_names[i]);
+            const void *value = fdt_getprop(dt, node, name, &len);
+            assert(value && len == (int)provider_sizes[i]);
+            assert(!memcmp(value, provider_bytes[i], len));
+        }
+        assert(!fdt_getprop(dt, node, "apple,power-lut-vbatt-cur-nominal", NULL));
+    }
     assert(quiesce_calls == 0);
     assert(!fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), "apple,dcp-rtkit-quiesced", NULL));
     assert(!strcmp(fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), "apple,dcp-handoff-reason", NULL), "live-session"));
@@ -530,6 +578,52 @@ int main(void)
     assert(!dt_t8140_disable_dcpext());
     check_status("external-power", "disabled");
     check_status("dcp", "okay");
+
+    /* A missing table remains absent; no static compatibility data is invented. */
+    setup();
+    assert(dt_set_display_t8140() == 0);
+    assert(!fdt_getprop(dt, fdt_path_offset(dt, "dcp"), "apple,power-lut-data-x", NULL));
+    check_status("dcp", "okay");
+
+    for (int missing = 0; missing < 5; missing++) {
+        setup(); provider_present = true; provider_missing = missing;
+        assert(dt_set_display_t8140() == 0);
+        for (int d = 0; d < 2; d++) {
+            int node = fdt_path_offset(dt, d ? "dcpext" : "dcp");
+            for (int i = 0; i < 5; i++) {
+                char name[64]; int len;
+                snprintf(name, sizeof(name), "apple,%s", provider_names[i]);
+                const void *value = fdt_getprop(dt, node, name, &len);
+                if (i == missing) assert(!value);
+                else assert(value && len == (int)provider_sizes[i] &&
+                            !memcmp(value, provider_bytes[i], len));
+            }
+        }
+    }
+    for (int bad = 0; bad < 5; bad++) {
+        for (int size = 0; size < 3; size++) {
+            setup(); provider_present = true; provider_bad = bad;
+            provider_bad_size = size == 0 ? 0 : provider_sizes[bad] + (size == 1 ? -1 : 1);
+            memcpy(before, dt, sizeof(tree));
+            assert(dt_set_display_t8140() == 0);
+            check_fallback(before);
+            assert(!fdt_getprop(dt, fdt_path_offset(dt, "dcp"), "apple,power-lut-data-x", NULL));
+            assert(!fdt_getprop(dt, fdt_path_offset(dt, "dcpext"), "apple,power-lut-data-x", NULL));
+        }
+    }
+    setup(); provider_present = true; provider_no_space = "/soc/dcp";
+    memcpy(before, dt, sizeof(tree));
+    assert(dt_set_display_t8140() == 0);
+    check_fallback(before);
+    assert(!fdt_getprop(dt, fdt_path_offset(dt, "dcp"), "apple,power-lut-data-x", NULL));
+
+    /* An external property write failure keeps the internal panel usable. */
+    setup(); provider_present = true; provider_no_space = "/soc/dcpext";
+    assert(dt_set_display_t8140() == 0);
+    check_status("dcp", "okay"); check_status("disp0", "okay");
+    check_status("dcpext", "disabled"); check_status("external-power", "disabled");
+    assert(fdt_getprop(dt, fdt_path_offset(dt, "dcp"), "apple,power-lut-data-x", NULL));
+    assert(!fdt_getprop(dt, fdt_path_offset(dt, "dcpext"), "apple,power-lut-data-x", NULL));
 
     setup();
     assert(!fdt_setprop_u32(dt, fdt_path_offset(dt, "/soc/external-power"),
@@ -858,9 +952,9 @@ int main(void)
         input=harness, text=True, check=True,
     )
     result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
-    assert "framebuffer: PA 0x101eb4b8000 size 0xde1380; /vram PA 0x101eb4b8000 size 0x5758000" in result.stdout
-    assert "framebuffer: sub-range of /vram validated" in result.stdout
-    assert "physical DRAM: PA 0x10000000000 size 0x200000000" in result.stdout
+    assert "DCP enabled with validated framebuffer, firmware and live inherited RTKit session" in result.stdout
+    assert "DCP nub segment" not in result.stdout
+    assert "framebuffer: sub-range of /vram validated" not in result.stdout
     assert "refused at preflight: /vram lies outside physical DRAM" in result.stdout
     assert "region-id-57 PA 0x10200000000 size 0xc00000 outside physical DRAM" in result.stdout
     assert "refused at /vram DCP/disp0 DART reservation" in result.stdout

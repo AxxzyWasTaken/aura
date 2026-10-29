@@ -179,6 +179,7 @@ static int dt_reserve_asc_firmware(const char *path, const char *alt,
 { reservations++; return 0; }
 static int dt_set_dcp_firmware(const char *alias) { versions++; return 0; }
 static int dt_reserve_t8122_dcpext_one(unsigned int n) { assert(0); return -1; }
+static bool dt_t8122_dcpext_armed(void) { assert(0); return false; }
 static int dt_display_transaction(int (*apply)(unsigned int), unsigned int n)
 { assert(0); return -1; }
 static int enable(void *tree, int node, const char *name, const char *value)
