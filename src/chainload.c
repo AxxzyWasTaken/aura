@@ -160,15 +160,31 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
         free(parked);
         return -1;
     }
+    /*
+     * The stub runs with the MMU and caches off, so copying a whole image (with its SEPFW block)
+     * into place costs hundreds of milliseconds. An aura image can instead run from where it is
+     * staged and move only its code and data (start.S): do that whenever the staged copy fits.
+     */
+    u64 staged = (u64)new_image;
+    bool fits_staged =
+        staged >= new_base + footprint && staged <= ram_end &&
+        copy_size + stub_size <= ram_end - staged &&
+        !(ro_status == 1 && staged < ro_end && staged + copy_size + stub_size > ro_start);
+    if (!run_base && !park_fw && fits_staged) {
+        u64 run_footprint = chainload_run_footprint(image, size);
+        if (run_footprint && !(new_base & (SZ_16K - 1)) && staged >= new_base + run_footprint &&
+            (ro_status != 1 || new_base + run_footprint <= ro_start || new_base >= ro_end)) {
+            footprint = run_footprint;
+            run_base = new_base;
+        }
+    }
     if (run_base) {
         /*
-         * The staged copy is the destination: the stub copies it onto itself. The stub runs from
+         * The staged copy is the destination: the stub has nothing to copy. The stub runs from
          * just after it, so the whole allocation must stay in RAM and clear of firmware RO.
          */
-        new_base = (u64)new_image;
-        if (new_base < run_base + footprint || new_base > ram_end ||
-            copy_size + stub_size > ram_end - new_base ||
-            (new_base < ro_end && new_base + copy_size + stub_size > ro_start)) {
+        new_base = staged;
+        if (new_base < run_base + footprint || !fits_staged) {
             printf("chainload: no room to stage the image above firmware RO\n");
             free(new_image);
             return -1;
@@ -331,7 +347,7 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
      * back first so a host that takes the window finds the same state as before any load,
      * and read the Stage 2 again only if nobody did.
      */
-    if (ret == 0 && proxy_request) {
+    if (ret == 0 && proxy_request && !stage1_chained) {
         rust_free_image(image, size);
         if (!nvme_shutdown()) {
             next_stage.entry = NULL;

@@ -91,7 +91,7 @@ static void stage1_run_host_proxy(void)
 
 bool stage1_proxy_request_window(void)
 {
-    if (stage1_window_done)
+    if (stage1_window_done || stage1_chained)
         return false;
     stage1_window_done = true;
     printf("Stage 1: aura-proxy on the ESP, waiting %u s for a host\n",

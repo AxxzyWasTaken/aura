@@ -64,6 +64,8 @@ static char stage1_esp_chosen[96];
 
 static void *load_one_payload(void *start, size_t size);
 
+bool stage1_chained;
+
 /* Length of the "aura_<tag>" (or legacy "m1n1_<tag>") record header at p, or 0. */
 static size_t payload_record(const u8 *p, const u8 *tag, size_t tag_len)
 {
@@ -281,8 +283,11 @@ static bool check_var(u8 **p)
         if (!boot_spec)
             boot_spec = val;
     } else if (IS_VAR("nvme.adopt=")) {
-        if (!strcmp(val, "live-rtkit-v1"))
+        if (!strcmp(val, "live-rtkit-v1")) {
             nvme_adopt_live_session = true;
+            /* Started by an earlier aura stage, which has had its host window already. */
+            stage1_chained = true;
+        }
     } else if (IS_VAR("display=")) {
         display_configure(val);
     } else if (IS_VAR("display2=")) {

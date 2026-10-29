@@ -143,6 +143,8 @@ static bool nvme_initialized = false;
 static bool nvme_secure_regs;
 static bool nvme_reboot_required;
 bool nvme_adopt_live_session = false;
+/* aura only reads the drive; only a proxy-issued flush means the drive has data to settle. */
+static bool nvme_wrote;
 bool nvme_keep_running_for_linux = false;
 static u8 nvme_die;
 
@@ -763,7 +765,12 @@ bool nvme_shutdown(void)
             goto out_preserve;
     }
 
-    if (!nvme_ctrl_shutdown()) {
+    /*
+     * A normal shutdown makes the drive flush its write cache, which takes about half a second
+     * on post-M4 ANS. With nothing written by this stage there is nothing to flush, and the
+     * controller disable below still stops it cleanly.
+     */
+    if (nvme_wrote && !nvme_ctrl_shutdown()) {
         printf("nvme: timeout while waiting for controller shutdown\n");
         if (nvme_type == NVME_T8132)
             goto out_preserve;
@@ -837,6 +844,7 @@ bool nvme_flush(u32 nsid)
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_CMD_FLUSH;
     cmd.nsid = nsid;
+    nvme_wrote = true;
 
     return nvme_exec_command(&ioq, &cmd, NULL);
 }

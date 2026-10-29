@@ -529,15 +529,18 @@ static void other_chips_are_unchanged(void)
                                CHAINLOAD_HDR_F_RUN_BASE, FOOTPRINT);
         u64 isz = image_size_for(big), fw_size = ALIGN_UP(SEPFW_SIZE, SZ_16K) + SZ_16K;
 
-        /* Room below top_of_kernel_data: copied to stage 1's base with its firmware block */
+        /*
+         * Room for the staged copy: it stays where it was staged with its firmware block, and
+         * the image moves only its code and data to stage 1's base, so the stub copies nothing.
+         */
         setup(chips[c], 0x1000000);
         cur_boot_args.top_of_kernel_data = home + isz + fw_size;
         live_heap = heap_next = cur_boot_args.top_of_kernel_data + 0x1000000;
         assert(chainload_image(image, big, vars, NVARS) == 0);
-        assert(allocs == 1 && next_stage.args[2] == home);
+        assert(allocs == 1 && next_stage.args[2] == next_stage.args[1]);
         assert(next_stage.args[3] == isz + fw_size);
-        assert(run_base_field(next_stage.args[1]) == 0);
-        check_staging(image, big, home + isz);
+        assert(run_base_field(next_stage.args[1]) == home);
+        check_staging(image, big, next_stage.args[1] + isz);
 
         /* Firmware block would reach the live heap: parked, as before */
         setup(chips[c], 0x1000000);

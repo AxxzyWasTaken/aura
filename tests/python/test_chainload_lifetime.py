@@ -18,7 +18,7 @@ def test_chainload_releases_loaded_image(tmp_path):
 static struct { void *entry; } next_stage;
 static char image[16];
 static int load_error, copy_error, freed, copied, loads, windows;
-static bool shutdown_ok, request, host;
+static bool shutdown_ok, request, host, stage1_chained;
 static bool nvme_init(void) { return true; }
 static bool nvme_has_live_post_m4_session(void) { return true; }
 static bool nvme_shutdown(void) { return shutdown_ok; }

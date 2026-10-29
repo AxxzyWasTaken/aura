@@ -3,6 +3,7 @@
 #include <stdarg.h>
 
 #include "adt.h"
+#include "boot_options.h"
 #include "iodev.h"
 #include "types.h"
 #include "uart.h"
@@ -173,11 +174,35 @@ static ssize_t uart_iodev_write(void *opaque, const void *buf, size_t len)
     return len;
 }
 
+/*
+ * Console output must not wait for the wire: at 115200 baud a line costs about 3 ms, whether or
+ * not anything listens. Send what the FIFO takes now; the console ring keeps the rest, and the
+ * full log stays in memory. aura-debug keeps the blocking write for a serial console.
+ */
+static ssize_t uart_iodev_write_nonblocking(void *opaque, const void *buf, size_t len)
+{
+    UNUSED(opaque);
+
+    if (!uart_base)
+        return 0;
+    if (aura_debug_enabled())
+        return uart_iodev_write(opaque, buf, len);
+
+    bool fifo = read32(uart_base + UFCON) & BIT(0);
+    const u8 *p = buf;
+    size_t i = 0;
+    while (i < len && (fifo ? !(read32(uart_base + UFSTAT) & UFSTAT_TXFULL)
+                            : (read32(uart_base + UTRSTAT) & UTRSTAT_TXBE)))
+        write32(uart_base + UTXH, p[i++]);
+    return i;
+}
+
 static struct iodev_ops iodev_uart_ops = {
     .can_read = uart_iodev_can_read,
     .can_write = uart_iodev_can_write,
     .read = uart_iodev_read,
     .write = uart_iodev_write,
+    .write_nonblocking = uart_iodev_write_nonblocking,
 };
 
 struct iodev iodev_uart = {

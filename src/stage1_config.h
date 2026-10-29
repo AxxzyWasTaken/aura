@@ -13,6 +13,8 @@ u32 stage1_config_window_ms(void);
  */
 #define STAGE1_PROXY_REQUEST_MS 15000
 bool stage1_proxy_request_window(void);
+/* True when an earlier aura stage started this one (it handed its NVMe session over). */
+extern bool stage1_chained;
 const char *stage1_config_target(void);
 const char *stage1_config_esp_uuid(void);
 
