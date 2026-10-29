@@ -118,6 +118,30 @@ static dart_dev_t *usb_dart_init(u32 idx)
     return dart_init_adt(path, 1, dart_idx, false);
 }
 
+static int usb_drd_adt_offset(u32 idx, char drd_path[sizeof(FMT_DRD_PATH)], int *adt_drd_path)
+{
+    snprintf(drd_path, sizeof(FMT_DRD_PATH), FMT_DRD_PATH, idx);
+    int offset = adt_path_offset_trace(adt, drd_path, adt_drd_path);
+    if (offset < 0 && chip_id == T8140 && idx == 0) {
+        snprintf(drd_path, sizeof(FMT_DRD_PATH), "/arm-io/usb-drd");
+        offset = adt_path_offset_trace(adt, drd_path, adt_drd_path);
+    }
+    return offset;
+}
+
+/*
+ * The ADT marks ports that must never run as a USB device with usb-device-disable, for
+ * example the J773 front ports, whose hub prohibits device mode. Leave those alone.
+ */
+static bool usb_device_mode_disabled(u32 idx)
+{
+    int adt_drd_path[8];
+    char drd_path[sizeof(FMT_DRD_PATH)];
+    int node = usb_drd_adt_offset(idx, drd_path, adt_drd_path);
+
+    return node >= 0 && adt_get_property(adt, node, "usb-device-disable");
+}
+
 static int usb_drd_get_regs(u32 idx, struct usb_drd_regs *regs)
 {
     int adt_drd_path[8];
@@ -127,12 +151,7 @@ static int usb_drd_get_regs(u32 idx, struct usb_drd_regs *regs)
     char phy_path[sizeof(FMT_ATC_PATH)];
     char drd_path[sizeof(FMT_DRD_PATH)];
 
-    snprintf(drd_path, sizeof(drd_path), FMT_DRD_PATH, idx);
-    adt_drd_offset = adt_path_offset_trace(adt, drd_path, adt_drd_path);
-    if (adt_drd_offset < 0 && chip_id == T8140 && idx == 0) {
-        snprintf(drd_path, sizeof(drd_path), "/arm-io/usb-drd");
-        adt_drd_offset = adt_path_offset_trace(adt, drd_path, adt_drd_path);
-    }
+    adt_drd_offset = usb_drd_adt_offset(idx, drd_path, adt_drd_path);
     if (adt_drd_offset < 0) {
         // Nonexistent device
         return -1;
@@ -167,6 +186,11 @@ int usb_phy_bringup(u32 idx)
 
     if (idx >= USB_IODEV_COUNT)
         return -1;
+
+    if (usb_device_mode_disabled(idx)) {
+        printf("usb: usb-drd%u has usb-device-disable, leaving it alone\n", idx);
+        return -1;
+    }
 
     struct usb_drd_regs usb_regs;
     if (usb_drd_get_regs(idx, &usb_regs) < 0)
@@ -207,6 +231,9 @@ int usb_phy_bringup(u32 idx)
 
 dwc3_dev_t *usb_iodev_bringup(u32 idx)
 {
+    if (usb_device_mode_disabled(idx))
+        return NULL;
+
     dart_dev_t *usb_dart = usb_dart_init(idx);
     if (!usb_dart)
         return NULL;
