@@ -9,6 +9,8 @@ import subprocess
 def test_adopted_queue_lifetime(tmp_path):
     source = Path(os.environ.get("NVME_SOURCE", Path(__file__).resolve().parents[2] / "src/nvme.c")).read_text()
     declarations = source[source.index("#define NVME_TIMEOUT"):source.index("static u64 nvme_read64_lo_hi")]
+    # The queue register helpers, which place the registers for the secure layout too.
+    qregs = source[source.index("static u64 nvme_qreg(u32 reg)"):source.index("static void nvme_log_entry_state")]
     init = source[source.index("bool nvme_init(void)"):source.index("void nvme_ensure_shutdown(void)")]
     shutdown = source[source.index("bool nvme_has_live_post_m4_session(void)"):
                       source.index("bool nvme_flush(")]
@@ -37,6 +39,7 @@ typedef int sart_dev_t;
 #define T8132 0x8132
 #define T6040 0x6040
 #define T6041 0x6041
+#define T8142 0x8142
 static u32 chip_id = T8140;
 static void *adt;
 ''' + declarations + r'''
@@ -61,6 +64,8 @@ static const void *adt_getprop(void *a, int n, const char *p, u32 *len)
     return failure == 7 ? NULL : &asc;
 }
 static bool adt_is_compatible(void *a, int n, const char *p) { return true; }
+/* No secure register layout: the T8152 path is not under test here. */
+static const void *adt_get_property(void *a, int n, const char *p) { return NULL; }
 static int adt_get_reg(void *a, int *path, const char *p, int i, u64 *base, u64 *size)
 {
     *base = i == 3 ? 0x10000000 : 0x20000000;
@@ -111,6 +116,7 @@ static rtkit_dev_t *rtkit_init(const char *name, asc_dev_t *a, void *d, void *i,
                               sart_dev_t *s, bool sram) { return &rtkit; }
 static bool rtkit_boot(rtkit_dev_t *r) { boots++; started = failure != 8; return failure != 8; }
 static bool rtkit_sleep(rtkit_dev_t *r) { return true; }
+static bool rtkit_quiesce(rtkit_dev_t *r) { return true; }
 static void rtkit_free(rtkit_dev_t *r) {}
 static void pmgr_reset(u8 die, const char *name) { resets++; }
 static int poll32(u64 a, u32 mask, u32 value, unsigned timeout) { return 0; }
@@ -128,7 +134,7 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, vo
     }
     return !((failure == 4 && commands == 1) || (failure == 5 && commands == 2));
 }
-''' + init + shutdown + r'''
+''' + qregs + init + shutdown + r'''
 int main(int argc, char **argv)
 {
     assert(argc == 2);

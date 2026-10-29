@@ -112,9 +112,11 @@ int main(void)
         assert(!fdt_setprop_string(dt, chosen, "bootargs", "console=tty0"));
         assert(chosen_tail() == 0);
         const char *args = fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), "bootargs", NULL);
-        bool own_policy = i < 4;
-        assert(args && !strcmp(args, own_policy ? "console=tty0"
-                                                : "console=tty0 idle=nop arm64.nowfxt"));
+        /* T8152 keeps its WFI state, so it needs only arm64.nowfxt. */
+        const char *want = i < 4 ? "console=tty0"
+                           : chip_id == 0x8152 ? "console=tty0 arm64.nowfxt"
+                                               : "console=tty0 idle=nop arm64.nowfxt";
+        assert(args && !strcmp(args, want));
     }
     features.apple_sysregs_unlocked = true;
     return 0;
