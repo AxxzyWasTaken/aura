@@ -336,9 +336,12 @@ static void mmu_pt_map_l2(u64 from, u64 to, u64 size)
 
     to |= FIELD_PREP(PTE_TYPE, PTE_BLOCK);
 
+    /* As for L3: one table lookup per L1 block, not per entry. */
+    u64 *l2 = NULL;
     for (; size; size -= BIT(VADDR_L2_OFFSET_BITS)) {
         u64 idx = (from >> VADDR_L2_OFFSET_BITS) & MASK(VADDR_L2_INDEX_BITS);
-        u64 *l2 = mmu_pt_get_l2(from);
+        if (!l2 || !idx)
+            l2 = mmu_pt_get_l2(from);
 
         if (L2_IS_TABLE(l2[idx]))
             free((void *)(l2[idx] & PTE_TARGET_MASK));
@@ -383,9 +386,15 @@ static void mmu_pt_map_l3(u64 from, u64 to, u64 size)
 
     to |= FIELD_PREP(PTE_TYPE, PTE_PAGE);
 
+    /*
+     * Look the L3 table up once per L2 block rather than once per page: before the MMU is on
+     * every table access is uncached, and the walk costs three reads per entry.
+     */
+    u64 *l3 = NULL;
     for (; size; size -= BIT(VADDR_L3_OFFSET_BITS)) {
         u64 idx = (from >> VADDR_L3_OFFSET_BITS) & MASK(VADDR_L3_INDEX_BITS);
-        u64 *l3 = mmu_pt_get_l3(from);
+        if (!l3 || !idx)
+            l3 = mmu_pt_get_l3(from);
 
         mmu_write_descriptor(&l3[idx], to, from);
         from += BIT(VADDR_L3_OFFSET_BITS);

@@ -9,6 +9,9 @@
 _chainload_stub_start:
     mov x7, x2
     mov x8, x3
+    /* A staged image is already in place: skip the copy, which runs uncached. */
+    cmp x1, x2
+    b.eq 2f
 1:
     ldp x5, x6, [x1], #16
     stp x5, x6, [x2]

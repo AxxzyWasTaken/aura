@@ -143,6 +143,8 @@ int main(int argc, char **argv)
         shutdown_fault = failure - 14;
         failure = 0;
         nvme_adopt_live_session = true;
+        /* The normal-shutdown wait only runs after a write, which these faults need to reach. */
+        nvme_wrote = true;
         assert(nvme_init());
         if (shutdown_fault == 5 || shutdown_fault == 7)
             adminq.failed = true;

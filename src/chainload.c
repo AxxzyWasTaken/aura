@@ -160,15 +160,31 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
         free(parked);
         return -1;
     }
+    /*
+     * The stub runs with the MMU and caches off, so copying a whole image (with its SEPFW block)
+     * into place costs hundreds of milliseconds. An aura image can instead run from where it is
+     * staged and move only its code and data (start.S): do that whenever the staged copy fits.
+     */
+    u64 staged = (u64)new_image;
+    bool fits_staged =
+        staged >= new_base + footprint && staged <= ram_end &&
+        copy_size + stub_size <= ram_end - staged &&
+        !(ro_status == 1 && staged < ro_end && staged + copy_size + stub_size > ro_start);
+    if (!run_base && !park_fw && fits_staged) {
+        u64 run_footprint = chainload_run_footprint(image, size);
+        if (run_footprint && !(new_base & (SZ_16K - 1)) && staged >= new_base + run_footprint &&
+            (ro_status != 1 || new_base + run_footprint <= ro_start || new_base >= ro_end)) {
+            footprint = run_footprint;
+            run_base = new_base;
+        }
+    }
     if (run_base) {
         /*
-         * The staged copy is the destination: the stub copies it onto itself. The stub runs from
+         * The staged copy is the destination: the stub has nothing to copy. The stub runs from
          * just after it, so the whole allocation must stay in RAM and clear of firmware RO.
          */
-        new_base = (u64)new_image;
-        if (new_base < run_base + footprint || new_base > ram_end ||
-            copy_size + stub_size > ram_end - new_base ||
-            (new_base < ro_end && new_base + copy_size + stub_size > ro_start)) {
+        new_base = staged;
+        if (new_base < run_base + footprint || !fits_staged) {
             printf("chainload: no room to stage the image above firmware RO\n");
             free(new_image);
             return -1;
@@ -256,6 +272,45 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
 
 #ifdef CHAINLOADING
 
+#ifndef ESP_STAGE2
+extern char con_buf[];
+extern size_t con_wp;
+#define STAGE1_LOG_SIZE  SZ_16K
+#define CON_BUFFER_BYTES 8192
+
+/*
+ * Keep Stage 1's console for the next stage: its ring, oldest line first, in a page taken off
+ * the top of RAM (so the next stage never reuses it), named by chosen.aurora,stage1-log.
+ */
+static char stage1_log_var[64];
+static char *stage1_log;
+
+/* Copy the console ring, oldest line first. Run again right before the jump to the next stage. */
+void stage1_log_flush(void)
+{
+    if (!stage1_log)
+        return;
+    size_t len = min(con_wp, (size_t)CON_BUFFER_BYTES);
+    memset(stage1_log, 0, STAGE1_LOG_SIZE);
+    for (size_t i = 0; i < len; i++)
+        stage1_log[i] = con_buf[(con_wp - len + i) % CON_BUFFER_BYTES];
+    dc_cvac_range(stage1_log, STAGE1_LOG_SIZE);
+}
+
+static void stage1_log_handoff(char **vars, size_t *var_cnt, size_t var_capacity)
+{
+    if (*var_cnt >= var_capacity)
+        return;
+    stage1_log = (char *)top_of_memory_alloc(STAGE1_LOG_SIZE);
+    if (!stage1_log)
+        return;
+    stage1_log_flush();
+    snprintf(stage1_log_var, sizeof(stage1_log_var), "chosen.aurora,stage1-log=0x%lx",
+             (u64)stage1_log);
+    vars[(*var_cnt)++] = stage1_log_var;
+}
+#endif
+
 int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_capacity)
 {
     static char adopt_var[] = "nvme.adopt=live-rtkit-v1";
@@ -292,7 +347,7 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
      * back first so a host that takes the window finds the same state as before any load,
      * and read the Stage 2 again only if nobody did.
      */
-    if (ret == 0 && proxy_request) {
+    if (ret == 0 && proxy_request && !stage1_chained) {
         rust_free_image(image, size);
         if (!nvme_shutdown()) {
             next_stage.entry = NULL;
@@ -306,6 +361,8 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
         }
         ret = rust_load_image(spec, &image, &size, NULL);
     }
+    if (ret == 0)
+        stage1_log_handoff(vars, var_cnt, var_capacity);
 #endif
     if (ret == 0) {
         ret = chainload_image(image, size, vars, *var_cnt);

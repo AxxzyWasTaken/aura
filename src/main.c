@@ -8,6 +8,7 @@
 #include "adt.h"
 #include "aic.h"
 #include "boot_options.h"
+#include "chainload.h"
 #include "cpufreq.h"
 #include "display.h"
 #include "exception.h"
@@ -90,7 +91,7 @@ static void stage1_run_host_proxy(void)
 
 bool stage1_proxy_request_window(void)
 {
-    if (stage1_window_done)
+    if (stage1_window_done || stage1_chained)
         return false;
     stage1_window_done = true;
     printf("Stage 1: aura-proxy on the ESP, waiting %u s for a host\n",
@@ -348,6 +349,9 @@ next_stage:
 #endif
 
     printf("Vectoring to next stage...\n");
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+    stage1_log_flush();
+#endif
 
     next_stage.entry(next_stage.args[0], next_stage.args[1], next_stage.args[2], next_stage.args[3],
                      next_stage.args[4]);
