@@ -34,6 +34,7 @@ struct chainload_header {
 int chainload_image(void *base, size_t size, char **vars, size_t var_cnt);
 int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_capacity);
 
+void stage1_log_flush(void);
 #endif
 
 #endif

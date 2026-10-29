@@ -8,6 +8,7 @@
 #include "adt.h"
 #include "aic.h"
 #include "boot_options.h"
+#include "chainload.h"
 #include "cpufreq.h"
 #include "display.h"
 #include "exception.h"
@@ -348,6 +349,9 @@ next_stage:
 #endif
 
     printf("Vectoring to next stage...\n");
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+    stage1_log_flush();
+#endif
 
     next_stage.entry(next_stage.args[0], next_stage.args[1], next_stage.args[2], next_stage.args[3],
                      next_stage.args[4]);

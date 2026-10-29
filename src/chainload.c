@@ -267,19 +267,30 @@ extern size_t con_wp;
  * the top of RAM (so the next stage never reuses it), named by chosen.aurora,stage1-log.
  */
 static char stage1_log_var[64];
+static char *stage1_log;
+
+/* Copy the console ring, oldest line first. Run again right before the jump to the next stage. */
+void stage1_log_flush(void)
+{
+    if (!stage1_log)
+        return;
+    size_t len = min(con_wp, (size_t)CON_BUFFER_BYTES);
+    memset(stage1_log, 0, STAGE1_LOG_SIZE);
+    for (size_t i = 0; i < len; i++)
+        stage1_log[i] = con_buf[(con_wp - len + i) % CON_BUFFER_BYTES];
+    dc_cvac_range(stage1_log, STAGE1_LOG_SIZE);
+}
 
 static void stage1_log_handoff(char **vars, size_t *var_cnt, size_t var_capacity)
 {
     if (*var_cnt >= var_capacity)
         return;
-    size_t len = min(con_wp, (size_t)CON_BUFFER_BYTES);
-    char *log = (char *)top_of_memory_alloc(STAGE1_LOG_SIZE);
-    if (!log)
+    stage1_log = (char *)top_of_memory_alloc(STAGE1_LOG_SIZE);
+    if (!stage1_log)
         return;
-    memset(log, 0, STAGE1_LOG_SIZE);
-    for (size_t i = 0; i < len; i++)
-        log[i] = con_buf[(con_wp - len + i) % CON_BUFFER_BYTES];
-    snprintf(stage1_log_var, sizeof(stage1_log_var), "chosen.aurora,stage1-log=0x%lx", (u64)log);
+    stage1_log_flush();
+    snprintf(stage1_log_var, sizeof(stage1_log_var), "chosen.aurora,stage1-log=0x%lx",
+             (u64)stage1_log);
     vars[(*var_cnt)++] = stage1_log_var;
 }
 #endif
