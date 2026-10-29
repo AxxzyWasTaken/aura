@@ -37,8 +37,6 @@ static void *dt = blob, *adt = blob;
 static int chip_id, uuid_len, sep_calls, adt_calls, sep_error, adt_error;
 static const void *uuid;
 static bool fallback;
-/* The M4 WFx bootargs in the same tail are not under test here. */
-static const struct { bool apple_sysregs_unlocked; } features = {true}, *cpu_features = &features;
 static int adt_path_offset(void *tree, const char *path)
 { return !strcmp(path, "/chosen") ? 1 : -1; }
 static const void *adt_getprop(void *tree, int node, const char *name, u32 *len)
