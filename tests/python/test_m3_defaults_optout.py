@@ -100,14 +100,18 @@ static struct { int version; } os_firmware = {V26_6_2};
 static int XzDecode(void *in, uint32_t *in_len, void *out, uint32_t *out_len) { return 0; }
 
 /* heapblock: one bump allocator */
-static u8 heap[16 << 20] __attribute__((aligned(2 << 20)));
+/* Aligned at run time: the macOS linker caps a section's alignment at 16 KiB, and the kernel
+   loader copies an Image that is not at a 2 MiB boundary */
+#define HEAP_SIZE (16 << 20)
+static u8 heap_storage[HEAP_SIZE + (2 << 20)];
 static size_t heap_used;
 void *heapblock_alloc_aligned(size_t size, size_t align)
 {
+    u8 *heap = (u8 *)ALIGN_UP((uintptr_t)heap_storage, (uintptr_t)(2 << 20));
     heap_used = ALIGN_UP(heap_used, align);
     void *r = heap + heap_used;
     heap_used += size;
-    assert(heap_used <= sizeof(heap));
+    assert(heap_used <= HEAP_SIZE);
     return r;
 }
 
@@ -230,6 +234,9 @@ static bool nvme_shutdown(void) { return true; }
 static bool nvme_keep_running_for_linux;
 static bool nvme_adopt_live_session;
 static int display_configure(const char *s) { printf("DISPLAY %s\n", s); return 0; }
+static int display_configure_second(const char *s) { printf("DISPLAY2 %s\n", s); return 0; }
+#define T8132 0x8132
+static bool nvme_init(void) { printf("NVME init\n"); return true; }
 static void mitigations_configure(const char *s) {}
 static int boot_storage_load(const char *spec, struct kernel_header **k, void **f) { return -1; }
 /* A stage 1 configured with its target (stage1_config.c), or not (NULL) */
