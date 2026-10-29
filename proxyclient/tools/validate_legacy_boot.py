@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Compare real AArch64 m1n1 code against its pre-M5/M6 integration baseline.
+"""Compare real AArch64 aura code against its pre-M5/M6 integration baseline.
 
 This is instruction/MMIO replay, not a hardware qualification. External PMGR
 features, poll completion and architectural registers are explicit inputs.
@@ -18,8 +18,8 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_UN
 from unicorn.arm64_const import *
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('baseline', type=Path, help='Baseline source tree with build/m1n1-raw.elf')
-parser.add_argument('candidate', type=Path, help='Candidate source tree with build/m1n1-raw.elf')
+parser.add_argument('baseline', type=Path, help='Baseline source tree with build/aura-raw.elf')
+parser.add_argument('candidate', type=Path, help='Candidate source tree with build/aura-raw.elf')
 parser.add_argument('--output', type=Path, required=True, help='New directory for the result receipt')
 args = parser.parse_args()
 BASE = args.baseline.resolve()
@@ -100,7 +100,7 @@ class Run:
             name = self.stub[address]
             args = [uc.reg_read(UC_ARM64_REG_X0+i) for i in range(4)]
             result = 0
-            if name in ('init_cpu','exception_initialize','smp_secondary_entry','smp_secondary_prep_el3','m1n1_main'):
+            if name in ('init_cpu','exception_initialize','smp_secondary_entry','smp_secondary_prep_el3','aura_main'):
                 self.trace.append(['entry_call',name])
             elif name == 'pmgr_get_feature':
                 self.trace.append([name, self.string(args[0]), self.features]); result = int(self.features)
@@ -143,7 +143,7 @@ class Run:
         assert self.uc.reg_read(UC_ARM64_REG_PC)==STOP, (name,hex(self.uc.reg_read(UC_ARM64_REG_PC)))
         return self.uc.reg_read(UC_ARM64_REG_X0)
     def scenario(self):
-        entries=['init_cpu','exception_initialize','smp_secondary_entry','smp_secondary_prep_el3','m1n1_main']
+        entries=['init_cpu','exception_initialize','smp_secondary_entry','smp_secondary_prep_el3','aura_main']
         self.stub.update({self.b.symbols[n]:n for n in entries})
         for el in (4,8,12):
             for cpu in (0,1):
@@ -173,8 +173,8 @@ class Run:
         return dict(startup=startup_trace,init=init_trace,frequency_return=result,frequency=freq_trace,smp=smp_trace,
                     asc=self.trace,sent=sent,received=received,message=bytes(self.uc.mem_read(msg,12)).hex())
 
-baseline=Binary(BASE/'build/m1n1-raw.elf')
-current=Binary(CURRENT/'build/m1n1-raw.elf')
+baseline=Binary(BASE/'build/aura-raw.elf')
+current=Binary(CURRENT/'build/aura-raw.elf')
 headers='\n'.join(p.read_text() for p in (BASE/'src').glob('*.h'))
 parts={k:int(v,16) for k,v in re.findall(r'#define\s+(MIDR_PART_\w+)\s+(0x[0-9a-fA-F]+)',headers)}
 cases=[]

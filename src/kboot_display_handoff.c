@@ -2,7 +2,7 @@
 /*
  * Internal display handoff, for SoCs whose internal DCP iBoot leaves running.
  *
- * iBoot starts the internal DCP, lights the panel and leaves the coprocessor running. m1n1 does
+ * iBoot starts the internal DCP, lights the panel and leaves the coprocessor running. aura does
  * not restart, reconfigure or stop it here (display.c refuses its own DCP modeset path on T6030).
  * This file only describes the state iBoot left, for the next stage. Everything that differs
  * between SoCs (addresses, firmware image, boards, device-tree names, which steps run) is in
@@ -212,8 +212,8 @@ static const struct dcp6_seg_def dcp6_seg_defs_t6030[DCP6_SEGS] = {
 
 #define DCP6_OSLOG_NODE "dcp-oslog"
 #define DCP6_OSLOG_PROP "apple,dcp-os-log"
-/* (address, size) of each __OS_LOG buffer found on the loaded file part of m1n1 */
-#define DCP6_OVERLAP_PROP "asahi,m1n1-oslog-overlap"
+/* (address, size) of each __OS_LOG buffer found on the loaded file part of aura */
+#define DCP6_OVERLAP_PROP "asahi,aura-oslog-overlap"
 
 /* Owners of the nubs whose __OS_LOG is reserved: /arm-io/<owner>/iop-<owner>-nub */
 static const char *const dcp6_nubs_t6030[] = {"dcp", "dcpext0", "dcpext1"};
@@ -657,7 +657,7 @@ static int dcp6_resv_conflict(void *dt, u64 base, u64 size, const char *what)
 /*
  * As dcp6_resv_conflict(), for an __OS_LOG buffer: with .oslog_in_rsv, a /memreserve/ that
  * contains it whole is no conflict (the buffer is already kept from the OS; the no-map node only
- * describes it). On the J616s the buffers sit inside the m1n1 retained range on tether boots.
+ * describes it). On the J616s the buffers sit inside the aura retained range on tether boots.
  */
 static void *dcp6_scratch(void *dt);
 
@@ -854,11 +854,11 @@ static int dcp6_get_oslog(const char *owner, const char *nub_path, u64 *phys, u6
 }
 
 /*
- * The running coprocessors write their __OS_LOG buffers from before m1n1 starts. Stage 1 loads
+ * The running coprocessors write their __OS_LOG buffers from before aura starts. Stage 1 loads
  * this image at its own base and start.S then copies the file part of it away (aura-raw.ld keeps
  * that part below 0x120000, where the panel DCP's buffer was seen with the stage 1 these builds
  * were checked with). If a buffer lies on the loaded file part, the coprocessor may have written
- * over m1n1's code or data before the copy: say so loudly, and mark it in /chosen for the OS
+ * over aura's code or data before the copy: say so loudly, and mark it in /chosen for the OS
  * side. The buffer is still reserved, because the coprocessor keeps writing it; nothing else can
  * be undone at this point.
  */
@@ -869,9 +869,9 @@ static bool dcp6_oslog_on_file_part(const char *owner, u64 phys, u64 size, fdt64
     kboot_loaded_file_part(&base, &len);
     if (!dcp6_overlaps(phys, size, base, len))
         return false;
-    dlog("WARNING: %s __OS_LOG 0x%lx+0x%lx overlaps m1n1 where stage 1 loaded it (0x%lx+0x%lx)\n",
+    dlog("WARNING: %s __OS_LOG 0x%lx+0x%lx overlaps aura where stage 1 loaded it (0x%lx+0x%lx)\n",
          owner, phys, size, base, len);
-    dlog("WARNING: its coprocessor may have changed m1n1 there; m1n1 was only checked with a "
+    dlog("WARNING: its coprocessor may have changed aura there; aura was only checked with a "
          "stage 1 that leaves the first 0x120000 bytes clear\n");
     marker[0] = cpu_to_fdt64(phys);
     marker[1] = cpu_to_fdt64(size);

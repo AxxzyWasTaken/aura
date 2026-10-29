@@ -106,7 +106,7 @@ def layout(tmp_path, linker, script, name):
 
 
 @pytest.mark.skipif(not (NM and READELF and OBJCOPY), reason="needs nm, readelf and objcopy")
-@pytest.mark.parametrize("script", ["m1n1-raw.ld", "m1n1.ld"])
+@pytest.mark.parametrize("script", ["aura-raw.ld", "aura.ld"])
 @pytest.mark.parametrize("kind", ["gnu", "lld"])
 def test_rela_init_stays_inside_rela_dyn_padding(tmp_path, kind, script):
     linker = LINKERS[kind]

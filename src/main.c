@@ -38,8 +38,8 @@
 
 struct vector_args next_stage;
 
-const char version_tag[] = "##m1n1_ver##" BUILD_TAG;
-const char *const m1n1_version = version_tag + 12;
+const char version_tag[] = "##aura_ver##" BUILD_TAG;
+const char *const aura_version = version_tag + 12;
 
 u32 board_id = ~0, chip_id = ~0;
 
@@ -257,11 +257,11 @@ static void j873g_run_proxy(void)
     uartproxy_run(NULL);
 }
 
-void m1n1_main(void)
+void aura_main(void)
 {
-    printf("\n\naura %s\n", m1n1_version);
-    printf("Copyright The Asahi Linux Contributors\n");
-    printf("Licensed under the MIT license\n\n");
+    printf("\n\naura %s\n", aura_version);
+    printf("Copyright Aurora Silicon and contributors\n");
+    printf("GPL-2.0-only, with inherited code under MIT. See LICENSE.\n\n");
 
     printf("Running in EL%lu\n\n", mrs(CurrentEL) >> 2);
 
@@ -311,7 +311,7 @@ void m1n1_main(void)
     cpufreq_fixup();
 #endif
 
-    /* T6040: nothing else in an m1n1 tether chain clears iBoot's failed-boot count. */
+    /* T6040: nothing else in an aura tether chain clears iBoot's failed-boot count. */
     if (chip_id == T6040)
         pmu_clear_panic_counter();
 

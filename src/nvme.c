@@ -475,7 +475,7 @@ bool nvme_init(void)
 #if defined(CHAINLOADING) && !defined(ESP_STAGE2)
         /* Stage 1 runs straight after iBoot: a running ANS here is iBoot's
          * session, which still needs the RTKit handshake. Only an earlier
-         * m1n1 stage (nvme.adopt) leaves a session that can be adopted. */
+         * aura stage (nvme.adopt) leaves a session that can be adopted. */
         adopting = nvme_adopt_live_session;
 #else
         /* Older stage 1 shuts ANS down; newer stage 1 leaves a live session.

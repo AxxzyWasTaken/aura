@@ -14,15 +14,15 @@ parser.add_argument("--device", required=True)
 parser.add_argument("--proxyclient", type=Path, default=Path(__file__).resolve().parents[1])
 parser.add_argument("--output", type=Path, required=True)
 args = parser.parse_args()
-os.environ["M1N1DEVICE"] = args.device
-os.environ["M1N1TIMEOUT"] = "15"
+os.environ["AURADEVICE"] = args.device
+os.environ["AURATIMEOUT"] = "15"
 sys.path.insert(0, str(args.proxyclient.resolve()))
-from m1n1.proxy import UartInterface, M1N1Proxy
-from m1n1.proxyutils import ProxyUtils, bootstrap_port
-from m1n1.asm import ARMAsm
+from aura.proxy import UartInterface, AuraProxy
+from aura.proxyutils import ProxyUtils, bootstrap_port
+from aura.asm import ARMAsm
 
 iface = UartInterface()
-p = M1N1Proxy(iface)
+p = AuraProxy(iface)
 if p.get_chipid() != 0x8142 or int(p.iodev_whoami()) != 1:
     raise RuntimeError("Expected T8142 on KIS")
 bootstrap_port(iface, p)

@@ -3,7 +3,7 @@
  *
  * Copyright (c) 2003-2019 Joergen Ibsen
  *
- * This version of tinfzlib was modified for use with m1n1.
+ * This version of tinfzlib was modified for use with aura.
  *
  * This software is provided 'as-is', without any express or implied
  * warranty. In no event will the authors be held liable for any damages

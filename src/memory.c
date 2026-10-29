@@ -129,7 +129,7 @@ static inline void write_sctlr(u64 val)
 #define L2_IS_TABLE(pte) (IS_PTE(pte) && FIELD_GET(PTE_TYPE, pte) == PTE_TABLE)
 
 /*
- * m1n1 supports 4K and 16K paging. We prefer 16K paging whenever possible.
+ * aura supports 4K and 16K paging. We prefer 16K paging whenever possible.
  *
  * On A7, A8, A8X, 4K paging is used, resulting in the following virtual address space:
  *
@@ -190,7 +190,7 @@ enum SPRR_val_t {
 /*
  * aarch64 allows to configure attribute sets for up to eight different memory
  * types. we need normal memory and two types of device memory (nGnRnE and
- * nGnRE) in m1n1.
+ * nGnRE) in aura.
  * The indexes here are selected arbitrarily: A page table entry
  * contains a field to select one of these which will then be used
  * to select the corresponding memory access flags from MAIR.
@@ -402,7 +402,7 @@ int mmu_map(u64 from, u64 to, u64 size)
     // Map L3 until L2-aligned or reached end of mapping
     u64 boundary_l2 = ALIGN_UP(from, MASK(VADDR_L2_OFFSET_BITS));
     // CPU CTRR doesn't like L2 mappings crossing CTRR boundaries!
-    // Map everything below the m1n1 base as L3
+    // Map everything below the aura base as L3
     if (boundary_l2 >= ram_base && boundary_l2 < (u64)_base)
         boundary_l2 = ALIGN_UP((u64)_base, MASK(VADDR_L2_OFFSET_BITS));
 
@@ -606,7 +606,7 @@ static void mmu_add_default_mappings(void)
         panic("MMU: Firmware carveouts are unavailable\n");
 
     /*
-     * Remap m1n1 executable code as RX.
+     * Remap aura executable code as RX.
      */
     mmu_add_mapping((u64)_base, (u64)_base, (u64)_rodata_end - (u64)_base, MAIR_IDX_NORMAL,
                     PERM_RX_EL0);
@@ -740,7 +740,7 @@ void mmu_init_secondary_local(void)
     sctlr |= SCTLR_I | SCTLR_C | SCTLR_M | SCTLR_SPAN;
 
     /*
-     * m1n1 issues #463 and #480 show that we sometimes crash with an invalid LR restored from
+     * aura issues #463 and #480 show that we sometimes crash with an invalid LR restored from
      * a previous stackframe when returning from this function. The invalid value comes from this
      * same core which points to some caching or load/store ordering issue.
      * Two possible causes:

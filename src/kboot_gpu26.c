@@ -19,7 +19,7 @@
  * T8122 (M3) GPU firmware handoff.
  *
  * iBoot preloads the GFX ASC firmware and leaves the firmware's UAT page
- * tables, TTBAT and handoff page in RAM. Nothing else in m1n1 reserves that
+ * tables, TTBAT and handoff page in RAM. Nothing else in aura reserves that
  * memory on T8122, so the OS could reuse pages the firmware still occupies.
  *
  * On the selected J613 25G83 path this reserves, no-map, the four UAT regions of

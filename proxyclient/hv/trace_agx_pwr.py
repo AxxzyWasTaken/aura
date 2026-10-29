@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 import datetime
 
-from m1n1.constructutils import show_struct_trace, Ver
-from m1n1.utils import *
+from aura.constructutils import show_struct_trace, Ver
+from aura.utils import *
 
 Ver.set_version(hv.u)
 
@@ -10,7 +10,7 @@ trace_device("/arm-io/sgx", True)
 #trace_device("/arm-io/pmp", True)
 #trace_device("/arm-io/gfx-asc", False)
 
-from m1n1.trace.agx import AGXTracer
+from aura.trace.agx import AGXTracer
 AGXTracer = AGXTracer._reloadcls(True)
 
 agx_tracer = AGXTracer(hv, "/arm-io/gfx-asc", verbose=1)

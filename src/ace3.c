@@ -8,8 +8,7 @@
 #include "utils.h"
 
 /*
- * ACE3 SPMI transport, per
- * OtherResources/re-work/asahi-docs/docs/hw/peripherals/ace3.md:
+ * ACE3 SPMI transport, per the public Asahi Linux hardware notes (hw/peripherals/ace3.md):
  *
  *   0x00        logical register select -- write 0x80 | reg, MSB self-clears
  *   0x1F  [RO]  size in bytes of the selected logical register

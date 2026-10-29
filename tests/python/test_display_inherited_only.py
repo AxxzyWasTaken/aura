@@ -32,7 +32,7 @@ HARNESS = r'''
 #include <stdio.h>
 #include <string.h>
 typedef uint32_t u32;
-typedef unsigned long u64; /* as in m1n1: printed as long */
+typedef unsigned long u64; /* as in aura: printed as long */
 #define UNUSED(x) (void)(x)
 #define FB_DEPTH_FLAG_RETINA 0x10000
 %(chips)s

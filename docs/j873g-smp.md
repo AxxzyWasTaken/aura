@@ -34,9 +34,9 @@ idempotent with started mask `0xfbf`, failure mask zero, and boot CPU 6.
 These checks qualify native dispatch, not Linux scheduling or CPU power-off.
 
 Run `proxyclient/experiments/t8152-smp.py` with the action (`start`, `cores`,
-`atomic`, `amp`), candidate `build/m1n1.bin`, its SHA-256, `--device` pointing to
+`atomic`, `amp`), candidate `build/aura.bin`, its SHA-256, `--device` pointing to
 the verified target console, and `--receipt result.json`. Keep the matching
-`m1n1-raw.elf` beside the image; select the toolchain with `--nm` if needed.
+`aura-raw.elf` beside the image; select the toolchain with `--nm` if needed.
 Use a fresh receipt after each full reset. The harness checks loaded code
 against the pinned image and uses native allocations without resetting the
 live heap. Preserve its JSON receipt, console output, image and source revision.

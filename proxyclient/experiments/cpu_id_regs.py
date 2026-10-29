@@ -3,8 +3,8 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.sysreg import MIDR
+from aura.setup import *
+from aura.sysreg import MIDR
 
 # generated via
 # grep -e ' | [A-Z][A-Z0-9]' -e ' [0-9]\+) ID_AA64' Documentation/arch/arm64/cpu-feature-registers.rst | \

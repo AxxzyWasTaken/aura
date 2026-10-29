@@ -6,7 +6,7 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import argparse, pathlib
 
-parser = argparse.ArgumentParser(description='(Linux) kernel loader for m1n1')
+parser = argparse.ArgumentParser(description='(Linux) kernel loader for aura')
 parser.add_argument('payload', type=pathlib.Path)
 parser.add_argument('dtb', type=pathlib.Path)
 parser.add_argument('initramfs', nargs='?', type=pathlib.Path)
@@ -18,7 +18,7 @@ parser.add_argument('-E', '--efi', action="store_true", help="payload is EFI stu
 parser.add_argument('-T', '--tso', action="store_true", help="enable TSO")
 args = parser.parse_args()
 
-from m1n1.setup import *
+from aura.setup import *
 
 if args.efi and args.u_boot is None:
         raise Exception("Booting EFI stubs requires u-boot.")

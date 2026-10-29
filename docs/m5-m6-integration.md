@@ -7,7 +7,7 @@ altering PMGR requests, or sending legacy ASC traffic through the new mailbox
 format. A successful M6 boot alone cannot rule these out.
 
 Build the baseline and candidate with the same compiler and settings, retaining
-their source trees and `build/m1n1-raw.elf` files. The integration baseline used
+their source trees and `build/aura-raw.elf` files. The integration baseline used
 here is `ae94c931bbbaef6ce97e6caf1fcef453edb3e3e6`. With Python dependencies
 `unicorn`, `capstone` and `pyelftools`, run:
 

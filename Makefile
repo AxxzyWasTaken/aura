@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: MIT AND GPL-2.0-only
 RUSTARCH ?= aarch64-unknown-none-softfloat
+# Built-in boot logo. The stock logo is Aurora. A fork or distribution can link its own by
+# putting <name>_48.bin, <name>_128.bin and <name>_256.bin (raw RGBA, see data/makelogo.py)
+# in a directory and building with LOGO_DIR=<directory> BUILTIN_LOGO=<name>.
 BUILTIN_LOGO ?= aurora
+LOGO_DIR ?= data
 
-ifneq ($(BUILTIN_LOGO),bootlogo)
-ifneq ($(words $(wildcard data/$(BUILTIN_LOGO)_48.bin data/$(BUILTIN_LOGO)_128.bin data/$(BUILTIN_LOGO)_256.bin)),3)
-$(error BUILTIN_LOGO assets are missing)
-endif
+ifneq ($(words $(wildcard $(LOGO_DIR)/$(BUILTIN_LOGO)_48.bin $(LOGO_DIR)/$(BUILTIN_LOGO)_128.bin $(LOGO_DIR)/$(BUILTIN_LOGO)_256.bin)),3)
+$(error BUILTIN_LOGO assets $(LOGO_DIR)/$(BUILTIN_LOGO)_{48,128,256}.bin are missing)
 endif
 
 ifeq ($(shell uname),Darwin)
@@ -247,7 +249,7 @@ DEPDIR := build/.deps
 all: build/$(TARGET) build/$(TARGET_RAW) verify-logo
 .PHONY: verify-logo
 verify-logo: build/$(TARGET_RAW)
-	$(QUIET)python3 tools/verify_builtin_logo.py $< $(BUILTIN_LOGO)
+	$(QUIET)python3 tools/verify_builtin_logo.py $< $(BUILTIN_LOGO) --logo-dir $(LOGO_DIR)
 clean:
 	rm -rf build/* build/.deps
 format:
@@ -284,7 +286,7 @@ build/%.o: src/%.c build-tag build-cfg
 	$(QUIET)mkdir -p "$(dir $@)"
 	$(QUIET)$(CC) -c $(CFLAGS) -MMD -MF $(DEPDIR)/$(*F).d -MQ "$@" -MP -o $@ $<
 
-# special target for usage by m1n1.loadobjs
+# special target for usage by aura.loadobjs
 invoke_cc:
 	$(QUIET)$(CC) -c $(CFLAGS) -Isrc -Isrc/hv -o $(OBJFILE) $(CFILE)
 
@@ -331,20 +333,9 @@ build-cfg src/../build/build_cfg.h &:
 
 # The built-in boot logos are linked gzip-compressed; fb.c inflates them on first use.
 # They are only read, so they go in .rodata: its 64 KiB alignment padding has room for them,
-# while .data counts towards the file part limit in m1n1-raw.ld.
+# while .data counts towards the file part limit in aura-raw.ld.
 LOGO_OBJCOPY_FLAGS := --rename-section .data=.rodata,alloc,load,readonly,data,contents
-build/bootlogo_%.bin.gz: data/bootlogo_%.bin
-	$(QUIET)echo "  GZIP  $@"
-	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)gzip -9 -n -c $< > $@
-
-build/bootlogo_%.o: build/bootlogo_%.bin.gz
-	$(QUIET)echo "  BIN   $@"
-	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $(LOGO_OBJCOPY_FLAGS) $< $@
-
-ifneq ($(BUILTIN_LOGO),bootlogo)
-build/$(BUILTIN_LOGO)_%.bin.gz: data/$(BUILTIN_LOGO)_%.bin
+build/$(BUILTIN_LOGO)_%.bin.gz: $(LOGO_DIR)/$(BUILTIN_LOGO)_%.bin
 	$(QUIET)echo "  GZIP  $@"
 	$(QUIET)mkdir -p "$(dir $@)"
 	$(QUIET)gzip -9 -n -c $< > $@
@@ -353,7 +344,6 @@ build/$(BUILTIN_LOGO)_%.o: build/$(BUILTIN_LOGO)_%.bin.gz
 	$(QUIET)echo "  BIN   $@"
 	$(QUIET)mkdir -p "$(dir $@)"
 	$(QUIET)$(OBJCOPY) -I binary -B aarch64 -O elf64-littleaarch64 $(LOGO_OBJCOPY_FLAGS) $< $@
-endif
 
 build/%.bin: data/%.bin
 	$(QUIET)echo "  IMG   $@"
@@ -379,7 +369,7 @@ build/%.rgba: data/%.png
 build/%.logo: build/%_256.rgba build/%_128.rgba
 	$(QUIET)echo "  PAYLOAD $@"
 	$(QUIET)mkdir -p "$(dir $@)"
-	$(QUIET)echo -n "m1n1_logo_256128" > $@
+	$(QUIET)echo -n "aura_logo_256128" > $@
 	$(QUIET)cat $^ >> $@
 
 -include $(DEPDIR)/*

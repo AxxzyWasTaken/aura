@@ -6,17 +6,17 @@ from io import BytesIO
 
 from enum import IntEnum
 
-from m1n1.constructutils import Ver
-from m1n1.proxyutils import RegMonitor
-from m1n1.utils import *
-from m1n1.trace.dart import DARTTracer
-from m1n1.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR
-from m1n1.fw.afk.rbep import *
-from m1n1.fw.afk.epic import *
+from aura.constructutils import Ver
+from aura.proxyutils import RegMonitor
+from aura.utils import *
+from aura.trace.dart import DARTTracer
+from aura.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR
+from aura.fw.afk.rbep import *
+from aura.fw.afk.epic import *
 
 Ver.set_version(hv.u)
 
-from m1n1.fw.dcp.ipc import *
+from aura.fw.dcp.ipc import *
 
 class DCPDevType(IntEnum):
     DCP = 0
@@ -778,7 +778,7 @@ KNOWN_MSGS = {
 22: getNamedProperty
 """
 
-from m1n1.fw.dcp.dcpep import DCPMessage, DCPEp_SetShmem, CallContext, DCPEp_Msg
+from aura.fw.dcp.dcpep import DCPMessage, DCPEp_SetShmem, CallContext, DCPEp_Msg
 
 class DCPCallState:
     pass
@@ -1395,7 +1395,7 @@ class DCPTracer(ASCTracer):
         0x20: SystemService,
         0x21: TestService,
         0x22: DCPExpertService,
-        # Disp0 / DCP iboot as used by m1n1 is incompatible with the generic
+        # Disp0 / DCP iboot as used by aura is incompatible with the generic
         # EPICEp tracer, disable it for now
         #0x23: Disp0Service,
         0x24: DPAVController,

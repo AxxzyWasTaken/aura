@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
-"""Check the actual compressed or raw logos in an m1n1 binary."""
+# SPDX-License-Identifier: GPL-2.0-only
+"""Check that an aura binary links the selected boot logo at every size."""
 
 import argparse
 from pathlib import Path
@@ -25,17 +25,12 @@ def embedded_logos(binary: bytes) -> set[bytes]:
     return logos
 
 
-def verify(path: Path, name: str) -> None:
-    binary = path.read_bytes()
-    found = embedded_logos(binary)
-    expected = {size: (ROOT / "data" / f"{name}_{size}.bin").read_bytes() for size in SIZES}
-    asahi = {size: (ROOT / "data" / f"bootlogo_{size}.bin").read_bytes() for size in SIZES}
-    # Older m1n1 commits linked the same RGBA assets without compression.
-    missing = [size for size, pixels in expected.items() if pixels not in found and pixels not in binary]
-    unexpected = [size for size, pixels in asahi.items()
-                  if name != "bootlogo" and (pixels in found or pixels in binary)]
-    if missing or unexpected:
-        raise SystemExit(f"{path}: missing {name} sizes {missing}; embedded Asahi sizes {unexpected}")
+def verify(path: Path, name: str, logo_dir: Path) -> None:
+    found = embedded_logos(path.read_bytes())
+    expected = {size: (logo_dir / f"{name}_{size}.bin").read_bytes() for size in SIZES}
+    missing = [size for size, pixels in expected.items() if pixels not in found]
+    if missing:
+        raise SystemExit(f"{path}: missing {name} logo sizes {missing}")
     print(f"{path}: verified {name} logos at 48, 128, and 256 px")
 
 
@@ -43,5 +38,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
     parser.add_argument("logo", nargs="?", default="aurora")
+    parser.add_argument("--logo-dir", type=Path, default=ROOT / "data")
     args = parser.parse_args()
-    verify(args.binary, args.logo)
+    verify(args.binary, args.logo, args.logo_dir if args.logo_dir.is_absolute() else ROOT / args.logo_dir)

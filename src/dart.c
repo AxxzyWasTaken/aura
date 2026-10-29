@@ -520,7 +520,7 @@ int dart_set_bypass_fdt(void *dt, u32 phandle, u8 device)
 
 /* Display firmware keeps using the inherited tables of a locked DART. The lock
  * covers the TTBR and TCR registers, not the tables, which are ordinary RAM, so
- * map into them as upstream m1n1 has done since it learned to handle locked
+ * map into them as upstream has done since it learned to handle locked
  * DARTs. The view never replaces a root or writes stream configuration, and is
  * not available through the FDT inspection or proxy constructors, which stay
  * read-only. Gen3 DARTs keep their own adoption. */
@@ -774,7 +774,7 @@ int dart_setup_pt_region(dart_dev_t *dart, const char *path, int device, u64 vm_
             int idx = (vmstart + index) & 0x7ff;
 
             if (dart->l1[ttbr][idx] & DART_PTE_VALID) {
-                /* m1n1 bug fixup: old versions used to clobber PTs */
+                /* aura bug fixup: old versions used to clobber PTs */
 
                 for (int j = 0; j < 2048; j++) {
                     if (j != idx && dart->l1[ttbr][j] == dart->l1[ttbr][idx]) {

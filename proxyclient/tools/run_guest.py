@@ -33,25 +33,25 @@ parser.add_argument('payload', type=pathlib.Path)
 parser.add_argument('boot_args', default=[], nargs="*")
 args = parser.parse_args()
 
-from m1n1.proxy import *
-from m1n1.proxyutils import *
-from m1n1.utils import *
-from m1n1.shell import run_shell
-from m1n1.sysreg import *
-from m1n1.hv import HV
-from m1n1.hv.virtio import Virtio9PTransport
-from m1n1.hw.pmu import PMU
+from aura.proxy import *
+from aura.proxyutils import *
+from aura.utils import *
+from aura.shell import run_shell
+from aura.sysreg import *
+from aura.hv import HV
+from aura.hv.virtio import Virtio9PTransport
+from aura.hw.pmu import PMU
 
 iface = UartInterface()
-p = M1N1Proxy(iface, debug=False)
+p = AuraProxy(iface, debug=False)
 bootstrap_port(iface, p)
 
 if args.emulate_sprr or not p.get_cpu_features().apple_sysregs_unlocked:
-    m1n1_heap_mb = 1024
+    aura_heap_mb = 1024
 else:
-    m1n1_heap_mb = 128
+    aura_heap_mb = 128
 u = ProxyUtils(p, heap_size = 128 * 1024 * 1024,
-               m1n1_heap = m1n1_heap_mb * 1024 * 1024)
+               aura_heap = aura_heap_mb * 1024 * 1024)
 
 # Setup counter redirect / AHCR_EL2 as expected by macOS for macho payloads
 if not args.raw:

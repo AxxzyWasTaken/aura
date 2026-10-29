@@ -1,9 +1,9 @@
-from m1n1.trace import Tracer
-from m1n1.trace.dart import DARTTracer
-from m1n1.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR, EPContainer
-from m1n1.utils import *
-from m1n1.constructutils import *
-from m1n1.proxyutils import RegMonitor
+from aura.trace import Tracer
+from aura.trace.dart import DARTTracer
+from aura.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR, EPContainer
+from aura.utils import *
+from aura.constructutils import *
+from aura.proxyutils import RegMonitor
 
 import sys
 import struct

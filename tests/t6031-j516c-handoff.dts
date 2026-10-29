@@ -2,7 +2,7 @@
 /*
  * Stand-in for the display and GPU parts of the T6031 J516C kernel device tree (t6031-dcp.dtsi and
  * t6031-gpu.dtsi), for tests/t6031_host.c. Written the way the T6030 and T8122 device trees of
- * integration/aurora are, with the T6031 addresses of the J516C ADT. What m1n1's T6031 handoff
+ * integration/aurora are, with the T6031 addresses of the J516C ADT. What aura's T6031 handoff
  * requires of the real ones:
  *  - aliases dcp, disp0, disp0-piodma and gpu;
  *  - dcp (apple,t6031-dcp) and display-subsystem (apple,t6031-display-subsystem), both disabled,

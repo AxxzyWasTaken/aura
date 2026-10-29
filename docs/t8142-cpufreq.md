@@ -11,7 +11,7 @@ throttling feature registers are left untouched. This support initializes
 boot states; it does not implement a Linux scaling governor or thermal policy.
 Command-state readback is not a measurement of the effective CPU clock.
 
-Build with `make RELEASE=1`, then RAM-chainload `build/m1n1.macho` using a
+Build with `make RELEASE=1`, then RAM-chainload `build/aura.macho` using a
 client matching the resident proxy ABI. With this candidate running:
 
 ```sh

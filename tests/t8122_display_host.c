@@ -3,7 +3,7 @@
  * Host test of the T8122 (J613) internal display handoff in src/kboot_display_handoff.c, checked
  * against what the kernel reads from the device tree it hands over.
  *
- * A fake ADT, a fake PMGR table and fake MMIO/DRAM stand in for the Mac; libfdt is m1n1's own.
+ * A fake ADT, a fake PMGR table and fake MMIO/DRAM stand in for the Mac; libfdt is aura's own.
  * The ADT has the J613's structure with synthetic addresses: seven iop-dcp-nub segments (__TEXT,
  * __DATA, __OS_LOG, then four heap segments, the last of them /vram), dart-dcp stream 5 mapping
  * every segment but __OS_LOG, dart-disp0 stream 0 mapping segments 4 and 6 and stream 4 mapping
@@ -73,7 +73,7 @@ u64 kboot_fb_base(void)
 {
     return fb_base;
 }
-/* Where stage 1 loaded m1n1: clear of every __OS_LOG buffer below */
+/* Where stage 1 loaded aura: clear of every __OS_LOG buffer below */
 void kboot_loaded_file_part(u64 *base, u64 *size)
 {
     *base = 0x10010000000ULL;

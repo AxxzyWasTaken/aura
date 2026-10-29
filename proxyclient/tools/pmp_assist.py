@@ -7,7 +7,7 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import argparse, pathlib
 
-from m1n1 import adt
+from aura import adt
 
 parser = argparse.ArgumentParser(description='PMP device tree helper')
 parser.add_argument('input', type=pathlib.Path)

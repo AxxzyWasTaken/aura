@@ -1,7 +1,7 @@
 # Aura
 
-Aura is Aurora Silicon's bootloader and experimentation environment for
-Apple Silicon.
+Aura is the Aurora Silicon bootloader for Apple Silicon Macs: Stage 1, the ESP
+Stage 2 and the development proxy, for Aurora Silicon and Omarchy Mac.
 
 ## Build
 
@@ -30,7 +30,7 @@ aura make` or `docker-compose run aura make`.
 
 See [the J700 installation guide](docs/j700-install.md) for Stage 1 and ESP
 Stage 2 setup. Host tools are in `proxyclient`. The inherited Python package
-name `m1n1`, USB identifiers, payload markers and device-tree properties
+name `aura`, USB identifiers, payload markers and device-tree properties
 remain compatible with existing tools and kernels. New device rules provide
 `/dev/aura` and `/dev/aura-sec`, with the original aliases retained.
 
@@ -38,9 +38,11 @@ The raw format supports concatenated kernel, device-tree and initramfs
 payloads, including gzip and xz compression. Mach-O boot-object support
 from Aurora's x1n1 development will be reviewed separately.
 
-The built-in boot logo defaults to Aurora at 48, 128, and 256 pixels. Use
-`make BUILTIN_LOGO=bootlogo` to select the Asahi artwork explicitly. A normal
-build checks the compressed logos in `build/aura.bin` against the selected assets.
+The built-in boot logo is Aurora at 48, 128, and 256 pixels. A fork or
+distribution can link its own logo instead: make its assets with
+`data/makelogo.py <image> --name <name> --output-dir <dir>` and build with
+`make LOGO_DIR=<dir> BUILTIN_LOGO=<name>`. Every build checks that
+`build/aura.bin` carries the selected logo at all three sizes.
 
 ## License
 
@@ -50,11 +52,16 @@ GPL-2.0-only. See [LICENSE](LICENSE) and [the provenance policy](docs/licensing.
 The Aurora Silicon logo files have separate terms in
 [LICENSE.AURORA-LOGO](3rdparty_licenses/LICENSE.AURORA-LOGO).
 
-* Copyright The Asahi Linux Contributors
-
 Please see the Git history for authorship information.
 
-Inherited portions of Aura are based on mini:
+## Credits
+
+Aura started from m1n1, by the Asahi Linux project. Code inherited from it
+remains under its MIT licence and notice:
+
+* Copyright The Asahi Linux Contributors
+
+m1n1 in turn is based on mini:
 
 * Copyright (C) 2008-2010 Hector Martin "marcan" <marcan@marcan.st>
 * Copyright (C) 2008-2010 Sven Peter <sven@svenpeter.dev>

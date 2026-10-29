@@ -10,7 +10,7 @@
 /*
  * iBoot counts failed boots in the primary PMU's legacy scratchpad (error
  * count byte at info-leg_scrpad + 2) and drops to recoveryOS once it is too
- * high. macOS clears it on a good boot; an m1n1 chain that never reaches an
+ * high. macOS clears it on a good boot; an aura chain that never reaches an
  * OS which does so must clear it itself, or repeated test boots end in the
  * recovery error screen.
  */

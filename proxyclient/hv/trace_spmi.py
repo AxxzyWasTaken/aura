@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1.utils import *
-from m1n1.trace.spmi import SPMITracer, SPMIDevTracer, ACE3SPMIDevTracer
-from m1n1.hw.spmi import SPMIRegs
+from aura.utils import *
+from aura.trace.spmi import SPMITracer, SPMIDevTracer, ACE3SPMIDevTracer
+from aura.hw.spmi import SPMIRegs
 
 def make_dev_tracers(tracer):
     for dev in tracer.dev:

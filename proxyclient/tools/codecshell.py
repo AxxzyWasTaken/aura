@@ -9,10 +9,10 @@ parser = argparse.ArgumentParser(description='Enter a shell for codec-poking')
 parser.add_argument('-n', '--no-reset', action="store_true")
 args = parser.parse_args()
 
-from m1n1.setup import *
-from m1n1.shell import run_shell
-from m1n1.hw.i2c import I2C, I2CRegMapDev
-from m1n1.hw.codecs import *
+from aura.setup import *
+from aura.shell import run_shell
+from aura.hw.i2c import I2C, I2CRegMapDev
+from aura.hw.codecs import *
 
 i2c = {}
 

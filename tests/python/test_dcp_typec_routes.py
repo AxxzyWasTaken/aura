@@ -229,9 +229,9 @@ def test_reservation_caller_never_publishes_routes_after_failure(tmp_path):
 #include <string.h>
 #include "libfdt.h"
 typedef uint32_t u32;
-/* Match m1n1's aarch64-linux-gnu target, not the host libc's uint64_t alias. */
+/* Match aura's aarch64-linux-gnu target, not the host libc's uint64_t alias. */
 typedef unsigned long u64;
-_Static_assert(sizeof(u64) == 8, "the m1n1 host fixture requires an LP64 host");
+_Static_assert(sizeof(u64) == 8, "the aura host fixture requires an LP64 host");
 typedef int dart_dev_t;
 #define T6000 0x6000
 #define T6001 0x6001

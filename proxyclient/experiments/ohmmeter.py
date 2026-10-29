@@ -4,9 +4,9 @@ import sys, pathlib
 import time
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.hw.i2c import I2C, I2CRegMapDev
-from m1n1.hw.codecs.cs42l84 import *
+from aura.setup import *
+from aura.hw.i2c import I2C, I2CRegMapDev
+from aura.hw.codecs.cs42l84 import *
 
 class CS42L84(I2CRegMapDev):
     REGMAP = CS42L84Regs

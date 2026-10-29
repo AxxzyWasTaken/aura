@@ -4,8 +4,8 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1 import asm
+from aura.setup import *
+from aura import asm
 
 code = u.malloc(0x1000)
 c = asm.ARMAsm("""

@@ -1,7 +1,7 @@
-from m1n1.trace import ADTDevTracer
-from m1n1.trace.dart8110 import DART8110Tracer
-from m1n1.hw.prores import *
-from m1n1.utils import *
+from aura.trace import ADTDevTracer
+from aura.trace.dart8110 import DART8110Tracer
+from aura.hw.prores import *
+from aura.utils import *
 import struct
 
 p.pmgr_adt_power_enable('/arm-io/dart-apr0')

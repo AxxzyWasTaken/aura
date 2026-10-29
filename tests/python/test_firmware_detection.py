@@ -23,7 +23,7 @@ def test_j616s_boot_firmware_detection(tmp_path):
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-/* Host types instead of m1n1's freestanding types.h, whose uintptr_t and
+/* Host types instead of aura's freestanding types.h, whose uintptr_t and
  * ssize_t typedefs clash with the macOS SDK's. */
 #define TYPES_H
 typedef uint8_t u8;

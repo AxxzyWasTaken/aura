@@ -194,7 +194,7 @@ static int pmgr_validate_parents(u16 id, u16 *ancestors, size_t depth)
     if (pmgr_find_device(id, &device)) {
         /*
          * Apple's tables name parents they do not list: C0-USBCTL-V's parent 81 on
-         * base M1, and ISP_CPU_CORE0/1's parent 176 on base M3. As in upstream m1n1, a
+         * base M1, and ISP_CPU_CORE0/1's parent 176 on base M3. As upstream does, a
          * missing parent only fails a request that has to power it, not the whole table.
          */
         if (!depth)

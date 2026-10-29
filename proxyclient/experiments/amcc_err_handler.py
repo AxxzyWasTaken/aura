@@ -3,7 +3,7 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
+from aura.setup import *
 
 #for i in (0x28e580350, 0x28e580328, 0x28e580380, 0x28e580378):
     #p.write32(i, 0)

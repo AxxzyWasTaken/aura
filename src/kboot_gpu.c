@@ -509,10 +509,10 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
  *   register (drm/asahi only accepts apple,firmware-compat = <14 8 3> for G15),
  * - length/range checks every ADT input (no ADT_GETPROP: it copies before checking the length),
  * - touches no GPU hardware and leaves the node disabled unless boot.bin carries the opt-in config
- *   line chosen.asahi,t6030-gpu=1 (m1n1 cannot tell which kernel will boot, so this is per
+ *   line chosen.asahi,t6030-gpu=1 (aura cannot tell which kernel will boot, so this is per
  *   boot.bin); without it, it only runs and logs the firmware/ADT/DT checks (dry run),
  * - runs the ID/core-mask register and leakage fuse reads under an exception guard that also
- *   catches asynchronous SErrors (the PMGR power-on is unguarded, as everywhere else in m1n1; a
+ *   catches asynchronous SErrors (the PMGR power-on is unguarded, as everywhere else in aura; a
  *   read that stalls the bus without faulting cannot be caught by any guard),
  * - checks the uat-* regions against everything dt_set_memory() later bails on,
  * - adds the description of the loaded firmware segments (fw-text/fw-data, see g15_get_fw_segs())
@@ -530,7 +530,7 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
  *   instead of calc_power_t600x().
  * - The OPP table is rebuilt from the runtime ADT, because the pstate count is not known statically
  *   (iBoot fills in the perf-state properties at boot).
- * - hw-cal-a/hw-cal-b/globals stay disabled: m1n1's Rust initdata has no G15 layouts, and drm/asahi
+ * - hw-cal-a/hw-cal-b/globals stay disabled: aura's Rust initdata has no G15 layouts, and drm/asahi
  *   only uses these blobs as an optional debug cross-check (gpu.rs load_hwdata_blob(), which falls
  *   back to an empty blob).
  */
@@ -659,7 +659,7 @@ static int g15_adt_u64(int node, const char *name, u64 *val)
  *
  * The pstate count and the table count must come from the ADT and agree with each other: a stale
  * count could otherwise reshape the table into a different one that still passes every value check.
- * - perf-state-count (= N + 1, what upstream m1n1 uses) and gpu-num-perf-states (= N) must agree
+ * - perf-state-count (= N + 1, what upstream uses) and gpu-num-perf-states (= N) must agree
  *   when both are set.
  * - If only gpu-num-perf-states is set, perf-state-table-count must be present too (nothing is
  *   derived from a fallback count).
@@ -792,7 +792,7 @@ static int g15_get_region(void *dt, int sgx, struct g15_region *r)
  * region only disables the GPU:
  * - each region lies entirely outside usable RAM [phys_base, phys_base + mem_size). Later kboot
  *   steps only shrink usable RAM from the top, which keeps this true. iBoot carves the GPU regions
- *   out of the top of DRAM, so inside usable RAM would be unexpected anyway (and could overlap m1n1
+ *   out of the top of DRAM, so inside usable RAM would be unexpected anyway (and could overlap aura
  *   or the kernel).
  * - each region lies inside DRAM, if the ADT gives the DRAM range.
  * - the regions do not overlap each other.
@@ -914,7 +914,7 @@ static int g15_read_hw(void *dt, int gpu, const struct g15_soc *soc, u32 *core_c
         bail("FDT: GPU: the GPU power closure is not off, not powering it on\n");
 
     /*
-     * PMGR power-on, unguarded like every other pmgr_adt_power_enable() caller in m1n1: these are
+     * PMGR power-on, unguarded like every other pmgr_adt_power_enable() caller in aura: these are
      * the regular PMGR PS registers (the polls are bounded), and a GUARD_MARK fault in the middle
      * of the read-modify-write would corrupt registers instead of recovering. The caller powers the
      * GPU back off if anything after this point fails.
@@ -998,7 +998,7 @@ static int g15s_read_leak(const struct g15_soc *soc, float *leak)
 {
     UNUSED(soc);
 
-    /* First m1n1 access to this fuse page (AON region, inside the arm-io MMIO mapping) */
+    /* First aura access to this fuse page (AON region, inside the arm-io MMIO mapping) */
     int before = g15_guard_begin();
     u32 fuse = read32(T6030_LEAK_FUSE);
     if (g15_guard_end(before))
@@ -1505,7 +1505,7 @@ static int g15_set_power_props(void *dt, const struct g15_power_values *pv)
 /*
  * GPU firmware segments (fw-text, fw-data).
  *
- * iBoot loads the GPU coprocessor firmware before m1n1 runs. ADT /arm-io/gfx-asc "segment-ranges"
+ * iBoot loads the GPU coprocessor firmware before aura runs. ADT /arm-io/gfx-asc "segment-ranges"
  * says where: one {u64 phys, u64 firmware VA, u64 remap, u32 size, u32 flags} entry per segment,
  * in the order of "segment-names" (text, then data). A kernel that runs this firmware in place
  * needs the two carveouts and their firmware VAs, so the gpu node gets:
@@ -2428,10 +2428,10 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
     }
 
     /*
-     * Explicit opt-in before any GPU hardware access. m1n1 cannot tell which kernel GRUB will boot,
+     * Explicit opt-in before any GPU hardware access. aura cannot tell which kernel GRUB will boot,
      * so without it the power-on and GPU register reads would run for every kernel, the default one
-     * included. The opt-in is a config line appended to boot.bin (update-m1n1 copies chosen.* lines
-     * from /etc/m1n1.conf):  chosen.asahi,t6030-gpu=1 (chosen.asahi,t8122-gpu=1 on T8122)
+     * included. The opt-in is a config line appended to boot.bin (update-aura copies chosen.* lines
+     * from /etc/aura.conf):  chosen.asahi,t6030-gpu=1 (chosen.asahi,t8122-gpu=1 on T8122)
      * Without it this is a dry run: the firmware identification (DRAM reads only) and all ADT/DT
      * checks run and are logged, then the gpu node is left disabled. T6031 also
      * requires an explicit opt-in before its powered identity probe.

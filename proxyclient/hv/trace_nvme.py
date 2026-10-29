@@ -3,11 +3,11 @@
 from construct import *
 from construct.core import Int16ul, Int32ul, Int64ul, Int8ul
 
-from m1n1.hv import TraceMode
-from m1n1.utils import *
-from m1n1.trace import ADTDevTracer
-from m1n1.trace.asc import ASCRegs
-from m1n1.trace.asc import ASCTracer
+from aura.hv import TraceMode
+from aura.utils import *
+from aura.trace import ADTDevTracer
+from aura.trace.asc import ASCRegs
+from aura.trace.asc import ASCTracer
 
 ASCTracer = ASCTracer._reloadcls()
 

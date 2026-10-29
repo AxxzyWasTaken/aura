@@ -16,12 +16,12 @@ legacy EL2 ADT remapping is required.
 Build with `make RELEASE=1 -j8` (`gmake` on macOS). The normal build requires
 the documented LLVM/Rust toolchains and initialized Git submodules.
 
-Connect the J813 USB-C port farther from MagSafe. With the resident m1n1
+Connect the J813 USB-C port farther from MagSafe. With the resident aura
 proxy available through DebugUSB, select its current KIS device:
 
 ```sh
-export M1N1DEVICE=/dev/cu.kis-00100000-ch-0
-python3 proxyclient/tools/chainload.py build/m1n1.macho
+export AURADEVICE=/dev/cu.kis-00100000-ch-0
+python3 proxyclient/tools/chainload.py build/aura.macho
 ```
 
 The device path is host-dependent. Confirm chip `0x8142` and model `Mac17,3`

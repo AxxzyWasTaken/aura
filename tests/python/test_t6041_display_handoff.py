@@ -2,7 +2,7 @@
 """T6041 (M4 Pro J616s) display handoff without a /chosen opt-in.
 
 Builds tests/t6041_display_host.c with the tree's src/kboot_display_handoff.c, the host stand-in
-headers of tests/t8122_display_host/ and m1n1's libfdt (ASan, UBSan), and runs every scenario:
+headers of tests/t8122_display_host/ and aura's libfdt (ASan, UBSan), and runs every scenario:
 a supported boot with no chosen property publishes the existing contract; an unsupported chip,
 board, firmware or device tree gets nothing at all; every missing ADT node and failed validation publishes
 nothing. The ADT, the MMIO and the device tree are synthetic; no hardware is exercised.
@@ -140,7 +140,7 @@ def test_t6041_scenario(host, scenario):
 
 def test_publish_without_chosen_property(host):
     out = run(host, "publish").stdout
-    assert "ok   no /chosen/asahi,t6041-dcp in the device tree handed to m1n1" in out
+    assert "ok   no /chosen/asahi,t6041-dcp in the device tree handed to aura" in out
     assert "handoff published" in out
     assert "not armed" not in out
 

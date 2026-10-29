@@ -33,15 +33,21 @@ static const u8 fdt_magic[] = {0xd0, 0x0d, 0xfe, 0xed};
 static const u8 kernel_magic[] = {'A', 'R', 'M', 0x64};          // at 0x38
 static const u8 cpio_magic[] = {'0', '7', '0', '7', '0'};        // '1' or '2' next
 static const u8 img4_magic[] = {0x16, 0x04, 'I', 'M', 'G', '4'}; // IA5String 'IMG4'
-static const u8 sig_magic[] = {'m', '1', 'n', '1', '_', 's', 'i', 'g'};
-static const u8 initramfs_magic[] = {
-    'm', '1', 'n', '1', '_', 'i', 'n',
-    'i', 't', 'r', 'a', 'm', 'f', 's'}; // followed by size as little endian uint32_t
+/*
+ * aura's own payload records start "aura_". Payloads made for the bootloader aura replaced
+ * start "m1n1_" instead; both are accepted so existing installs and payload builders keep
+ * working. The two prefixes are the same length, so the record layout is unchanged.
+ */
+#define PAYLOAD_PREFIX_LEN 5
+static const u8 payload_prefix[PAYLOAD_PREFIX_LEN] = {'a', 'u', 'r', 'a', '_'};
+static const u8 legacy_payload_prefix[PAYLOAD_PREFIX_LEN] = {'m', '1', 'n', '1', '_'};
+static const u8 sig_magic[] = {'s', 'i', 'g'};
+static const u8 initramfs_magic[] = {'i', 'n', 'i', 't', 'r', 'a', 'm', 'f', 's'};
+// followed by size as little endian uint32_t
 static const u8 empty[] = {0, 0, 0, 0};
 
 // custom logo is RGBA with 256x256 retina logo followed by half resolution
-static const u8 custom_logo_magic[] = {'m', '1', 'n', '1', '_', 'l', 'o', 'g',
-                                       'o', '_', '2', '5', '6', '1', '2', '8'};
+static const u8 custom_logo_magic[] = {'l', 'o', 'g', 'o', '_', '2', '5', '6', '1', '2', '8'};
 #define CUSTOM_LOGO_SIZE (4 * ((256 * 256) + (128 * 128)))
 
 static char expect_compatible[256];
@@ -57,6 +63,17 @@ static char stage1_esp_chosen[96];
 #endif
 
 static void *load_one_payload(void *start, size_t size);
+
+/* Length of the "aura_<tag>" (or legacy "m1n1_<tag>") record header at p, or 0. */
+static size_t payload_record(const u8 *p, const u8 *tag, size_t tag_len)
+{
+    if (memcmp(p, payload_prefix, PAYLOAD_PREFIX_LEN) &&
+        memcmp(p, legacy_payload_prefix, PAYLOAD_PREFIX_LEN))
+        return 0;
+    if (memcmp(p + PAYLOAD_PREFIX_LEN, tag, tag_len))
+        return 0;
+    return PAYLOAD_PREFIX_LEN + tag_len;
+}
 
 static void finalize_uncompression(void *dest, size_t dest_len)
 {
@@ -238,6 +255,7 @@ static bool check_var(u8 **p)
 static void *load_one_payload(void *start, size_t size)
 {
     u8 *p = start;
+    size_t hdr;
 
     if (!start)
         return NULL;
@@ -256,26 +274,26 @@ static void *load_one_payload(void *start, size_t size)
     } else if (!memcmp(p + 0x38, kernel_magic, sizeof kernel_magic)) {
         printf("Found a kernel at %p\n", p);
         return load_kernel(p, size);
-    } else if (!memcmp(p, sig_magic, sizeof sig_magic)) {
+    } else if ((hdr = payload_record(p, sig_magic, sizeof sig_magic))) {
         u32 size;
-        memcpy(&size, p + 8, 4);
+        memcpy(&size, p + hdr, 4);
 
-        printf("Found a m1n1 signature at %p, skipping 0x%x bytes\n", p, size);
+        printf("Found a signature at %p, skipping 0x%x bytes\n", p, size);
         return p + size;
-    } else if (!memcmp(p, initramfs_magic, sizeof(initramfs_magic))) {
+    } else if ((hdr = payload_record(p, initramfs_magic, sizeof initramfs_magic))) {
         u32 size;
-        memcpy(&size, p + sizeof(initramfs_magic), 4);
-        printf("Found a m1n1 initramfs payload at %p, 0x%x bytes\n", p, size);
-        p += sizeof(initramfs_magic) + 4;
+        memcpy(&size, p + hdr, 4);
+        printf("Found an initramfs payload at %p, 0x%x bytes\n", p, size);
+        p += hdr + 4;
         return load_cpio(p, size);
-    } else if (!memcmp(p, custom_logo_magic, sizeof(custom_logo_magic))) {
-        printf("Found a m1n1 custom logo payload at %p, skipping 0x%lx bytes\n", p,
-               sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE);
-        return p + sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE;
+    } else if ((hdr = payload_record(p, custom_logo_magic, sizeof custom_logo_magic))) {
+        printf("Found a custom logo payload at %p, skipping 0x%lx bytes\n", p,
+               hdr + CUSTOM_LOGO_SIZE);
+        return p + hdr + CUSTOM_LOGO_SIZE;
     } else if (check_var(&p)) {
         return p;
     } else if (!memcmp(p, empty, sizeof empty) ||
-               !memcmp(p + 0x05, img4_magic, sizeof img4_magic)) { // SEPFW after m1n1
+               !memcmp(p + 0x05, img4_magic, sizeof img4_magic)) { // SEPFW after aura
         printf("No more payloads at %p\n", p);
         return NULL;
     } else {
@@ -323,9 +341,10 @@ bool payload_logo(void **custom_128, void **custom_256)
     *custom_128 = NULL;
     *custom_256 = NULL;
 
-    if (!memcmp(p, custom_logo_magic, sizeof(custom_logo_magic))) {
-        void *data = p + sizeof(custom_logo_magic);
-        printf("Found a m1n1 custom logo payload at %p\n", p);
+    size_t hdr = payload_record(p, custom_logo_magic, sizeof custom_logo_magic);
+    if (hdr) {
+        void *data = p + hdr;
+        printf("Found a custom logo payload at %p\n", p);
         *custom_256 = data;
         *custom_128 = data + 4 * 256 * 256;
 

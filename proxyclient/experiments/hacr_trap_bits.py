@@ -3,8 +3,8 @@
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1 import asm
+from aura.setup import *
+from aura import asm
 
 code_len = 12 * 16 * 8 + 4
 data_len = 8 * 16 * 8

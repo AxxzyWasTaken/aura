@@ -39,7 +39,7 @@ struct rela_entry {
 };
 
 void debug_putc(char c);
-void m1n1_main(void);
+void aura_main(void);
 
 extern char _bss_start[0];
 extern char _bss_end[0];
@@ -243,7 +243,7 @@ void _start_c(void *boot_args, void *base)
     printf("\n");
 
     exception_initialize();
-    m1n1_main();
+    aura_main();
 }
 
 /* Secondary SMP core boot */
@@ -282,5 +282,5 @@ void _cpu_reset_c(void *stack)
     if (!is_boot_cpu())
         smp_secondary_entry();
     else
-        m1n1_main();
+        aura_main();
 }

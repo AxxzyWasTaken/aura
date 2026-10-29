@@ -3,10 +3,10 @@ import sys, pathlib
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.shell import run_shell
-from m1n1.hw.dart import DART
-from m1n1.hw.aes import *
+from aura.setup import *
+from aura.shell import run_shell
+from aura.hw.dart import DART
+from aura.hw.aes import *
 
 def aes_set_custom_key(
     aes,

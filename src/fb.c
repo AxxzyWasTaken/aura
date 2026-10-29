@@ -538,7 +538,7 @@ void fb_init(bool clear)
     if (clear) {
         memset32(fb.ptr, 0, fb.size);
     } else {
-        // Workaround for m1n1 stage 1 framebuffer UAF bug
+        // Workaround for aura stage 1 framebuffer UAF bug
         memset32(fb.ptr, 0, min(256, fb.size));
     }
 

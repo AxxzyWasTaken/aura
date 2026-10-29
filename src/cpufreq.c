@@ -235,7 +235,7 @@ void cpufreq_fixup_cluster(const struct cluster_t *cluster)
 {
     u64 val = read64(cluster->base + CLUSTER_PSTATE);
 
-    // Older versions of m1n1 stage 1 erroneously cleared CLUSTER_PSTATE_UNK_Mx, so put it back for
+    // Older versions of aura stage 1 erroneously cleared CLUSTER_PSTATE_UNK_Mx, so put it back for
     // firmwares it supported (don't touch anything newer, which includes newer devices).
     // Also clear the CLUSTER_PSTATE_DESIRED2 field since it doesn't seem to do anything, and isn't
     // used on newer chips.

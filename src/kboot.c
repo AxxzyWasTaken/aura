@@ -59,7 +59,7 @@ static size_t initrd_size = 0;
 static char *chosen_params[MAX_CHOSEN_PARAMS][2];
 static char *uboot_config[MAX_UBOOT_CONFIGS][2];
 
-extern const char *const m1n1_version;
+extern const char *const aura_version;
 extern u64 relocated_from;
 
 int dt_set_gpu(void *dt);
@@ -141,7 +141,7 @@ void get_notchless_fb(u64 *fb_base, u64 *fb_height)
 }
 
 /*
- * chosen.asahi,show-notch=1 (m1n1 config): the OS drives the full panel, notch rows
+ * chosen.asahi,show-notch=1 (aura config): the OS drives the full panel, notch rows
  * included (appledrm.show_notch=1). Keep iBoot's full framebuffer then, so
  * the boot framebuffer covers the same rows as the display driver later does and early
  * users (fbcon, Plymouth) do not shift by the notch height at the handoff.
@@ -418,7 +418,7 @@ static int dt_set_chosen(void)
                     strlen(os_firmware.string) + 1))
         bail("FDT: couldn't set asahi,os-fw-version\n");
 
-    if (fdt_setprop(dt, node, "asahi,m1n1-stage2-version", m1n1_version, strlen(m1n1_version) + 1))
+    if (fdt_setprop(dt, node, "asahi,m1n1-stage2-version", aura_version, strlen(aura_version) + 1))
         bail("FDT: couldn't set asahi,m1n1-stage2-version\n");
 
     if (adt) {
@@ -457,7 +457,7 @@ static int dt_set_chosen(void)
     /*
      * On M2 (T8112, T602x) and later SoCs, iBoot establishes hardware warm
      * registration of the Secure Enclave (SEP) and Touch ID sensor before
-     * handoff. Querying the SEP ASC mailbox in m1n1 desynchronizes this
+     * handoff. Querying the SEP ASC mailbox in aura desynchronizes this
      * state, causing the SEP firmware to refuse subsequent biometric commands.
      * M1 SoCs (T8103, T600x) rely on cold boot and do not have this restriction.
      */
@@ -2307,7 +2307,7 @@ static int dt_add_reserved_regions(const char *dcp_alias, const char *disp_alias
     }
 
     /* enable dart-disp0, it is disabled in device tree to avoid resetting
-     * it and breaking display scanout when booting with old m1n1 which
+     * it and breaking display scanout when booting with old aura which
      * does not lock dart-disp0.
      */
     if (disp_alias && chip_id != T8140) {
@@ -6619,15 +6619,15 @@ static int dt_setup_mtd_phram(void)
     // init memory backed iodev for console log
     logbuf.buffer = (void *)top_of_memory_alloc(LOGBUF_SIZE);
     if (!logbuf.buffer)
-        bail("FDT: failed to allocate m1n1 log buffer\n");
+        bail("FDT: failed to allocate aura log buffer\n");
 
     snprintf(node_name, sizeof(node_name), "flash@%lx", (u64)logbuf.buffer);
     node = dt_get_or_add_reserved_mem(node_name, "phram", false, (u64)logbuf.buffer, SZ_16K);
 
     if (node > 0) {
-        int ret = fdt_setprop_string(dt, node, "label", "m1n1_stage2.log");
+        int ret = fdt_setprop_string(dt, node, "label", "aura_stage2.log");
         if (ret)
-            bail("FDT: failed to setup m1n1 log MTD phram label\n");
+            bail("FDT: failed to setup aura log MTD phram label\n");
     }
 
     return 0;
@@ -6724,7 +6724,7 @@ int kboot_prepare_dt(void *fdt)
         }
     }
     if (fdt_add_mem_rsv(dt, (u64)_base, image_end - (u64)_base))
-        bail("FDT: couldn't add reservation for m1n1 and inherited high-water\n");
+        bail("FDT: couldn't add reservation for aura and inherited high-water\n");
 
     /*
      * A live ANS handed to Linux keeps every buffer an earlier stage gave it (on a normal boot
@@ -6760,7 +6760,7 @@ int kboot_prepare_dt(void *fdt)
     // the old base. On T8140 it moved down to the run base stage 1 gave it;
     // the old base is the staged copy, already inside the extent above.
     if (relocated_from && fdt_add_mem_rsv(dt, relocated_from, SZ_16K))
-        bail("FDT: couldn't add reservation for m1n1's old reset vector\n");
+        bail("FDT: couldn't add reservation for aura's old reset vector\n");
 
     if (chip_id == T8140) {
         u64 ro_start, ro_end;
@@ -6773,7 +6773,7 @@ int kboot_prepare_dt(void *fdt)
         if (resv < 0)
             bail("FDT: missing /reserved-memory for firmware RO range\n");
         char name[48];
-        snprintf(name, sizeof(name), "m1n1-secondary-ro@%lx", ro_start);
+        snprintf(name, sizeof(name), "aura-secondary-ro@%lx", ro_start);
         int node = fdt_subnode_offset(dt, resv, name);
         if (node < 0)
             node = fdt_add_subnode(dt, resv, name);
@@ -6785,7 +6785,7 @@ int kboot_prepare_dt(void *fdt)
         printf("FDT: reserved firmware RO [0x%lx, 0x%lx)\n", ro_start, ro_end);
     } else if (!cpu_features->apple_sysregs_unlocked && !in_el2()) {
         /*
-         * A guest under the m1n1 hypervisor runs at EL1. The host keeps the
+         * A guest under the aura hypervisor runs at EL1. The host keeps the
          * SMP-RO range and starts the guest's CPUs itself, so the guest
          * leaves it out. This is how the J616s guest boots.
          */

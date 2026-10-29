@@ -3,7 +3,7 @@ import struct
 
 import pytest
 
-from proxyclient.m1n1.proxy import M1N1Proxy, ProxyRemoteError
+from proxyclient.aura.proxy import AuraProxy, ProxyRemoteError
 
 
 class FakeInterface:
@@ -20,7 +20,7 @@ class FakeInterface:
 
 def test_cdc_schedule_and_status_use_pinned_wire_opcodes():
     iface = FakeInterface(retval=0x502)
-    proxy = M1N1Proxy(iface)
+    proxy = AuraProxy(iface)
     assert proxy.cdc_schedule(5000, 0x6) == 0x502
     assert proxy.cdc_status() == 0x502
     assert iface.requests == [
@@ -30,6 +30,6 @@ def test_cdc_schedule_and_status_use_pinned_wire_opcodes():
 
 
 def test_rejected_schedule_is_a_remote_error():
-    proxy = M1N1Proxy(FakeInterface(status=-2))
+    proxy = AuraProxy(FakeInterface(status=-2))
     with pytest.raises(ProxyRemoteError, match="Remote operation failed"):
         proxy.cdc_schedule(500, 0x6)

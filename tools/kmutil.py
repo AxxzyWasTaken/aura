@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCRIPT_HEADER = b'''#!/bin/sh
 #######################################################################
-# kmutil configure-boot script with embedded m1n1.bin for easy setup
+# kmutil configure-boot script with embedded aura.bin for easy setup
 #
 # Preparations on the host:
 #     make
@@ -25,22 +25,22 @@ set -e
 boot_disk=$(bless --getboot)
 system_dir=$(diskutil info -plist ${boot_disk} | plutil -extract MountPoint raw -)
 
-"${system_dir}"/usr/bin/uudecode <<EOF_M1N1
-begin-base64 644 m1n1.bin
+"${system_dir}"/usr/bin/uudecode <<EOF_AURA
+begin-base64 644 aura.bin
 '''
 
 SCRIPT_TRAILER = b'''====
-EOF_M1N1
+EOF_AURA
 
 # TODO: ensure this is booted into 1TR and check boot policy, see step2.sh from asahi-installer
 
 echo
-echo "Set m1n1.bin as custom boot object for \"${system_dir}\"?"
+echo "Set aura.bin as custom boot object for \"${system_dir}\"?"
 echo "Use control-c to cancel."
 echo
 read
 
-while ! kmutil configure-boot -c m1n1.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v "${system_dir}"; do
+while ! kmutil configure-boot -c aura.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v "${system_dir}"; do
     echo
     echo "kmutil failed. Did you mistype your password?"
     echo "Press enter to try again."
@@ -89,7 +89,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--port', default=8000, type=int,
                         help='bind to this port '
                              '(default: %(default)s)')
-    parser.add_argument('payload', default='build/m1n1.bin', type=pathlib.Path, nargs='?',
+    parser.add_argument('payload', default='build/aura.bin', type=pathlib.Path, nargs='?',
                         help='Serve payload as bputil self-install script '
                              '(default: %(default)s)')
     args = parser.parse_args()

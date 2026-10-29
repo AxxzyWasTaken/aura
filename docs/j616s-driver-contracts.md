@@ -193,14 +193,14 @@ yet provide a reliable ownership-release acknowledgement.
 The C-backed proxy API takes `dart_init(base, sid, dart_type, keep_pts=False)`;
 the type remains the third Python argument. Persistent `dart_map` buffers must
 be caller-owned target addresses, not byte strings passed for temporary upload.
-With the updated m1n1 image, failed DART commands raise `ProxyRemoteError`.
+With the updated aura image, failed DART commands raise `ProxyRemoteError`.
 Retain the backing memory after an uncertain map or unmap until recovery.
 
 ## Audio transport and mappings
 
 Use the advertised `aop-audio` service on endpoint 0x22 after application queue
 startup. `AudioAttachDevice`, `GetDeviceProp` and `SetDeviceProp` are defined in
-[ipc.py](../proxyclient/m1n1/fw/aop/ipc.py). Calls use EPIC version 2. Reject
+[ipc.py](../proxyclient/aura/fw/aop/ipc.py). Calls use EPIC version 2. Reject
 nonzero return codes and malformed reply lengths before interpreting payloads.
 
 | Path | Tested mapping | Sample contract |
@@ -246,7 +246,7 @@ The public command is now qualified for both owned capture extents on the
 pinned cold profile. From a recent compatible RAM proxy with cold AOP state:
 
 ```sh
-M1N1DEVICE=/dev/ttyACM0 python proxyclient/experiments/aop_capture.py /tmp/hqai.wav
+AURADEVICE=/dev/ttyACM0 python proxyclient/experiments/aop_capture.py /tmp/hqai.wav
 ```
 
 The default is 6 MiB (nominally 10.92 seconds); `--bytes 0x200000` selects the
@@ -262,7 +262,7 @@ before installing its owned mapping. Prepare one owned non-repeating NS RX0
 descriptor, start DMA, then request `hpai` `pwrd` with `unk2=1`. Check its
 property-200 readback. The tested channel configuration is 32-bit bus width,
 one-word frame, SRAM carveout `(0x800, 0x800)` and burst word `0xc00060`.
-Use [admac.py](../proxyclient/m1n1/hw/admac.py) rather than recreating split-bank
+Use [admac.py](../proxyclient/aura/hw/admac.py) rather than recreating split-bank
 address arithmetic.
 
 Tested descriptor extents are 2 MiB and 6 MiB. The latter contains 524,288
@@ -285,7 +285,7 @@ float words as signed integer PCM.
 
 ### Headset input
 
-Use [CS42L84Input](../proxyclient/m1n1/hw/codecs/cs42l84_input.py) for the tested
+Use [CS42L84Input](../proxyclient/aura/hw/codecs/cs42l84_input.py) for the tested
 input-only codec lifecycle. The caller owns board power/reset, the fresh
 109-byte MCA profile, DMA preparation and receiver start/stop. The documented
 `MIC_DET_CTL4.LATCH_TO_VP` initialization is required by the working capture;
@@ -407,10 +407,10 @@ calibration, simultaneous all-six and continuous operation remain unfinished.
 
 ## ISP completed colour frames
 
-Compose the existing [startup](../proxyclient/m1n1/fw/isp/isp_startup.py),
-[sensor](../proxyclient/m1n1/fw/isp/isp_sensor.py),
-[capture](../proxyclient/m1n1/fw/isp/isp_capture.py) and
-[buffer](../proxyclient/m1n1/fw/isp/isp_buffer.py) components. The profile pins
+Compose the existing [startup](../proxyclient/aura/fw/isp/isp_startup.py),
+[sensor](../proxyclient/aura/fw/isp/isp_sensor.py),
+[capture](../proxyclient/aura/fw/isp/isp_capture.py) and
+[buffer](../proxyclient/aura/fw/isp/isp_buffer.py) components. The profile pins
 the firmware/ADT layout. Check IMX958 identity and complete preset replies
 before selecting the render route.
 
@@ -420,7 +420,7 @@ extents are 1,851,392/933,888 bytes, totaling 2,785,280. Use the returned layout
 not tightly packed width/height arithmetic. This is the driver's aligned
 `output_geometry`, not an independently returned firmware allocation size.
 BT.709 video-range conversion in
-[isp_pixels.py](../proxyclient/m1n1/fw/isp/isp_pixels.py) produces a display PNG.
+[isp_pixels.py](../proxyclient/aura/fw/isp/isp_pixels.py) produces a display PNG.
 
 A cold 1920x1080 test now receives one completed P010 frame. Its stride is
 3840 and aligned Y/UV extents are 0x3f8000/0x1fc000, totaling 0x5f4000.
@@ -577,7 +577,7 @@ the older Asahi literals is therefore not justified as a missing native final
 state. The compiled v39 activation already skips that setup helper. Its early
 PIPE route suppresses USB3 resume, but this native provider selects a delegated
 power-manager path that skips the generic direct resume branch. Trace that
-delegated path before proposing an ordering change. No m1n1 SuperSpeed
+delegated path before proposing an ordering change. No aura SuperSpeed
 transport is qualified.
 
 Four separately gated native common-PHY observations give CFG `0x1182e210`,

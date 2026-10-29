@@ -17,17 +17,17 @@ physical monitor. A framebuffer image alone does not prove the USB-C link.
 Then hand over the active simple-framebuffer to U-Boot/Linux and verify both
 the console and display persist. Save exact image hashes, raw logs and receipts.
 
-On J873g, m1n1 now initializes the qualified ATC3 direct DisplayPort route
+On J873g, aura now initializes the qualified ATC3 direct DisplayPort route
 automatically when firmware provides its dummy framebuffer. It starts at
-1280x720 at 60 Hz and enables the normal m1n1 console and logo. A real firmware
+1280x720 at 60 Hz and enables the normal aura console and logo. A real firmware
 framebuffer is adopted unchanged, including one supplied for HDMI; this does
 not add or qualify a new HDMI PHY initialization path. An unsupported or absent
 USB-C connection leaves the KIS proxy available.
 
 From a fresh RAM-loaded candidate with no secondary CPUs started, run
-`proxyclient/experiments/t8152-display.py build/m1n1.bin SHA256 --device PORT
+`proxyclient/experiments/t8152-display.py build/aura.bin SHA256 --device PORT
 --output CAPTURE_DIR --nm llvm-nm`. The output directory must be new. Keep the
-matching debug `m1n1-raw.elf` beside the image. The helper validates the loaded
+matching debug `aura-raw.elf` beside the image. The helper validates the loaded
 code and target and records the console history, scanout pixels, PNG screenshot
 and a JSON receipt. By default it only observes the native boot; it does not
 clear the screen or draw a test banner. Use `--initialize` to retry native
@@ -46,7 +46,7 @@ The native automatic boot and history replay were checked on physical J873g.
 This image was read from the actual scanout framebuffer with the capture tool's
 default observation mode, before any host display-initialization call:
 
-![M6 native m1n1 boot console](images/j873g-boot-console.png)
+![M6 native aura boot console](images/j873g-boot-console.png)
 
 The automatic-display candidate also completed the public U-Boot/Linux handoff
 with all twelve CPUs, shared atomic workloads, bounded CPU-frequency changes

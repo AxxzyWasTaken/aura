@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-from m1n1.trace.isp import ISPTracer
+from aura.trace.isp import ISPTracer
 
 # bootargs += camLogging=0xfffffffffffff
 # all opcodes: https://pastebin.com/F8h7eDRB

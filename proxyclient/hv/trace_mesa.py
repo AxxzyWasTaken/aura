@@ -7,15 +7,15 @@ Things to note:
 import struct
 from construct import *
 
-from m1n1.hv import TraceMode
-from m1n1.proxyutils import RegMonitor
-from m1n1.utils import *
+from aura.hv import TraceMode
+from aura.proxyutils import RegMonitor
+from aura.utils import *
 
-from m1n1.trace import ADTDevTracer
-from m1n1.trace.asc import ASCTracer, ASCRegs, EP, EPState, msg, msg_log, DIR
-from m1n1.trace.dart import DARTTracer
-from m1n1.trace.gpio import GPIOTracer
-from m1n1.trace.spi import SPITracer
+from aura.trace import ADTDevTracer
+from aura.trace.asc import ASCTracer, ASCRegs, EP, EPState, msg, msg_log, DIR
+from aura.trace.dart import DARTTracer
+from aura.trace.gpio import GPIOTracer
+from aura.trace.spi import SPITracer
 
 DARTTracer = DARTTracer._reloadcls()
 ASCTracer = ASCTracer._reloadcls()

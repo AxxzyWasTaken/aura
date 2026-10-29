@@ -111,7 +111,7 @@ KBOOT_GUARD = extract_span(
 )
 
 # ---------------------------------------------------------------------------
-# shared C preamble (m1n1-faithful macros/types)
+# shared C preamble (aura-faithful macros/types)
 # ---------------------------------------------------------------------------
 PRE = r"""
 #include <stdint.h>
@@ -353,7 +353,7 @@ int main(void) {
 # C3 : kboot caller contract -- verbatim guard + verbatim bail macro
 # ---------------------------------------------------------------------------
 C_KBOOT = PRE + r"""
-/* verbatim m1n1 bail() macro (src/kboot.c) */
+/* verbatim aura bail() macro (src/kboot.c) */
 #define bail(...)                                                                                  \
     do {                                                                                           \
         printf(__VA_ARGS__);                                                                       \

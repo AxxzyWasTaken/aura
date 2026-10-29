@@ -3,9 +3,9 @@
 import sys, pathlib, time
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.proxy import REGION_RX_EL1
-from m1n1.setup import *
-from m1n1 import asm
+from aura.proxy import REGION_RX_EL1
+from aura.setup import *
+from aura import asm
 
 p.smp_start_secondaries()
 for i in range(1, 10):

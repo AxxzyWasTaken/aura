@@ -22,7 +22,7 @@
 #include "kboot_gpu26.c"
 #endif
 
-/* ---------- m1n1 globals and stubs ---------- */
+/* ---------- aura globals and stubs ---------- */
 
 void *adt = (void *)1;
 u32 board_id, chip_id;
@@ -1378,7 +1378,7 @@ static void expect_standin_handoff(const u32 *max_pwr)
 }
 
 /*
- * The stand-in max power table (uW) on the host's expf()/powf(); m1n1's own may differ in the last
+ * The stand-in max power table (uW) on the host's expf()/powf(); aura's own may differ in the last
  * digits
  */
 static void t8122_j613_standin_10(void)

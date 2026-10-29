@@ -781,7 +781,7 @@ int display_init(void)
     } else if ((!(cur_boot_args.video.depth & FB_DEPTH_FLAG_RETINA)) && is_mac) {
         printf("display: Internal display with non-retina flag, assuming Sonoma bug and "
                "reconfiguring\n");
-        fb_clear_direct(); // Old m1n1 stage1 ends up with an ugly logo situation, clear it.
+        fb_clear_direct(); // Old aura stage1 ends up with an ugly logo situation, clear it.
         return display_configure(NULL);
 #ifndef CHAINLOADING
     } else if (!has_notch && firmware_sfw_in_range(V15_0B1, FW_MAX) &&

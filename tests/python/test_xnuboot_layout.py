@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""m1n1's C boot_args must match the iBoot layout the proxyclient uses.
+"""aura's C boot_args must match the iBoot layout the proxyclient uses.
 
 iBoot (like XNU's boot_args) puts the command line straight after the
 32-bit devtree_size field. Every revision only changes its length.
@@ -14,7 +14,7 @@ import construct
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "proxyclient"))
-from m1n1.tgtypes import BootArgs_r1, BootArgs_r2, BootArgs_r3  # noqa: E402
+from aura.tgtypes import BootArgs_r1, BootArgs_r2, BootArgs_r3  # noqa: E402
 
 
 def offset(struct, name):

@@ -11,7 +11,7 @@
  * which is its own transaction and is kept from the OS on every supported boot.
  *
  * A fake ADT, a fake PMGR table and fake MMIO/DRAM stand in for the Mac (the stand-in headers are
- * tests/t8122_display_host/); libfdt is m1n1's own. The device tree is built here with libfdt, so
+ * tests/t8122_display_host/); libfdt is aura's own. The device tree is built here with libfdt, so
  * no dtc is needed. Addresses are synthetic, except for the T6041 register blocks the handoff
  * checks against fixed values (dcp, dart-dcp, dart-disp0); stream IDs are T6041's: dart-dcp SID
  * 23, dart-disp0 SIDs 0 (display) and 16 (piodma), of 32.
@@ -63,7 +63,7 @@ u64 kboot_fb_base(void)
 {
     return fb_base;
 }
-/* Where stage 1 loaded m1n1: clear of the __OS_LOG buffer below */
+/* Where stage 1 loaded aura: clear of the __OS_LOG buffer below */
 void kboot_loaded_file_part(u64 *base, u64 *size)
 {
     *base = 0x10010000000ULL;
@@ -831,7 +831,7 @@ static bool u32s_are(const void *dt, int node, const char *prop, const u32 *want
     return true;
 }
 
-/* What m1n1 publishes for the kernel's T6041 display gate and DCP driver */
+/* What aura publishes for the kernel's T6041 display gate and DCP driver */
 static void contract_check(const void *dt)
 {
     int dcp = alias_node(dt, "dcp"), disp = alias_node(dt, "disp0");
@@ -1150,7 +1150,7 @@ int main(int argc, char **argv)
 
     printf("== %s: %s\n", s, sc->what);
     if (!fdt_getprop(in, fdt_path_offset(in, "/chosen"), OPTIN, NULL))
-        check(true, "no /chosen/" OPTIN " in the device tree handed to m1n1");
+        check(true, "no /chosen/" OPTIN " in the device tree handed to aura");
     fflush(stdout);
     int ret = dt_set_display_handoff(dt);
     fflush(stdout);

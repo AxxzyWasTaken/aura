@@ -28,7 +28,7 @@ def test_inherited_reservation(tmp_path):
         r"    if \(fdt_add_mem_rsv\(dt, \(u64\)_base, image_end - \(u64\)_base\)\)\n"
         r"        bail\([^\n]+\);", text[end:]
     )
-    assert call, "missing real m1n1 image reservation"
+    assert call, "missing real aura image reservation"
     code = tmp_path / "inherited.c"
     code.write_text(r'''
 #include <assert.h>

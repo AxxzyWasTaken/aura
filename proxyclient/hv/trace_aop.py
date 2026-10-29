@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: MIT
 
-from m1n1.trace import Tracer
-from m1n1.trace.dart import DARTTracer
-from m1n1.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR, EPContainer
-from m1n1.utils import *
-from m1n1.constructutils import *
-from m1n1.fw.afk.rbep import *
-from m1n1.fw.afk.epic import *
-from m1n1.fw.aop import *
-from m1n1.fw.aop.base import AOPBase
-from m1n1.fw.aop.ipc import *
+from aura.trace import Tracer
+from aura.trace.dart import DARTTracer
+from aura.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR, EPContainer
+from aura.utils import *
+from aura.constructutils import *
+from aura.fw.afk.rbep import *
+from aura.fw.afk.epic import *
+from aura.fw.aop import *
+from aura.fw.aop.base import AOPBase
+from aura.fw.aop.ipc import *
 
 import sys
 

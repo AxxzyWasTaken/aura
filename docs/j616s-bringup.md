@@ -2,7 +2,7 @@
 
 Tested on J616sAP (Mac16,7), board 6, with the ADT supplied by macOS build
 26A428. The branch is stacked on `j700` while the draft targets `aurora-wip`.
-Upstream Asahi M1/M2/M3 m1n1 and proxyclient behavior is the implementation
+The M1/M2/M3 boot and proxyclient behavior is the implementation
 standard; J700 is the feature-parity target. Linux RAM boot preparation is
 now in scope. A bounded one-CPU native Linux test reaches PID 1 and the boot
 framebuffer. Its USB gadget enumerates at high speed, but the host times out
@@ -70,7 +70,7 @@ Deep sleep, hotplug, multicore hypervisor operation and sustained thermal load r
 unqualified. Reproduce the cold independent-workload test with:
 
 ```sh
-M1N1DEVICE=/dev/ttyACM0 python proxyclient/experiments/t6040_amp.py
+AURADEVICE=/dev/ttyACM0 python proxyclient/experiments/t6040_amp.py
 ```
 
 The probe leaves secondaries running in WFE mode. Reboot before repeating it.
@@ -115,7 +115,7 @@ ln -s "$GADGET/functions/acm.gs0" "$GADGET/configs/c.1/acm.gs0"
 ln -s "$GADGET/functions/ecm.usb0" "$GADGET/configs/c.1/ecm.usb0"
 ```
 
-A host last-close with `HUPCL` can send a CDC control request during m1n1
+A host last-close with `HUPCL` can send a CDC control request during aura
 retirement. The diagnostic client holds its original descriptor until the
 source USB device disappears or a two-second deadline, then closes it without
 further proxy operations. Native handoff remains intermittent; this comparison
@@ -125,7 +125,7 @@ boot policy, partitions and attached storage remain unchanged.
 
 ## Minimal Linux RAM boot
 
-A guarded direct-entry test boots Linux 7.1.12+ through m1n1's hypervisor on
+A guarded direct-entry test boots Linux 7.1.12+ through aura's hypervisor on
 one CPU with an owned 64 MiB guest allocation. Image, FDT and initramfs are
 read back twice and cache-published before entry. The guest maps only its RAM,
 the physical AIC and an intercepted UART console on the second CDC interface.
@@ -743,7 +743,7 @@ separate when converting timeouts.
   firmware announces seven channels, queue offset `0xef40`, descriptor flags
   2 and an extra-heap request of `0x6500000` bytes. Its bootstrap metadata
   changes, with zero DART faults and CPU exceptions. Watchdog recovery returns
-  to macOS after a one-time m1n1 boot, or to CDC after m1n1 is selected as
+  to macOS after a one-time aura boot, or to CDC after aura is selected as
   default. The modern `0x290`-byte boot block is accepted. All seven channel
   descriptors parse with 64-bit ring addresses in the owned IPC allocation,
   and the requested `0x6500000`-byte heap is mapped on all three DARTs.
@@ -1078,7 +1078,7 @@ original mask `0x1` was restored and read back afterward. No kext replacement
 or register writes were needed for this capture.
 
 This establishes the native driver sequence for a warm cable reconnect. It
-does not trace firmware-internal activity or prove that a cold m1n1 startup
+does not trace firmware-internal activity or prove that a cold aura startup
 has the same firmware lifetime. In particular, the short native ACIO open
 does not establish whether it restarts the PHY firmware. The proxy still
 requires a separately qualified physical SuperSpeed link.
@@ -1214,10 +1214,10 @@ quiescence; reboot before creating another proxy heap or reusing DMA memory.
 
 ## Reproducing the cold IOP probes
 
-After rebooting into m1n1 proxy mode, run:
+After rebooting into aura proxy mode, run:
 
 ```sh
-M1N1DEVICE=/dev/ttyACM0 python proxyclient/experiments/t6040_iop.py sio
+AURADEVICE=/dev/ttyACM0 python proxyclient/experiments/t6040_iop.py sio
 ```
 
 Select `sio`, `mtp` or `aop` as the final argument. SIO/MTP use existing
@@ -1243,7 +1243,7 @@ To test the touchpad firmware in RAM, pass the HIDF file produced by Asahi's
 firmware extractor for J616s and macOS build 26A428:
 
 ```sh
-M1N1DEVICE=/dev/ttyACM0 python proxyclient/experiments/t6040_iop.py mtp \
+AURADEVICE=/dev/ttyACM0 python proxyclient/experiments/t6040_iop.py mtp \
     --touchpad-firmware /path/to/tpmtfw-j616s.bin
 ```
 

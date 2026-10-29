@@ -6,8 +6,8 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import argparse, pathlib
 
-from m1n1 import adt
-from m1n1.utils import align_up
+from aura import adt
+from aura.utils import align_up
 
 parser = argparse.ArgumentParser(description='Convert ADT PMGR nodes to Device Tree format')
 parser.add_argument("-m", "--multidie", action="store_true")

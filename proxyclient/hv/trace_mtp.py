@@ -2,13 +2,13 @@
 import struct
 
 from construct import *
-from m1n1.utils import *
-from m1n1.proxyutils import *
-from m1n1.constructutils import *
-from m1n1.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR
-from m1n1.trace.dockchannel import DockChannelTracer
-from m1n1.trace.dart import DARTTracer
-from m1n1.fw.mtp import *
+from aura.utils import *
+from aura.proxyutils import *
+from aura.constructutils import *
+from aura.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR
+from aura.trace.dockchannel import DockChannelTracer
+from aura.trace.dart import DARTTracer
+from aura.fw.mtp import *
 
 class MTPTracer(ASCTracer):
     def handle_msg(self, direction, r0, r1):

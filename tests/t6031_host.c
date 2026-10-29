@@ -4,7 +4,7 @@
  * and display handoff (kboot_display_handoff.c), the GPU firmware facts, the bounded powered
  * identity read and the GPU setup (kboot_gpu.c, kboot_gpu_t6031.c), the PMP values (kboot.c's
  * dt_pass_pmp(), copied out by the run script) and the firmware image UUIDs (kboot_t6031.c).
- * m1n1's own ADT reader (rust/src/adt.rs, built for the host), PMGR code (pmgr.c), firmware
+ * aura's own ADT reader (rust/src/adt.rs, built for the host), PMGR code (pmgr.c), firmware
  * identification (firmware.c) and libfdt run unchanged. Only the bus is simulated.
  *
  *   t6031-host <mac.adt> <in.dtb> <scenario>      (tests/run-t6031-handoff.sh builds both)
@@ -15,7 +15,7 @@
  * What no ADT can say is simulated here and marked SIMULATED where it is set: the PMGR power
  * states, the DCP and DART registers and page tables (which display stream maps which segment
  * follows the J613), the GPU ID, topology and core mask registers (a 40-core G15C) and the GPU
- * firmware's image-info header and RTKit version. The scenarios check what m1n1 publishes and,
+ * firmware's image-info header and RTKit version. The scenarios check what aura publishes and,
  * on every failure path, that the hardware is left as it was found.
  */
 #include <assert.h>
@@ -43,7 +43,7 @@ int dt_set_display_handoff(void *dt);
 int dt_set_gpu(void *dt);
 void host_pmp_t6031(void *dt); /* the run script's copy of kboot.c's dt_set_pmp_t6031() */
 
-/* ---------- m1n1 globals and stubs ---------- */
+/* ---------- aura globals and stubs ---------- */
 
 void *adt;
 static u32 adt_size;
@@ -77,7 +77,7 @@ int debug_printf(const char *fmt, ...)
 /*
  * Boot arguments and stage 1's load address, from this Mac's report: usable RAM from the first
  * System RAM range of iomem.txt (as on a J613, the GPU firmware lies just below it) to the end of
- * m1n1's top-of-memory allocations; the boot framebuffer of system.txt.
+ * aura's top-of-memory allocations; the boot framebuffer of system.txt.
  */
 static u64 ram_min = 0x1000223c000UL, ram_len = 0x10bca4b0000UL - 0x1000223c000UL;
 static u64 fb_base = 0x10bd1485c00UL;
@@ -95,7 +95,7 @@ u64 kboot_fb_base(void)
 }
 void kboot_loaded_file_part(u64 *base, u64 *size)
 {
-    *base = 0x10004f5c000UL; /* the 16K m1n1 keeps for its old reset vector, in iomem.txt */
+    *base = 0x10004f5c000UL; /* the 16K aura keeps for its old reset vector, in iomem.txt */
     *size = 0xe0000;         /* this build's file part */
 }
 u64 top_of_memory_alloc(size_t size)
@@ -1269,7 +1269,7 @@ int main(int argc, char **argv)
         void *dt = load_dt(160 * 1024);
         printf("== %s\n", scenarios[i].name);
         scenarios[i].fn(dt);
-        printf("== m1n1 log (%zu bytes)\n%s", log_len, log_buf);
+        printf("== aura log (%zu bytes)\n%s", log_len, log_buf);
         printf("%s: %s\n", scenarios[i].name, failures ? "FAIL" : "pass");
         return failures ? 1 : 0;
     }

@@ -4,16 +4,16 @@
 import sys, pathlib, time
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from m1n1.setup import *
-from m1n1.constructutils import Ver
-from m1n1.utils import *
+from aura.setup import *
+from aura.constructutils import Ver
+from aura.utils import *
 
 Ver.set_version(u)
 
-from m1n1.shell import run_shell
+from aura.shell import run_shell
 
-from m1n1.agx import AGX
-from m1n1.agx.context import *
+from aura.agx import AGX
+from aura.agx.context import *
 
 p.pmgr_adt_power_enable("/arm-io/gfx-asc")
 p.pmgr_adt_power_enable("/arm-io/sgx")
