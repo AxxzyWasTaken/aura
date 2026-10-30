@@ -331,7 +331,9 @@ int mcc_unmap_carveouts(void)
 
 int mcc_init_t8103(int node, int *path, bool t8112)
 {
-    printf("MCC: Initializing T8103 MCC...\n");
+    const char *chip = t8112 ? "T8112" : "T8103";
+
+    printf("MCC: Initializing %s MCC...\n", chip);
 
     mcc_count = 1;
     mcc_regs[0].plane_stride = T8103_PLANE_STRIDE;
@@ -368,7 +370,7 @@ int mcc_init_t8103(int node, int *path, bool t8112)
     mcc_regs[0].has_cache_control = true;
     mcc_regs[0].tz = &t8103_tz_regs;
 
-    printf("MCC: Initialized T8103 MCC (%d channels)\n", val);
+    printf("MCC: Initialized %s MCC (%d channels)\n", chip, val);
 
     mcc_initialized = true;
 
