@@ -2715,18 +2715,29 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
     return dt_reserve_asc_segments(adt_path, adt_path_alt, fdt_path, remap, base, false);
 }
 
-static int dt_set_ave(void)
-{
-    if (chip_id != T8140)
-        return 0;
+/*
+ * The AVE video encoder runs firmware that iBoot preloads. The ADT calls the
+ * encoder "ave" on the A18 Pro and "ave0" on the M4 Pro. The DT node is found
+ * by its compatible, so describing a SoC's encoder is all it takes.
+ */
+static const char *const ave_compatibles[] = {
+    "apple,t8140-ave",
+    "apple,t6041-ave",
+};
 
-    const char *path = "/soc/video-codec@285100000";
-    int node = fdt_path_offset(dt, path);
-    if (node < 0)
-        return 0;
+static int dt_set_ave_node(int node)
+{
+    char path[64];
+    if (fdt_get_path(dt, node, path, sizeof(path)))
+        bail("FDT: AVE node path too long\n");
 
     const char *reason = "invalid ADT firmware segments";
-    int anode = adt_path_offset(adt, "/arm-io/ave");
+    const char *adt_path = "/arm-io/ave";
+    int anode = adt_path_offset(adt, adt_path);
+    if (anode < 0) {
+        adt_path = "/arm-io/ave0";
+        anode = adt_path_offset(adt, adt_path);
+    }
     if (anode < 0) {
         reason = "ADT node absent";
         goto disable;
@@ -2794,7 +2805,7 @@ static int dt_set_ave(void)
     for (size_t i = 0; i < count; i++)
         crcs[i] = tinf_crc32((void *)seg[i].phys, seg[i].size);
 
-    if (dt_reserve_asc_firmware("/arm-io/ave", NULL, path, true, 0)) {
+    if (dt_reserve_asc_firmware(adt_path, NULL, path, true, 0)) {
         reason = "firmware reservation failed";
         goto disable;
     }
@@ -2815,6 +2826,16 @@ disable:
     if (node >= 0 && fdt_setprop_string(dt, node, "status", "disabled"))
         return -1;
     printf("FDT: AVE disabled: %s\n", reason);
+    return 0;
+}
+
+static int dt_set_ave(void)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(ave_compatibles); i++) {
+        int node = fdt_node_offset_by_compatible(dt, -1, ave_compatibles[i]);
+        if (node >= 0)
+            return dt_set_ave_node(node);
+    }
     return 0;
 }
 
