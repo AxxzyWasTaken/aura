@@ -50,3 +50,13 @@ bool stage1_proxy_action_needs_cleanup(enum stage1_payload_action action)
 {
     return action == STAGE1_PAYLOAD_NATIVE;
 }
+
+/*
+ * The previous boot ended without a clean shutdown before an OS started: a Stage 2 or a later
+ * loader that hangs, faults or is forced off. Linux clears the counts once it runs, so this holds
+ * for one boot after each such failure.
+ */
+bool stage1_previous_boot_stopped_early(u8 counts, u8 error_stage)
+{
+    return (counts & 0xf) && error_stage < STAGE1_BOOT_STAGE_KERNEL_STARTED;
+}
