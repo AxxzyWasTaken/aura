@@ -306,8 +306,8 @@ void aura_main(void)
     cpufreq_fixup();
 #endif
 
-    /* T6040: nothing else in an aura tether chain clears iBoot's failed-boot count. */
-    if (chip_id == T6040)
+    /* T6040, T8140: nothing else in an aura tether chain clears iBoot's failed-boot count. */
+    if (chip_id == T6040 || chip_id == T8140)
         pmu_clear_panic_counter();
 
     printf("Initialization complete.\n");
