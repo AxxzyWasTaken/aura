@@ -120,6 +120,7 @@ def test_t8140_t8132_return_before_the_dart_path(tmp_path):
     soc = (SOURCE / "src/soc.h").read_text()
     chips = "\n".join(re.findall(r"^#define (?:T8140|T8132|T8152|T6000|S5L8960X)\s+0x[0-9a-fA-F]+\s*$",
                                  soc, re.M))
+    panel = function(display, "static bool display_internal_panel_absent(")
     init = function(display, "int display_init(void)")
     inherited = function(display, "bool display_dart_tables_inherited(void)")
     # The early return the PR cites, ahead of the dummy framebuffer path.
@@ -128,7 +129,8 @@ def test_t8140_t8132_return_before_the_dart_path(tmp_path):
     line = display[:display.index(init)].count("\n") + init[:early].count("\n") + 1
     print(f"display_init() returns early for T8140/T8132 at src/display.c:{line}")
     code = tmp_path / "inherited-only.c"
-    code.write_text(HARNESS % {"chips": chips, "display_init": init, "inherited": inherited})
+    code.write_text(HARNESS % {"chips": chips, "display_init": panel + "\n" + init,
+                               "inherited": inherited})
     binary = tmp_path / "inherited-only"
     compiled = subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-Wall", "-Wextra",
                                "-Werror", "-Wno-unused-function", str(code), "-o",
