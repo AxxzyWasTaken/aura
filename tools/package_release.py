@@ -32,7 +32,8 @@ def main():
         raise SystemExit("Build version does not match the requested release")
     files = [build / n for n in ("aura.bin", "aura.macho", "build_cfg.h", "build_tag.h")]
     files += [repo / "LICENSE", repo / "docs/releases/0.1.0.md"]
-    files += [repo / "docs/boot-options.md", repo / "docs/j700-install.md"]
+    files += [repo / "docs/boot-options.md", repo / "docs/j700-install.md",
+              repo / "docs/stage2-dtbs.md", repo / "tools/compose_stage2.py"]
     for folder in ("LICENSES", "3rdparty_licenses"):
         files += sorted(p for p in (repo / folder).rglob("*") if p.is_file())
     manifest = {
