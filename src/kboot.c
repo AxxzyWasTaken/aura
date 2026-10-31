@@ -2717,10 +2717,13 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
 
 /*
  * The AVE video encoder runs firmware that iBoot preloads. The ADT calls the
- * encoder "ave" on the A18 Pro and "ave0" on the M4 Pro. The DT node is found
- * by its compatible, so describing a SoC's encoder is all it takes.
+ * encoder "ave" on the M2 and A18 Pro and "ave0" on the M1 Pro/Max and M4 Pro.
+ * The DT node is found by its compatible, so describing a SoC's encoder is all
+ * it takes.
  */
 static const char *const ave_compatibles[] = {
+    "apple,t6000-ave",
+    "apple,t8112-ave",
     "apple,t8140-ave",
     "apple,t6041-ave",
 };
