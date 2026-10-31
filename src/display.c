@@ -923,6 +923,23 @@ fail:
     return -1;
 }
 
+/*
+ * iBoot records the internal panel it found in the ADT: the panel's pixel pitch in the display
+ * node's dot-pitch and the panel's serial number in /product raw-panel-serial-number. A Mac with
+ * its panel disconnected has a zero dot-pitch and no panel serial, and its DCP never reports a
+ * connected display, so waiting for one only costs the whole status timeout (2 s). Both must say
+ * so; a missing or unexpected dot-pitch, or no /product node, counts as a panel.
+ */
+static bool display_internal_panel_absent(int node, int product)
+{
+    u32 len = 0;
+    const u32 *dot_pitch = adt_getprop(adt, node, "dot-pitch", &len);
+
+    if (!dot_pitch || len != sizeof(*dot_pitch) || *dot_pitch || product < 0)
+        return false;
+    return !adt_getprop(adt, product, "raw-panel-serial-number", NULL);
+}
+
 int display_init(void)
 {
     if (chip_id == T8152) {
@@ -963,6 +980,12 @@ int display_init(void)
     if (chip_id == T8140 || chip_id == T8132) {
         printf("display: preserving inherited display (%ldx%ld)\n", cur_boot_args.video.width,
                cur_boot_args.video.height);
+        return 0;
+    }
+
+    if (!display_is_external && is_mac && display_internal_panel_absent(node, product)) {
+        printf("display: no internal panel (dot-pitch 0, no panel serial), skipping display "
+               "setup\n");
         return 0;
     }
 

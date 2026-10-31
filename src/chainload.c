@@ -4,6 +4,7 @@
 
 #include "chainload.h"
 #include "adt.h"
+#include "boot_options.h"
 #include "heapblock.h"
 #include "malloc.h"
 #include "memory.h"
@@ -15,7 +16,8 @@
 #include "xnuboot.h"
 
 #ifdef CHAINLOADING
-int rust_load_image(const char *spec, void **image, size_t *size, bool *proxy_request);
+int rust_load_image(const char *spec, void **image, size_t *size, bool *proxy_request, char *trial,
+                    size_t trial_capacity);
 void rust_free_image(void *image, size_t size);
 #endif
 
@@ -109,6 +111,7 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
     u64 image_end = new_base + image_size;
     u64 packed_end = image_end + fw_size;
     u64 run_base = 0, footprint = 0;
+    bool must_stage = false;
     if (ro_status == 1 && image_end > ro_start && new_base < ro_end) {
         /*
          * T8140: the firmware RO range lies about 10 MiB above our base on a J700, and the
@@ -128,12 +131,24 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
         printf("chainload: image destination is invalid or overlaps firmware RO\n");
         return -1;
     } else if (live_heap > inherited_top && image_end > inherited_top && new_base < live_heap) {
-        printf("chainload: image span overlaps the live heap\n");
-        return -1;
+        /*
+         * The next stage is larger than the room our caller left between our base and the heap
+         * (a Stage 1 smaller than its Stage 2 plus the firmware block), so a copy to our base
+         * would run over the heap that holds the staged image. An aura image can run from where
+         * it is staged instead and move only its first footprint bytes to our base, which is
+         * safe while those stay below the heap.
+         */
+        footprint = chainload_run_footprint(image, size);
+        if (!footprint || (new_base & (SZ_16K - 1)) || inherited_top <= new_base ||
+            footprint > inherited_top - new_base) {
+            printf("chainload: image span overlaps the live heap\n");
+            return -1;
+        }
+        must_stage = true;
     }
 
     bool park_fw =
-        !run_base &&
+        !run_base && !must_stage &&
         ((ro_status == 1 && packed_end > ro_start && image_end < ro_end) ||
          (live_heap > inherited_top && packed_end > inherited_top && image_end < live_heap));
     u8 *parked = NULL;
@@ -177,6 +192,11 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
             footprint = run_footprint;
             run_base = new_base;
         }
+    }
+    if (must_stage && !run_base) {
+        printf("chainload: no room to stage the image above the live heap\n");
+        free(new_image);
+        return -1;
     }
     if (run_base) {
         /*
@@ -312,13 +332,47 @@ static void stage1_log_handoff(char **vars, size_t *var_cnt, size_t var_capacity
 }
 #endif
 
+/*
+ * A trial: an aura-try file at the ESP root names an image to boot once in place of the
+ * configured one (chainload.rs). It is spent on the ESP before the image is read, so a trial
+ * that never reaches Linux leaves the next boot on the configured path. The trial's stages run
+ * under the trial watchdog (wdt.c); Linux finds the path in chosen/aurora,trial.
+ */
+static char trial_path[128];
+static char trial_var[sizeof("chosen.aurora,trial=") + sizeof(trial_path)];
+
+static bool chainload_start_trial(char **vars, size_t *var_cnt, size_t var_capacity)
+{
+    size_t capacity = cur_boot_args.revision == 1   ? CMDLINE_LENGTH_RV1
+                      : cur_boot_args.revision == 2 ? CMDLINE_LENGTH_RV2
+                                                    : CMDLINE_LENGTH_RV3;
+    if (*var_cnt >= var_capacity ||
+        !boot_options_append(cur_boot_args.rv3.cmdline, capacity, "aura-trial")) {
+        printf("chainload: no room to mark the trial for the next stage\n");
+        return false;
+    }
+    snprintf(trial_var, sizeof(trial_var), "chosen.aurora,trial=%s", trial_path);
+    vars[(*var_cnt)++] = trial_var;
+    boot_options_set_trial(true);
+    printf("chainload: trial boot of %s\n", trial_path);
+    return true;
+}
+
 int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_capacity)
 {
     static char adopt_var[] = "nvme.adopt=live-rtkit-v1";
+#if defined(DEBUGUSB_PROXY) && !defined(ESP_STAGE2)
+    static char host_window_var[] = "aura.host-window=done";
+#endif
     void *image;
     size_t size;
     int ret;
 
+#ifndef ESP_STAGE2
+    /* The last boot stopped before an OS: give a host the chance to replace this Stage 2. */
+    if (stage1_recovery_window())
+        return next_stage.entry ? 0 : -1;
+#endif
     if (!nvme_init()) {
         printf("chainload: NVME init failed\n");
         return -1;
@@ -341,7 +395,11 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
     }
 
     bool proxy_request = false;
-    ret = rust_load_image(spec, &image, &size, &proxy_request);
+    /* Only the first aura stage of a boot takes a trial: later ones already run in it. */
+    bool may_trial = !aura_trial_enabled();
+    trial_path[0] = 0;
+    ret = rust_load_image(spec, &image, &size, &proxy_request, may_trial ? trial_path : NULL,
+                          sizeof(trial_path));
 #ifndef ESP_STAGE2
     /*
      * An aura-proxy file at the ESP root asks Stage 1 to wait for a host. Hand NVMe
@@ -360,14 +418,44 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
             printf("chainload: NVME init failed\n");
             return -1;
         }
-        ret = rust_load_image(spec, &image, &size, NULL);
+        /* The trial, if any, is spent already: the image it named is read again directly. */
+        ret = rust_load_image(spec, &image, &size, NULL, may_trial ? trial_path : NULL,
+                              sizeof(trial_path));
     }
+#ifdef DEBUGUSB_PROXY
+    /* The next aura stage skips its debugusb window when this one offered a window already. */
+    if (ret == 0 && stage1_window_offered() && *var_cnt < var_capacity)
+        vars[(*var_cnt)++] = host_window_var;
+#endif
     if (ret == 0)
         stage1_log_handoff(vars, var_cnt, var_capacity);
 #endif
+    char saved_cmdline[CMDLINE_LENGTH_RV3];
+    size_t saved_vars = *var_cnt;
+    bool trial = false;
+    if (ret == 0 && trial_path[0]) {
+        memcpy(saved_cmdline, cur_boot_args.rv3.cmdline, sizeof(saved_cmdline));
+        trial = chainload_start_trial(vars, var_cnt, var_capacity);
+        if (!trial) {
+            rust_free_image(image, size);
+            ret = rust_load_image(spec, &image, &size, NULL, NULL, 0);
+        }
+    }
     if (ret == 0) {
         ret = chainload_image(image, size, vars, *var_cnt);
         rust_free_image(image, size);
+    }
+    if (ret && trial) {
+        /* The trial image cannot be placed: boot the configured one, as the next boot would. */
+        memcpy(cur_boot_args.rv3.cmdline, saved_cmdline, sizeof(saved_cmdline));
+        *var_cnt = saved_vars;
+        boot_options_set_trial(false);
+        printf("chainload: trial image failed, loading the configured one\n");
+        ret = rust_load_image(spec, &image, &size, NULL, NULL, 0);
+        if (ret == 0) {
+            ret = chainload_image(image, size, vars, *var_cnt);
+            rust_free_image(image, size);
+        }
     }
     if (!nvme_shutdown()) {
         next_stage.entry = NULL;

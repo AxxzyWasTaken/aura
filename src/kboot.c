@@ -1883,6 +1883,46 @@ err:
     return -1;
 }
 
+/* Copy calibration at boot, never substitute another machine's DART values. */
+static int dt_copy_pciec_dart_tunables(const char *adt_path, const char *dt_alias)
+{
+    const struct adt_tunable_info tunable = {
+        .adt_name = "dart-tunables-instance-0",
+        .fdt_name = "apple,tunable",
+        .reg_size = 0x4000,
+        .required = true,
+    };
+    const char *fdt_path = fdt_get_alias(dt, dt_alias);
+    if (!fdt_path)
+        return -1;
+    int host = fdt_path_offset(dt, fdt_path);
+    if (host < 0)
+        return -1;
+
+    int len;
+    const fdt32_t *map = fdt_getprop(dt, host, "iommu-map", &len);
+    /* PCIe-C describes one RID range and a one-cell stream specifier. */
+    if (!map || len != 4 * sizeof(*map))
+        return -1;
+    int dart = fdt_node_offset_by_phandle(dt, fdt32_to_cpu(map[1]));
+    if (dart < 0 || fdt_node_check_compatible(dt, dart, "apple,t8110-dart"))
+        return -1;
+
+    /* Keep existing board tables, including the qualified T600x values. */
+    if (fdt_getprop(dt, dart, "apple,tunable", NULL))
+        return 0;
+    int adt_node = adt_path_offset(adt, adt_path);
+    if (adt_node < 0)
+        return -1;
+
+    if (dt_append_acio_tunable(adt_node, dart, &tunable)) {
+        /* The converter may have appended a prefix before rejecting input. */
+        fdt_delprop(dt, dart, "apple,tunable");
+        return -1;
+    }
+    return 0;
+}
+
 static int dt_set_pcie_tunables(void)
 {
     char adt_path[32];
@@ -1896,6 +1936,9 @@ static int dt_set_pcie_tunables(void)
         snprintf(fdt_alias, sizeof(fdt_alias), "usb4_%d_pcie", i);
 
         dt_copy_pciec_tunables(adt_path, fdt_alias);
+
+        snprintf(adt_path, sizeof(adt_path), "/arm-io/dart-apciec%d", i);
+        dt_copy_pciec_dart_tunables(adt_path, fdt_alias);
     }
 
     return 0;
@@ -2716,18 +2759,32 @@ static int dt_reserve_asc_firmware(const char *adt_path, const char *adt_path_al
     return dt_reserve_asc_segments(adt_path, adt_path_alt, fdt_path, remap, base, false);
 }
 
-static int dt_set_ave(void)
-{
-    if (chip_id != T8140)
-        return 0;
+/*
+ * The AVE video encoder runs firmware that iBoot preloads. The ADT calls the
+ * encoder "ave" on the M2 and A18 Pro and "ave0" on the M1 Pro/Max and M4 Pro.
+ * The DT node is found by its compatible, so describing a SoC's encoder is all
+ * it takes.
+ */
+static const char *const ave_compatibles[] = {
+    "apple,t6000-ave",
+    "apple,t8112-ave",
+    "apple,t8140-ave",
+    "apple,t6041-ave",
+};
 
-    const char *path = "/soc/video-codec@285100000";
-    int node = fdt_path_offset(dt, path);
-    if (node < 0)
-        return 0;
+static int dt_set_ave_node(int node)
+{
+    char path[64];
+    if (fdt_get_path(dt, node, path, sizeof(path)))
+        bail("FDT: AVE node path too long\n");
 
     const char *reason = "invalid ADT firmware segments";
-    int anode = adt_path_offset(adt, "/arm-io/ave");
+    const char *adt_path = "/arm-io/ave";
+    int anode = adt_path_offset(adt, adt_path);
+    if (anode < 0) {
+        adt_path = "/arm-io/ave0";
+        anode = adt_path_offset(adt, adt_path);
+    }
     if (anode < 0) {
         reason = "ADT node absent";
         goto disable;
@@ -2795,7 +2852,7 @@ static int dt_set_ave(void)
     for (size_t i = 0; i < count; i++)
         crcs[i] = tinf_crc32((void *)seg[i].phys, seg[i].size);
 
-    if (dt_reserve_asc_firmware("/arm-io/ave", NULL, path, true, 0)) {
+    if (dt_reserve_asc_firmware(adt_path, NULL, path, true, 0)) {
         reason = "firmware reservation failed";
         goto disable;
     }
@@ -2816,6 +2873,16 @@ disable:
     if (node >= 0 && fdt_setprop_string(dt, node, "status", "disabled"))
         return -1;
     printf("FDT: AVE disabled: %s\n", reason);
+    return 0;
+}
+
+static int dt_set_ave(void)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(ave_compatibles); i++) {
+        int node = fdt_node_offset_by_compatible(dt, -1, ave_compatibles[i]);
+        if (node >= 0)
+            return dt_set_ave_node(node);
+    }
     return 0;
 }
 

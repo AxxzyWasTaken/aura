@@ -11,6 +11,7 @@
 #include "chainload.h"
 #include "cpufreq.h"
 #include "display.h"
+#include "dockchannel_uart.h"
 #include "exception.h"
 #include "fb.h"
 #include "firmware.h"
@@ -90,13 +91,8 @@ static void stage1_run_host_proxy(void)
         uartproxy_run(NULL);
 }
 
-bool stage1_proxy_request_window(void)
+static bool stage1_wait_request_window(void)
 {
-    if (stage1_window_done || stage1_chained)
-        return false;
-    stage1_window_done = true;
-    printf("Stage 1: aura-proxy on the ESP, waiting %u s for a host\n",
-           STAGE1_PROXY_REQUEST_MS / 1000);
     stage1_window_result = uartproxy_wait_stage1(STAGE1_PROXY_REQUEST_MS);
     if (stage1_window_result == STAGE1_PROXY_CDC || stage1_window_result == STAGE1_PROXY_KIS) {
         stage1_run_host_proxy();
@@ -105,6 +101,77 @@ bool stage1_proxy_request_window(void)
     printf("Stage 1: proxy window ended\n");
     return false;
 }
+
+bool stage1_proxy_request_window(void)
+{
+    if (stage1_window_done || stage1_chained)
+        return false;
+    stage1_window_done = true;
+    printf("Stage 1: aura-proxy on the ESP, waiting %u s for a host\n",
+           STAGE1_PROXY_REQUEST_MS / 1000);
+    return stage1_wait_request_window();
+}
+
+#ifdef DEBUGUSB_PROXY
+bool stage1_window_offered(void)
+{
+    return stage1_window_done;
+}
+
+/*
+ * A boot started by a VDM `reboot debugusb` with a host reading the DockChannel console gets the
+ * aura-proxy window, once per chain: not after an earlier aura stage offered one.
+ */
+bool debugusb_proxy_window(void)
+{
+    if (stage1_window_done || stage1_chained || stage1_window_passed ||
+        !dockchannel_uart_host_seen())
+        return false;
+    stage1_window_done = true;
+    printf("aura: debugusb boot, opening proxy window\n");
+    printf("Stage 1: waiting %u s for a host\n", STAGE1_PROXY_REQUEST_MS / 1000);
+    return stage1_wait_request_window();
+}
+#endif
+
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+/* iBoot's record of the previous boot, read before anything in this boot can change it. */
+static bool stage1_boot_record_valid;
+static u8 stage1_boot_counts, stage1_boot_error_stage;
+
+static void stage1_read_boot_record(void)
+{
+    stage1_boot_record_valid = !pmu_read_boot_record(&stage1_boot_counts, &stage1_boot_error_stage);
+}
+
+/*
+ * A Stage 2 that hangs or faults before its OS starts leaves nothing in this boot to see, but
+ * iBoot records the failed boot. Wait briefly for a host then, so one can load a working Stage 2
+ * over USB and replace the bad one; without a host, boot the configured Stage 2 again.
+ */
+bool stage1_recovery_window(void)
+{
+    if (stage1_window_done || stage1_chained || !stage1_boot_record_valid ||
+        !stage1_previous_boot_stopped_early(stage1_boot_counts, stage1_boot_error_stage))
+        return false;
+    stage1_window_done = true;
+    printf("Stage 1: the last boot stopped before an OS (failed boots %u, stage 0x%x); "
+           "waiting %u s for a host\n",
+           stage1_boot_counts & 0xf, stage1_boot_error_stage, STAGE1_RECOVERY_WINDOW_MS / 1000);
+    stage1_window_result = uartproxy_wait_stage1(STAGE1_RECOVERY_WINDOW_MS);
+    if (stage1_window_result == STAGE1_PROXY_CDC || stage1_window_result == STAGE1_PROXY_KIS) {
+        stage1_run_host_proxy();
+        return true;
+    }
+    printf("Stage 1: recovery window ended\n");
+    return false;
+}
+#else
+bool stage1_recovery_window(void)
+{
+    return false;
+}
+#endif
 
 void run_actions(void)
 {
@@ -195,7 +262,8 @@ void run_actions(void)
         panic("Stage 1: no safe proxy carrier after CDC failure\n");
 
 #ifndef BRINGUP
-    if (!usb_up && !aura_debug_enabled()) {
+    /* A proxy window brought USB up already; a second bring-up would register its ports twice. */
+    if (!usb_up && !aura_debug_enabled() && !(stage1_window_done && chip_id != T8140)) {
         usb_init();
         usb_iodev_init();
     }
@@ -280,6 +348,8 @@ void aura_main(void)
     smp_init();
 #endif
     wdt_disable();
+    if (aura_trial_enabled() && wdt_arm_trial())
+        printf("WDT: could not arm the trial watchdog\n");
 #ifndef BRINGUP
     if (pmgr_init() && chip_id == T8140)
         panic("T8140 PMGR initialization failed\n");
@@ -307,6 +377,9 @@ void aura_main(void)
     cpufreq_fixup();
 #endif
 
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+    stage1_read_boot_record();
+#endif
     /* T6040, T8140: nothing else in an aura tether chain clears iBoot's failed-boot count. */
     if (chip_id == T6040 || chip_id == T8140)
         pmu_clear_panic_counter();
@@ -354,6 +427,9 @@ next_stage:
     mmu_shutdown();
 #endif
 
+    /* Give the next stage of a trial boot the whole watchdog period. */
+    if (aura_trial_enabled() && wdt_arm_trial())
+        printf("WDT: could not arm the trial watchdog\n");
     printf("Vectoring to next stage...\n");
 #if defined(CHAINLOADING) && !defined(ESP_STAGE2)
     stage1_log_flush();

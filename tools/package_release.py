@@ -34,7 +34,8 @@ def main():
     if args.variant == "stage1":
         files.append(build / "aura-boot.macho")
     files += [repo / "LICENSE", repo / "docs/releases/0.1.0.md"]
-    files += [repo / "docs/boot-options.md", repo / "docs/j700-install.md"]
+    files += [repo / "docs/boot-options.md", repo / "docs/j700-install.md",
+              repo / "docs/stage2-dtbs.md", repo / "tools/compose_stage2.py"]
     files += [repo / "docs/macho-boot-object.md"]
     for folder in ("LICENSES", "3rdparty_licenses"):
         files += sorted(p for p in (repo / folder).rglob("*") if p.is_file())
