@@ -51,3 +51,10 @@ def test_package_includes_fatfs_license(tmp_path, monkeypatch):
     for name in ("MIT.txt", "GPL-2.0-only.txt"):
         assert (output / "LICENSES" / name).read_bytes() == \
             (package_j700.REPO / "LICENSES" / name).read_bytes()
+
+    for source, target in (("tools/compose_stage2.py", "compose_stage2.py"),
+                           ("docs/stage2-dtbs.md", "stage2-dtbs.md")):
+        data = (package_j700.REPO / source).read_bytes()
+        assert (output / target).read_bytes() == data
+        assert f"{hashlib.sha256(data).hexdigest()}  {target}" in \
+            (output / "SHA256SUMS").read_text().splitlines()
