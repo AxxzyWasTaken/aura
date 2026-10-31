@@ -241,7 +241,7 @@ TARGET_RAW := aura.bin
 DEPDIR := build/.deps
 
 .PHONY: all clean format invoke_cc always_rebuild
-all: build/$(TARGET) build/$(TARGET_RAW) verify-logo
+all: build/$(TARGET) build/$(TARGET_RAW) build/$(NAME)-boot.macho verify-logo
 .PHONY: verify-logo
 verify-logo: build/$(TARGET_RAW)
 	$(QUIET)python3 tools/verify_builtin_logo.py $< $(BUILTIN_LOGO) --logo-dir $(LOGO_DIR)
@@ -296,6 +296,11 @@ build/$(NAME)-raw.elf: $(BUILD_ALL_OBJS) aura-raw.ld
 build/$(NAME).macho: build/$(NAME).elf
 	$(QUIET)echo "  MACHO $@"
 	$(QUIET)$(OBJCOPY) -O binary --strip-debug $< $@
+
+# The raw image as a Mach-O boot object for kmutil configure-boot without --raw. It has no
+# __TEXT_BOOT_EXEC, so iBoot enters it directly instead of starting SPTM (docs/macho-boot-object.md).
+build/$(NAME)-boot.macho: build/$(TARGET_RAW) tools/macho_boot_object.py
+	$(QUIET)python3 tools/macho_boot_object.py $< $@
 
 ifeq ($(LOGO),)
 build/$(NAME).bin: build/$(NAME)-raw.elf
