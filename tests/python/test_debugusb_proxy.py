@@ -351,7 +351,17 @@ static size_t seen_count;
 static bool nvme_init(void) { return true; }
 static bool nvme_has_live_post_m4_session(void) { return false; }
 static bool nvme_shutdown(void) { return true; }
-static int rust_load_image(const char *spec, void **data, size_t *size, bool *proxy_request)
+#define CMDLINE_LENGTH_RV3 1024
+static struct { struct { char cmdline[CMDLINE_LENGTH_RV3]; } rv3; } cur_boot_args;
+static char trial_path[128];
+static bool aura_trial_enabled(void) { return false; }
+static void boot_options_set_trial(bool trial) {}
+static bool chainload_start_trial(char **vars, size_t *var_cnt, size_t var_capacity)
+{
+    return false;
+}
+static int rust_load_image(const char *spec, void **data, size_t *size, bool *proxy_request,
+                           char *trial, size_t trial_capacity)
 {
     if (proxy_request)
         *proxy_request = false;
