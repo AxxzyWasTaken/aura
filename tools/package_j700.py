@@ -61,6 +61,8 @@ def main() -> None:
         shutil.copy2(folder / "build_cfg.h", args.output / f"build_cfg-{stage}.h")
 
     shutil.copy2(REPO / "docs/j700-install.md", args.output / "ESP-AND-INSTALL.md")
+    shutil.copy2(REPO / "docs/stage2-dtbs.md", args.output / "stage2-dtbs.md")
+    shutil.copy2(REPO / "tools/compose_stage2.py", args.output / "compose_stage2.py")
     shutil.copy2(REPO / "LICENSE", args.output / "LICENSE")
     shutil.copytree(REPO / "LICENSES", args.output / "LICENSES")
     shutil.copytree(REPO / "3rdparty_licenses", args.output / "3rdparty_licenses")

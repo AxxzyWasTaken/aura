@@ -73,6 +73,10 @@ This loads the image and DTB without publishing a loader initramfs. The EFI
 OS image supplies its own initramfs. Do not substitute an empty cpio archive:
 Linux prioritizes the device tree's `linux,initrd-*` over an EFI initramfs.
 
+For an embedded-DTB U-Boot payload, follow [stage2-dtbs.md](stage2-dtbs.md)
+to rebuild the DTB set from the intended kernel source. A kernel-only update
+does not replace embedded Stage 2 DTBs.
+
 ## Test and install
 
 Test every new build before replacing an installed image:

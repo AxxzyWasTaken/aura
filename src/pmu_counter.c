@@ -8,13 +8,15 @@
 #include "utils.h"
 
 /*
- * iBoot counts failed boots in the primary PMU's legacy scratchpad (error
- * count byte at info-leg_scrpad + 2) and drops to recoveryOS once it is too
- * high. macOS clears it on a good boot; an aura chain that never reaches an
- * OS which does so must clear it itself, or repeated test boots end in the
- * recovery error screen.
+ * iBoot keeps a record of each boot in the primary PMU's legacy scratchpad (info-leg_scrpad): the
+ * boot stage reached at +1, the failed-boot and panic counts at +2 (low and high nibble) and the
+ * stage a failed boot had reached at +3. It counts a boot that ended without a clean shutdown and
+ * drops to recoveryOS once the count is too high. macOS and Linux clear the counts once they run.
  */
-int pmu_clear_panic_counter(void)
+#define PMU_SCRPAD_COUNTS 2
+
+/* Find the primary PMU: its SPMI bus path, its SPMI address and the scratchpad offset. */
+static int pmu_find_scratchpad(char *path, size_t path_len, u8 *addr, u16 *scrpad)
 {
     int arm_io = adt_path_offset(adt, "/arm-io");
     if (arm_io < 0)
@@ -30,40 +32,81 @@ int pmu_clear_panic_counter(void)
         int node = bnode;
         ADT_FOREACH_CHILD(adt, node)
         {
-            u32 primary = 0, scrpad, reg_len = 0;
+            u32 primary = 0, base, reg_len = 0;
             if (!adt_is_compatible(adt, node, "pmu,spmi") ||
                 ADT_GETPROP(adt, node, "is-primary", &primary) < 0 || primary != 1)
                 continue;
             /* reg is several words; only the first (the SPMI address) is used. */
             const u32 *reg = adt_getprop(adt, node, "reg", &reg_len);
-            if (ADT_GETPROP(adt, node, "info-leg_scrpad", &scrpad) < 0 || !reg || reg_len < 4) {
+            if (ADT_GETPROP(adt, node, "info-leg_scrpad", &base) < 0 || !reg || reg_len < 4 ||
+                base > 0xffff - 3) {
                 printf("pmu: %s/%s lacks leg_scrpad or reg\n", bus, adt_get_name(adt, node));
                 return -1;
             }
 
-            char path[64];
-            snprintf(path, sizeof(path), "/arm-io/%s", bus);
-            spmi_dev_t *spmi = spmi_init(path);
-            if (!spmi)
-                return -1;
-
-            u8 addr = reg[0] & 0xff;
-            u16 counter = scrpad + 2;
-            u8 val = 0, zero = 0;
-            int ret = spmi_ext_read_long(spmi, addr, counter, &val, 1);
-            if (!ret && val)
-                ret = spmi_ext_write_long(spmi, addr, counter, &zero, 1);
-            spmi_shutdown(spmi);
-            if (ret) {
-                printf("pmu: failed to access the panic counter at %s:%02x reg %x\n", path, addr,
-                       counter);
-                return -1;
-            }
-            printf("pmu: panic counter at %s:%02x reg %x was %u%s\n", path, addr, counter, val,
-                   val ? ", cleared" : "");
+            snprintf(path, path_len, "/arm-io/%s", bus);
+            *addr = reg[0] & 0xff;
+            *scrpad = base;
             return 0;
         }
     }
     printf("pmu: no primary SPMI PMU found\n");
     return -1;
+}
+
+/*
+ * An aura chain that never reaches an OS which clears the counts must clear them itself, or
+ * repeated test boots end in the recovery error screen.
+ */
+int pmu_clear_panic_counter(void)
+{
+    char path[64];
+    u8 addr;
+    u16 scrpad;
+    if (pmu_find_scratchpad(path, sizeof(path), &addr, &scrpad))
+        return -1;
+
+    spmi_dev_t *spmi = spmi_init(path);
+    if (!spmi)
+        return -1;
+
+    u16 counter = scrpad + PMU_SCRPAD_COUNTS;
+    u8 val = 0, zero = 0;
+    int ret = spmi_ext_read_long(spmi, addr, counter, &val, 1);
+    if (!ret && val)
+        ret = spmi_ext_write_long(spmi, addr, counter, &zero, 1);
+    spmi_shutdown(spmi);
+    if (ret) {
+        printf("pmu: failed to access the panic counter at %s:%02x reg %x\n", path, addr, counter);
+        return -1;
+    }
+    printf("pmu: panic counter at %s:%02x reg %x was %u%s\n", path, addr, counter, val,
+           val ? ", cleared" : "");
+    return 0;
+}
+
+/* Read iBoot's record of the previous boot: the counts byte and the failed boot's stage. */
+int pmu_read_boot_record(u8 *counts, u8 *error_stage)
+{
+    char path[64];
+    u8 addr;
+    u16 scrpad;
+    if (pmu_find_scratchpad(path, sizeof(path), &addr, &scrpad))
+        return -1;
+
+    spmi_dev_t *spmi = spmi_init(path);
+    if (!spmi)
+        return -1;
+
+    u8 record[2] = {0};
+    int ret = spmi_ext_read_long(spmi, addr, scrpad + PMU_SCRPAD_COUNTS, record, sizeof(record));
+    spmi_shutdown(spmi);
+    if (ret) {
+        printf("pmu: failed to read the boot record at %s:%02x reg %x\n", path, addr,
+               scrpad + PMU_SCRPAD_COUNTS);
+        return -1;
+    }
+    *counts = record[0];
+    *error_stage = record[1];
+    return 0;
 }

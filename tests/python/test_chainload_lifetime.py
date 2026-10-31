@@ -17,8 +17,9 @@ def test_chainload_releases_loaded_image(tmp_path):
 #include <string.h>
 static struct { void *entry; } next_stage;
 static char image[16];
-static int load_error, copy_error, freed, copied, loads, windows, trial_copy_error;
-static bool shutdown_ok, request, host, stage1_chained, marker, in_trial, trial_room = true;
+static int load_error, copy_error, freed, copied, loads, windows, recoveries, inits, trial_copy_error;
+static bool shutdown_ok, request, host, stage1_chained, recovery, recovery_host, marker, in_trial,
+    trial_room = true;
 static int trials_started, trial_loads;
 #define CMDLINE_LENGTH_RV3 1024
 static struct { struct { char cmdline[CMDLINE_LENGTH_RV3]; } rv3; } cur_boot_args;
@@ -34,7 +35,7 @@ static bool chainload_start_trial(char **vars, size_t *var_cnt, size_t var_capac
     in_trial = true;
     return true;
 }
-static bool nvme_init(void) { return true; }
+static bool nvme_init(void) { inits++; return true; }
 static bool nvme_has_live_post_m4_session(void) { return true; }
 static bool nvme_shutdown(void) { return shutdown_ok; }
 static int rust_load_image(const char *spec, void **data, size_t *size, bool *proxy_request,
@@ -75,6 +76,17 @@ static void rust_free_image(void *data, size_t size)
 }
 /* The Stage 1 log handoff is out of scope here: it only adds a variable. */
 static void stage1_log_handoff(char **vars, size_t *var_cnt, size_t var_capacity) {}
+/* A recovery window opens before NVMe is touched; a host that takes it supplies the next stage. */
+static bool stage1_recovery_window(void)
+{
+    if (!recovery)
+        return false;
+    assert(!inits);
+    recoveries++;
+    if (recovery_host)
+        next_stage.entry = (void *)3;
+    return recovery_host;
+}
 static bool stage1_proxy_request_window(void)
 {
     windows++;
@@ -115,6 +127,23 @@ int main(void)
     count = 0;
     assert(chainload_load("test", vars, &count, 1) == 0);
     assert(windows == 1 && loads == 1 && freed == 1 && copied == 0 && next_stage.entry == (void *)2);
+    /* After a failed boot, no host: the recovery window ends and the Stage 2 boots as normal. */
+    request = host = false;
+    recovery = true;
+    recovery_host = false;
+    freed = copied = loads = windows = recoveries = inits = 0;
+    next_stage.entry = NULL;
+    count = 0;
+    assert(chainload_load("test", vars, &count, 1) == 0);
+    assert(recoveries == 1 && inits == 1 && loads == 1 && copied == 1 && next_stage.entry == (void *)1);
+    /* A host takes the recovery window: NVMe is never started and the host's next stage stands. */
+    recovery_host = true;
+    freed = copied = loads = windows = recoveries = inits = 0;
+    next_stage.entry = NULL;
+    count = 0;
+    assert(chainload_load("test", vars, &count, 1) == 0);
+    assert(recoveries == 1 && inits == 0 && loads == 0 && copied == 0 && next_stage.entry == (void *)3);
+    recovery = recovery_host = false;
 
     /* aura-try: the trial image is booted once, marked as a trial */
     request = host = false;

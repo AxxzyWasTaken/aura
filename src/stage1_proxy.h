@@ -5,6 +5,7 @@
 #ifdef STAGE1_PROXY_HOST_TEST
 #include <stdbool.h>
 #include <stdint.h>
+typedef uint8_t u8;
 typedef uint32_t u32;
 typedef uint64_t u64;
 #else
@@ -39,6 +40,14 @@ enum stage1_payload_action stage1_proxy_payload_action(enum stage1_proxy_result 
                                                        bool payload_valid, bool cdc_live,
                                                        bool kis_live);
 bool stage1_proxy_action_needs_cleanup(enum stage1_payload_action action);
+
+/*
+ * iBoot's record of the previous boot in the PMU scratchpad: the counts byte (failed boots in the
+ * low nibble, panics in the high one) and the boot stage the failed boot had reached. The OS sets
+ * stage 0x30 (kernel started) once it runs and clears the counts.
+ */
+#define STAGE1_BOOT_STAGE_KERNEL_STARTED 0x30
+bool stage1_previous_boot_stopped_early(u8 counts, u8 error_stage);
 
 /*
  * Bytes a DockChannel host must have read beyond the FIFO accounting before a boot counts as a
