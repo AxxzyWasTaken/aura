@@ -25,6 +25,7 @@
 #include "malloc.h"
 #include "mcc.h"
 #include "memory.h"
+#include "monitor.h"
 #include "pcie.h"
 #include "pmgr.h"
 #include "rtkit.h"
@@ -7289,6 +7290,20 @@ int kboot_prepare_dt(void *fdt)
     if (relocated_from && fdt_add_mem_rsv(dt, relocated_from, SZ_16K))
         bail("FDT: couldn't add reservation for aura's old reset vector\n");
 
+    /*
+     * CTXR_D starts below this image, and a secondary at EL1 that executes
+     * inside it takes an abort straight to EL2. The firmware RO range below
+     * covers windows A to C.
+     */
+    if (monitor_required()) {
+        u64 start = ALIGN_DOWN(mrs(SYS_IMP_APL_CTXR_D_LWR_EL1), SZ_16K);
+        u64 end = ALIGN_UP(mrs(SYS_IMP_APL_CTXR_D_UPR_EL1) + SZ_4K, SZ_16K);
+
+        if (!start || end <= start || fdt_add_mem_rsv(dt, start, end - start))
+            bail("FDT: couldn't reserve CTXR_D\n");
+        printf("FDT: reserved CTXR_D [0x%lx, 0x%lx)\n", start, end);
+    }
+
     if (chip_id == T8140) {
         u64 ro_start, ro_end;
         if (memory_fw_ro_range(&ro_start, &ro_end) != 1)
@@ -7571,6 +7586,7 @@ int kboot_boot(void *kernel)
     next_stage.args[3] = 0;
     next_stage.args[4] = 0;
     next_stage.restore_logo = false;
+    next_stage.monitor = monitor_required();
 
     return 0;
 }

@@ -219,6 +219,21 @@ el1_ret:
     ldp x29, x30, [sp], #16
     ret
 
+// monitor_eret(entry, x0, x1, x2): enter the OS at EL1h with DAIF masked.
+.globl monitor_eret
+.type monitor_eret, @function
+monitor_eret:
+    msr elr_el2, x0
+    mov x4, #0x3c5
+    msr spsr_el2, x4
+    msr sp_el1, xzr
+    mov x0, x1
+    mov x1, x2
+    mov x2, x3
+    mov x3, xzr
+    isb
+    eret
+
 .align 11
 .globl _el1_vectors_start
 _el1_vectors_start:

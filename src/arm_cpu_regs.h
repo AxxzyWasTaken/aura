@@ -192,7 +192,36 @@
 #define ID_AA64PFR1_SME2    2
 
 #define SYS_SMCR_EL2 sys_reg(3, 4, 1, 2, 6)
+#define SMCR_FA64    BIT(31)
 #define SMCR_EZT0    BIT(30)
+#define SMCR_LEN     GENMASK(8, 0)
+
+#define SYS_CPTR_EL2 sys_reg(3, 4, 1, 1, 2)
+// HCR_EL2.E2H == 1
+#define CPTR_E2H_SMEN (3UL << 24)
+#define CPTR_E2H_FPEN (3UL << 20)
+
+#define SYS_SMPRIMAP_EL2 sys_reg(3, 4, 1, 2, 5)
+#define SYS_HCRX_EL2     sys_reg(3, 4, 1, 2, 2)
+#define SYS_LORC_EL1     sys_reg(3, 0, 10, 4, 3)
+#define SYS_SMIDR_EL1    sys_reg(3, 1, 0, 0, 6)
+#define SMIDR_SMPS       BIT(15)
+
+// Fine-grained traps
+#define SYS_HFGRTR_EL2     sys_reg(3, 4, 1, 1, 4)
+#define SYS_HFGWTR_EL2     sys_reg(3, 4, 1, 1, 5)
+#define SYS_HFGITR_EL2     sys_reg(3, 4, 1, 1, 6)
+#define SYS_HDFGRTR_EL2    sys_reg(3, 4, 3, 1, 4)
+#define SYS_HDFGWTR_EL2    sys_reg(3, 4, 3, 1, 5)
+#define HFGxTR_nTPIDR2_EL0 BIT(55)
+#define HFGxTR_nSMPRI_EL1  BIT(54)
+
+#define SYS_ID_AA64SMFR0_EL1 sys_reg(3, 0, 0, 4, 5)
+#define ID_AA64SMFR0_FA64    BIT(63)
+#define ID_AA64SMFR0_SMEVER  GENMASK(59, 56)
+#define SYS_ID_AA64MMFR1_EL1 sys_reg(3, 0, 0, 7, 1)
+#define ID_AA64MMFR1_HCX     GENMASK(43, 40)
+#define ID_AA64MMFR1_LO      GENMASK(19, 16)
 
 #define SYS_ID_AA64MMFR0_EL1   sys_reg(3, 0, 0, 7, 0)
 #define ID_AA64MMFR0_ECV       GENMASK(63, 60)

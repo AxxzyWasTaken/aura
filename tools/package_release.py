@@ -31,9 +31,12 @@ def main():
     if tag.strip() != f'#define BUILD_TAG "{args.version}"':
         raise SystemExit("Build version does not match the requested release")
     files = [build / n for n in ("aura.bin", "aura.macho", "build_cfg.h", "build_tag.h")]
+    if args.variant == "stage1":
+        files.append(build / "aura-boot.macho")
     files += [repo / "LICENSE", repo / "docs/releases/0.1.0.md"]
     files += [repo / "docs/boot-options.md", repo / "docs/j700-install.md",
               repo / "docs/stage2-dtbs.md", repo / "tools/compose_stage2.py"]
+    files += [repo / "docs/macho-boot-object.md"]
     for folder in ("LICENSES", "3rdparty_licenses"):
         files += sorted(p for p in (repo / folder).rglob("*") if p.is_file())
     manifest = {
@@ -57,6 +60,8 @@ def main():
         archive.writestr("README.txt", (
             f"Aura {args.version}, {args.variant}; source {manifest['commit']}\n"
             "aura.macho is the RAM-loadable Mach-O image. aura.bin is the raw image.\n"
+            "Stage 1 also has aura-boot.macho, aura.bin as a boot object for\n"
+            "kmutil configure-boot without --raw (docs/macho-boot-object.md).\n"
             "Stage 1 retains its embedded configuration block. Stage 2 is built\n"
             "with ESP_STAGE2=1 and omits that block. Neither archive is a complete\n"
             "UEFI boot.bin bundle: use matching board DTBs and U-Boot separately.\n"
