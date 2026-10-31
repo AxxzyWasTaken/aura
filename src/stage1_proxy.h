@@ -7,6 +7,7 @@
 #include <stdint.h>
 typedef uint8_t u8;
 typedef uint32_t u32;
+typedef uint64_t u64;
 #else
 #include "types.h"
 #endif
@@ -47,5 +48,13 @@ bool stage1_proxy_action_needs_cleanup(enum stage1_payload_action action);
  */
 #define STAGE1_BOOT_STAGE_KERNEL_STARTED 0x30
 bool stage1_previous_boot_stopped_early(u8 counts, u8 error_stage);
+
+/*
+ * Bytes a DockChannel host must have read beyond the FIFO accounting before a boot counts as a
+ * debugusb boot. It absorbs counting slop; a host that reads the console reads kilobytes.
+ */
+#define STAGE1_PROXY_DOCKCHANNEL_SLACK 256
+bool stage1_proxy_dockchannel_host(u32 tx_free_at_init, u64 tx_accepted, u32 tx_free_now,
+                                   u32 rx_pending);
 
 #endif

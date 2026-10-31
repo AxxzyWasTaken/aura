@@ -60,3 +60,17 @@ bool stage1_previous_boot_stopped_early(u8 counts, u8 error_stage)
 {
     return (counts & 0xf) && error_stage < STAGE1_BOOT_STAGE_KERNEL_STARTED;
 }
+
+/*
+ * Nothing on the SoC drains a DockChannel TX FIFO: without a reader on the dock side (a KIS
+ * host on a debugusb link) it only fills, so its free space plus every byte written into it
+ * stays at the free space it had when this stage started. More than that means a host read it
+ * out. A byte waiting on the RX side was sent by a host.
+ */
+bool stage1_proxy_dockchannel_host(u32 tx_free_at_init, u64 tx_accepted, u32 tx_free_now,
+                                   u32 rx_pending)
+{
+    if (rx_pending)
+        return true;
+    return (u64)tx_free_now + tx_accepted > (u64)tx_free_at_init + STAGE1_PROXY_DOCKCHANNEL_SLACK;
+}

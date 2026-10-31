@@ -147,6 +147,8 @@ bool nvme_adopt_live_session = false;
 static bool nvme_wrote;
 bool nvme_keep_running_for_linux = false;
 static u8 nvme_die;
+/* When this stage started the ANS firmware, for the shutdown timing line. */
+static u64 nvme_boot_ticks;
 
 static asc_dev_t *nvme_asc = NULL;
 static rtkit_dev_t *nvme_rtkit = NULL;
@@ -276,6 +278,33 @@ static bool nvme_ctrl_shutdown(void)
     return FIELD_GET(NVME_CSTS_SHST, read32(nvme_base + NVME_CSTS)) == NVME_CSTS_SHST_DONE;
 }
 
+/*
+ * Put an M1-M3 ANS to sleep and reset it, leaving it for the next owner to boot afresh: CPU
+ * stopped, mailbox empty, block reset. The next stage (U-Boot, Linux) sets RUN and expects the
+ * firmware's HELLO as its first message. Returns whether the firmware acknowledged the sleep.
+ */
+static bool nvme_ans_sleep_and_reset(void)
+{
+    bool asleep = nvme_rtkit && rtkit_sleep(nvme_rtkit);
+
+    if (!asleep) {
+        /*
+         * Without the acknowledgement rtkit_sleep() leaves RUN set, and a reset under a
+         * running CPU hands U-Boot an ANS that never says HELLO. Stop it first, as a
+         * completed sleep would have.
+         */
+        printf("nvme: ANS did not acknowledge sleep; stopping it before the reset\n");
+        if (nvme_rtkit)
+            rtkit_stop(nvme_rtkit);
+        else
+            asc_cpu_stop(nvme_asc);
+    }
+    // Some machines call this ANS, some ANS2...
+    pmgr_reset(nvme_die, "ANS");
+    pmgr_reset(nvme_die, "ANS2");
+    return asleep;
+}
+
 static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u64 *result)
 {
     /* A timed-out command may still own slot 0 and its DMA mappings. */
@@ -396,6 +425,7 @@ bool nvme_init(void)
     nvme_multi_verified = false;
     nvme_prp_list = NULL;
     nvme_verify_bounce = NULL;
+    nvme_boot_ticks = 0;
 
     bool adopting = false;
     int adt_path[8];
@@ -535,6 +565,7 @@ bool nvme_init(void)
 
     if (!rtkit_boot(nvme_rtkit))
         goto out_rtkit;
+    nvme_boot_ticks = get_ticks();
 
     if (poll32(nvme_base + NVME_BOOT_STATUS, 0xffffffff, NVME_BOOT_STATUS_OK, USEC_PER_SEC) < 0) {
         printf("nvme: ANS did not boot correctly.\n");
@@ -618,12 +649,8 @@ out_shutdown:
         printf("nvme: preserving adopted ANS queues after setup failure; reboot required\n");
         goto out_preserve;
     }
-    if (nvme_type != NVME_T8132) {
-        rtkit_sleep(nvme_rtkit);
-        // Some machines call this ANS, some ANS2...
-        pmgr_reset(nvme_die, "ANS");
-        pmgr_reset(nvme_die, "ANS2");
-    }
+    if (nvme_type != NVME_T8132)
+        nvme_ans_sleep_and_reset();
 out_rtkit:
     if (nvme_type == NVME_T8132 && nvme_asc && asc_cpu_running(nvme_asc)) {
         printf("nvme: preserving running post-M4 ANS after setup failure; reboot required\n");
@@ -687,12 +714,13 @@ void nvme_ensure_shutdown(void)
     if (!nvme_rtkit)
         goto fail;
 
-    if (!rtkit_boot(nvme_rtkit))
-        goto fail;
-
-    rtkit_sleep(nvme_rtkit);
+    if (!rtkit_boot(nvme_rtkit)) {
+        rtkit_free(nvme_rtkit);
+        nvme_rtkit = NULL;
+    }
 
 fail:
+    nvme_ans_sleep_and_reset();
     if (nvme_rtkit) {
         rtkit_free(nvme_rtkit);
         nvme_rtkit = NULL;
@@ -703,10 +731,6 @@ fail:
     }
     asc_free(nvme_asc);
     nvme_asc = NULL;
-
-    // Some machines call this ANS, some ANS2...
-    pmgr_reset(nvme_die, "ANS");
-    pmgr_reset(nvme_die, "ANS2");
 }
 
 bool nvme_has_live_post_m4_session(void)
@@ -746,6 +770,7 @@ bool nvme_shutdown(void)
     }
 
     struct nvme_command cmd;
+    u64 t_start = get_ticks();
 
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_CMD_DELETE_SQ;
@@ -770,7 +795,15 @@ bool nvme_shutdown(void)
      * on post-M4 ANS. With nothing written by this stage there is nothing to flush, and the
      * controller disable below still stops it cleanly.
      */
-    if (nvme_wrote && !nvme_ctrl_shutdown()) {
+    u64 t_queues = get_ticks();
+    /*
+     * The M1-M3 firmware finishes its GC bitmap rebuild and saves its context before it stops,
+     * for a normal shutdown or, without one, inside the RTKit sleep below. Skipping the shutdown
+     * saves nothing there; it only moves that work (0.15 to 0.55 s, varying by boot) under the
+     * sleep handshake. Post-M4 keeps its session running, so only a stage that wrote pays there.
+     */
+    bool normal_shutdown = nvme_wrote || nvme_type != NVME_T8132;
+    if (normal_shutdown && !nvme_ctrl_shutdown()) {
         printf("nvme: timeout while waiting for controller shutdown\n");
         if (nvme_type == NVME_T8132)
             goto out_preserve;
@@ -812,10 +845,18 @@ bool nvme_shutdown(void)
         return true;
     }
 
-    rtkit_sleep(nvme_rtkit);
-    // Some machines call this ANS, some ANS2...
-    pmgr_reset(nvme_die, "ANS");
-    pmgr_reset(nvme_die, "ANS2");
+    u64 t_disabled = get_ticks();
+    bool asleep = nvme_ans_sleep_and_reset();
+    u64 t_asleep = get_ticks();
+    /*
+     * The sleep handshake waits for the ANS firmware to finish its own work first. Name the
+     * phases, so a slow handoff shows where it spent its time and how long the firmware had run.
+     */
+    printf("nvme: shutdown %lu ms: queues %lu ms, %s %lu ms, %s %lu ms; ANS up %lu ms\n",
+           ticks_to_msecs(t_asleep - t_start), ticks_to_msecs(t_queues - t_start),
+           normal_shutdown ? "shutdown+disable" : "disable", ticks_to_msecs(t_disabled - t_queues),
+           asleep ? "IOP sleep" : "IOP sleep FAILED", ticks_to_msecs(t_asleep - t_disabled),
+           nvme_boot_ticks ? ticks_to_msecs(t_asleep - nvme_boot_ticks) : 0);
     rtkit_free(nvme_rtkit);
     sart_free(nvme_sart);
     asc_free(nvme_asc);
