@@ -97,3 +97,23 @@ def test_watchdog_and_cdc_cleanup_precede_native_handoff():
     cleanup_body = cdc[cdc.index("void usb_cdc_cleanup"):]
     assert "if (watchdog_armed)" in cleanup_body
     assert "wdt_disable();" in cleanup_body
+
+
+def test_recovery_window_follows_a_boot_that_stopped_before_the_os(tmp_path):
+    lib = proxy_lib(tmp_path)
+    early = lib.stage1_previous_boot_stopped_early
+    early.argtypes = [ctypes.c_uint8, ctypes.c_uint8]
+    early.restype = ctypes.c_bool
+    # A clean record (the OS cleared the counts) opens nothing, whatever stage is left over.
+    assert not early(0x00, 0x00)
+    assert not early(0x00, 0x2f)
+    # Panics alone (high nibble) are not failed boots.
+    assert not early(0x10, 0x00)
+    # A failed boot that stopped in a loader: iBoot done (0x2f) or nothing recorded (0x00, as
+    # the M2 showed after a U-Boot stall on 2026-10-30).
+    assert early(0x01, 0x2f)
+    assert early(0x01, 0x00)
+    assert early(0x13, 0x10)
+    # A failed boot that had started the kernel reached the OS.
+    assert not early(0x01, 0x30)
+    assert not early(0x02, 0x31)

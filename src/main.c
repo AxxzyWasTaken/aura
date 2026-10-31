@@ -133,6 +133,45 @@ bool debugusb_proxy_window(void)
 }
 #endif
 
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+/* iBoot's record of the previous boot, read before anything in this boot can change it. */
+static bool stage1_boot_record_valid;
+static u8 stage1_boot_counts, stage1_boot_error_stage;
+
+static void stage1_read_boot_record(void)
+{
+    stage1_boot_record_valid = !pmu_read_boot_record(&stage1_boot_counts, &stage1_boot_error_stage);
+}
+
+/*
+ * A Stage 2 that hangs or faults before its OS starts leaves nothing in this boot to see, but
+ * iBoot records the failed boot. Wait briefly for a host then, so one can load a working Stage 2
+ * over USB and replace the bad one; without a host, boot the configured Stage 2 again.
+ */
+bool stage1_recovery_window(void)
+{
+    if (stage1_window_done || stage1_chained || !stage1_boot_record_valid ||
+        !stage1_previous_boot_stopped_early(stage1_boot_counts, stage1_boot_error_stage))
+        return false;
+    stage1_window_done = true;
+    printf("Stage 1: the last boot stopped before an OS (failed boots %u, stage 0x%x); "
+           "waiting %u s for a host\n",
+           stage1_boot_counts & 0xf, stage1_boot_error_stage, STAGE1_RECOVERY_WINDOW_MS / 1000);
+    stage1_window_result = uartproxy_wait_stage1(STAGE1_RECOVERY_WINDOW_MS);
+    if (stage1_window_result == STAGE1_PROXY_CDC || stage1_window_result == STAGE1_PROXY_KIS) {
+        stage1_run_host_proxy();
+        return true;
+    }
+    printf("Stage 1: recovery window ended\n");
+    return false;
+}
+#else
+bool stage1_recovery_window(void)
+{
+    return false;
+}
+#endif
+
 void run_actions(void)
 {
     bool usb_up = false;
@@ -222,7 +261,8 @@ void run_actions(void)
         panic("Stage 1: no safe proxy carrier after CDC failure\n");
 
 #ifndef BRINGUP
-    if (!usb_up && !aura_debug_enabled()) {
+    /* A proxy window brought USB up already; a second bring-up would register its ports twice. */
+    if (!usb_up && !aura_debug_enabled() && !(stage1_window_done && chip_id != T8140)) {
         usb_init();
         usb_iodev_init();
     }
@@ -334,6 +374,9 @@ void aura_main(void)
     cpufreq_fixup();
 #endif
 
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+    stage1_read_boot_record();
+#endif
     /* T6040: nothing else in an aura tether chain clears iBoot's failed-boot count. */
     if (chip_id == T6040)
         pmu_clear_panic_counter();

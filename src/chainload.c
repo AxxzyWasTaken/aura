@@ -321,6 +321,11 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
     size_t size;
     int ret;
 
+#ifndef ESP_STAGE2
+    /* The last boot stopped before an OS: give a host the chance to replace this Stage 2. */
+    if (stage1_recovery_window())
+        return next_stage.entry ? 0 : -1;
+#endif
     if (!nvme_init()) {
         printf("chainload: NVME init failed\n");
         return -1;

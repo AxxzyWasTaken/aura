@@ -52,6 +52,16 @@ bool stage1_proxy_action_needs_cleanup(enum stage1_payload_action action)
 }
 
 /*
+ * The previous boot ended without a clean shutdown before an OS started: a Stage 2 or a later
+ * loader that hangs, faults or is forced off. Linux clears the counts once it runs, so this holds
+ * for one boot after each such failure.
+ */
+bool stage1_previous_boot_stopped_early(u8 counts, u8 error_stage)
+{
+    return (counts & 0xf) && error_stage < STAGE1_BOOT_STAGE_KERNEL_STARTED;
+}
+
+/*
  * Nothing on the SoC drains a DockChannel TX FIFO: without a reader on the dock side (a KIS
  * host on a debugusb link) it only fills, so its free space plus every byte written into it
  * stays at the free space it had when this stage started. More than that means a host read it
