@@ -205,6 +205,7 @@ OBJECTS := \
 	stage1_proxy.o \
 	sio.o \
 	smc.o \
+	monitor.o \
 	smp.o \
 	spmi.o pmu_counter.o ace3.o \
 	start.o \

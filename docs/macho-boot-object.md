@@ -59,9 +59,39 @@ kmutil inspect -z -B "$PWD/aura-boot.macho" --show-mach-boot-properties
 
 It must report `kcbz : 0`.
 
+## Running the OS
+
+With `kcbz` zero, iBoot leaves four CTXR windows armed and locked on the
+secondary CPUs. The boot CPU reports the same bounds with enforcement off.
+On T8140 the windows change where a secondary can execute:
+
+- At EL2 it executes only inside them. `CTXR_D` is the large one. It covers
+  the boot object and starts 0xd8000 below its load base.
+- At EL1 the rule inverts. Executing inside `CTXR_D` takes an instruction
+  abort straight to EL2 (ESR 0x8200000c), and execution elsewhere works.
+
+An OS therefore cannot run at EL2 in this mode. Aura stays at EL2 as a
+monitor and enters the OS at EL1 on every CPU (`src/monitor.c`). At kboot,
+`monitor_required()` asks a secondary to run two instructions from the heap
+and uses EL1 only if that faults. There is no build option. When it does
+use EL1, kboot reserves `CTXR_D` so Linux never allocates from it.
+`monitor_enter_os()` leaves EL2 the way the kernel's `init_el2_state` and
+`finalise_el2_state` would, for the features this chip has, so the OS takes
+no traps. Linux reports `CPU: All CPU(s) started at EL1`, and KVM is not
+available yet.
+
+WFI wipes the general registers, the vector registers and NZCV on these
+cores, from EL2, EL1 and EL0, on E and P cores. FPCR, `SP_EL0` and the 33
+system registers we tracked survive, including the pointer authentication
+keys. WFE wipes nothing. Linux has to save registers around idle, and the
+Aurora kernel does.
+
 ## Status
 
 kmutil from macOS 27.2 and from macOS 26.6.2 (25G83) parses the boot
-object and derives `kcbz : 0`. This build has not yet been cold-booted on
-hardware, and iBoot older than 27.2, such as the 26.6.2 firmware of current
-Aurora installations, has not been checked for the same behavior.
+object and derives `kcbz : 0`. On a MacBook Neo (T8140, J700) a proxy Stage 1
+built this way cold-boots, and the installed Fedora kernel boots to a login
+at EL1 with pointer authentication on and all six CPUs up.
+
+Not tested: a raw boot with `src/monitor.c` in the tree, a filled Stage 1 that
+loads Stage 2 from the ESP, and any chip other than T8140.

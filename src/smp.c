@@ -6,6 +6,7 @@
 #include "aic_regs.h"
 #include "cpu_regs.h"
 #include "memory.h"
+#include "monitor.h"
 #include "pmgr.h"
 #include "soc.h"
 #include "string.h"
@@ -105,6 +106,8 @@ struct smp_reset_stack smp_reset_stacks[MAX_CPUS] SMP_SHARED = {
 };
 
 extern u8 _vectors_start[0];
+
+bool monitor_active SMP_SHARED;
 extern u8 _stack_bot[0];
 int boot_cpu_idx SMP_SHARED = -1;
 u64 boot_cpu_mpidr SMP_SHARED = 0;
@@ -258,6 +261,8 @@ void smp_secondary_entry(void)
         sysop("dmb sy");
         me->flag++;
         sysop("dmb sy");
+        if (monitor_active)
+            monitor_enter_os(target, me->args[0], me->args[1], me->args[2]);
         me->retval = ((u64 (*)(u64 a, u64 b, u64 c, u64 d))target)(me->args[0], me->args[1],
                                                                    me->args[2], me->args[3]);
         sysop("dmb sy");
