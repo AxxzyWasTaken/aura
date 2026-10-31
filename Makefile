@@ -67,7 +67,9 @@ QUIET :=
 endif
 endif
 
-BASE_CFLAGS := -O2 -Wall -g -Wundef -Werror=strict-prototypes -fno-common -fno-PIE \
+# Keep boot images below the DCP log-buffer boundary enforced by aura-raw.ld.
+# EXTRA_CFLAGS can still override the optimization level for development builds.
+BASE_CFLAGS := -Os -Wall -g -Wundef -Werror=strict-prototypes -fno-common -fno-PIE \
 	-Werror=implicit-function-declaration -Werror=implicit-int \
 	-Wsign-compare -Wunused-parameter -Wno-multichar \
 	-ffreestanding -fpic -ffunction-sections -fdata-sections \
