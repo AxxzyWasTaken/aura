@@ -63,6 +63,6 @@ composition performs no installation, boot-default change or reboot. After
 boot, inspect the live `/sys/firmware/fdt` and PMP `dram/` files to verify the
 selected tree, rather than inferring success from installed DTB files.
 
-The direct `boot=` route described in [j700-install.md](j700-install.md) instead
+The direct `boot=` route described in the J700 installation guide instead
 loads the DTB named in the four-field boot specification. Refresh that named
 file together with its kernel and modules; it is a different packaging route.
