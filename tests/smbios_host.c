@@ -108,6 +108,19 @@ static void expect_str(void *dt, const char *path, const char *prop, const char 
     }
 }
 
+static void expect_u32(void *dt, const char *path, const char *prop, u32 want)
+{
+    int node = fdt_path_offset(dt, path), len;
+    const fdt32_t *val = node >= 0 ? fdt_getprop(dt, node, prop, &len) : NULL;
+
+    if (!val || len != 4 || fdt32_ld(val) != want) {
+        printf("FAIL %s %s: %s, want %u\n", path, prop, val && len == 4 ? "other" : "absent", want);
+        fails++;
+    } else {
+        printf("ok %s %s = %u\n", path, prop, want);
+    }
+}
+
 static void expect_nonzero(void *dt, const char *path, const char *prop)
 {
     int node = fdt_path_offset(dt, path), len;
@@ -206,6 +219,14 @@ int main(int argc, char **argv)
                "27.0 (mBoot-20457.1.29)");
     /* speed (apple,data-rate in the DT) and width (dcs_num_channels in the ADT) where given */
     expect_nonzero(dt, "/smbios/smbios/cache/l2-cache", "installed-size2");
+    expect_u32(dt, "/smbios/smbios/firmware-inventory/stage2", "characteristics", 1);
+    expect_u32(dt, "/smbios/smbios/firmware-inventory/u-boot", "characteristics", 1);
+    expect_u32(dt, "/smbios/smbios/firmware-inventory/system", "characteristics", 0);
+    expect_u32(dt, "/smbios/smbios/firmware-inventory/os", "characteristics", 0);
+    if (stage1[0])
+        expect_u32(dt, "/smbios/smbios/firmware-inventory/stage1", "characteristics", 0);
+    if (fdt_path_offset(dt, "/smbios/smbios/firmware-inventory/tcon") >= 0)
+        expect_u32(dt, "/smbios/smbios/firmware-inventory/tcon", "characteristics", 0);
     if (stage1[0])
         expect_str(dt, "/smbios/smbios/firmware-inventory/stage1", "version", stage1);
     expect_nonzero(dt, "/smbios/smbios/processor", "core-count");
