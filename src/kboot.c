@@ -991,6 +991,7 @@ static int dt_set_serial_number(void)
 #define SMBIOS_CACHE_SRAM_UNKNOWN      0x0002
 #define SMBIOS_CACHE_TYPE_UNIFIED      0x05
 #define SMBIOS_FW_STATE_ENABLED        0x04
+#define SMBIOS_FW_UPDATABLE            0x0001 /* can be updated by software */
 
 /* An ADT string property, or NULL if it is absent or empty. Values may be NUL padded. */
 static const char *adt_string(int node, const char *name)
@@ -1563,16 +1564,19 @@ static int dt_set_smbios(void)
 
 /* One firmware component for U-Boot's SMBIOS Firmware Inventory (type 45) */
 static int dt_smbios_firmware(int *inventory, const char *id, const char *name, const char *version,
-                              const char *manufacturer)
+                              const char *manufacturer, u32 characteristics)
 {
     int node = dt_smbios_node(*inventory, id);
 
     if (node < 0)
         bail("FDT: failed to add firmware '%s' to the SMBIOS inventory\n", id);
-    fdt_setprop_string(dt, node, "component-name", name);
-    fdt_setprop_string(dt, node, "version", version);
+    if (name)
+        fdt_setprop_string(dt, node, "component-name", name);
+    if (version)
+        fdt_setprop_string(dt, node, "version", version);
     if (manufacturer)
         fdt_setprop_string(dt, node, "manufacturer", manufacturer);
+    fdt_setprop_u32(dt, node, "characteristics", characteristics);
     fdt_setprop_u32(dt, node, "state", SMBIOS_FW_STATE_ENABLED);
     *inventory = fdt_path_offset(dt, "/smbios/smbios/firmware-inventory");
     return *inventory < 0 ? -1 : 0;
@@ -1616,23 +1620,32 @@ static int dt_set_smbios_firmware(void)
 
     if (system_firmware.string && system_firmware.iboot) {
         snprintf(buf, sizeof(buf), "%s (%s)", system_firmware.string, system_firmware.iboot);
-        if (dt_smbios_firmware(&inv, "system", "Apple System Firmware", buf, manuf))
+        if (dt_smbios_firmware(&inv, "system", "Apple System Firmware", buf, manuf, 0))
             return -1;
     }
     if (os_firmware.string && os_firmware.iboot) {
         snprintf(buf, sizeof(buf), "%s (%s)", os_firmware.string, os_firmware.iboot);
-        if (dt_smbios_firmware(&inv, "os", "Apple OS Firmware", buf, manuf))
+        if (dt_smbios_firmware(&inv, "os", "Apple OS Firmware", buf, manuf, 0))
             return -1;
     }
-    if (stage1[0] && dt_smbios_firmware(&inv, "stage1", "aura Stage 1", stage1, "Aurora Silicon"))
+    if (stage1[0] &&
+        dt_smbios_firmware(&inv, "stage1", "aura Stage 1", stage1, "Aurora Silicon", 0))
         return -1;
-    if (dt_smbios_firmware(&inv, "stage2", "aura Stage 2", aura_version, "Aurora Silicon"))
+    /* Stage 2 updates from the OS (update-m1n1); stage 1 needs recoveryOS (kmutil) */
+    if (dt_smbios_firmware(&inv, "stage2", "aura Stage 2", aura_version, "Aurora Silicon",
+                           SMBIOS_FW_UPDATABLE))
+        return -1;
+    /*
+     * U-Boot describes itself in its entry. Tell it how it is kept: inside this Stage 2, so it
+     * updates from the OS with it.
+     */
+    if (dt_smbios_firmware(&inv, "u-boot", NULL, NULL, NULL, SMBIOS_FW_UPDATABLE))
         return -1;
 
     /* The video encoder firmware aura hands Linux, identified by its CRC32s */
     if (ave_text[0]) {
         snprintf(buf, sizeof(buf), "text CRC32 %s, data CRC32 %s", ave_text, ave_data);
-        if (dt_smbios_firmware(&inv, "ave", "Video Encoder Firmware", buf, manuf))
+        if (dt_smbios_firmware(&inv, "ave", "Video Encoder Firmware", buf, manuf, 0))
             return -1;
     }
 
@@ -1644,7 +1657,7 @@ static int dt_set_smbios_firmware(void)
             snprintf(buf, sizeof(buf), "%u (bundle %u)", tcon_fw, tcon_bundle);
         else
             snprintf(buf, sizeof(buf), "%u", tcon_fw);
-        if (dt_smbios_firmware(&inv, "tcon", "Display Timing Controller Firmware", buf, manuf))
+        if (dt_smbios_firmware(&inv, "tcon", "Display Timing Controller Firmware", buf, manuf, 0))
             return -1;
     }
 
