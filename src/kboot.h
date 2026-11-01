@@ -43,5 +43,6 @@ void kboot_loaded_file_part(u64 *base, u64 *size);
 
 // from rust/usb4.rs
 u64 rust_usb4_router_uuid(void);
+int rust_platform_uuid(u8 *out);
 
 #endif

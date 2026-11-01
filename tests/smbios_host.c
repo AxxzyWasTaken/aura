@@ -152,6 +152,13 @@ int main(int argc, char **argv)
     expect_str(dt, "/smbios/smbios/system", "sku", NULL);
     expect_str(dt, "/smbios/smbios/system", "family", NULL);
     expect_str(dt, "/smbios/smbios/processor", "version", NULL);
+    expect_str(dt, "/smbios/smbios/system", "uuid", NULL);
+    expect_str(dt, "/smbios/smbios/bios", "version", "aura 1.0.0b1-host");
+    expect_str(dt, "/smbios/smbios/firmware-inventory/stage2", "version", "1.0.0b1-host");
+    expect_str(dt, "/smbios/smbios/firmware-inventory/system", "version",
+               "27.0 (mBoot-20457.1.29)");
+    /* speed (apple,data-rate in the DT) and width (dcs_num_channels in the ADT) where given */
+    expect_nonzero(dt, "/smbios/smbios/cache/l2-cache", "installed-size2");
     expect_nonzero(dt, "/smbios/smbios/processor", "core-count");
     expect_nonzero(dt, "/smbios/smbios/processor", "max-speed");
     expect_nonzero(dt, "/smbios/smbios/memory-device/dram", "size");

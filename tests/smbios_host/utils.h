@@ -14,8 +14,14 @@
 #include "types.h"
 
 #define ARRAY_SIZE(s) (sizeof(s) / sizeof((s)[0]))
+#define min(a, b)     (((a) < (b)) ? (a) : (b))
 
 u64 host_sysreg(const char *name);
 #define mrs(reg) host_sysreg(#reg)
+
+static inline int in_el2(void)
+{
+    return 1;
+}
 
 #endif

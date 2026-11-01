@@ -5,7 +5,7 @@
 #
 # The ADT is a binary dump of a Mac's Apple device tree and the DTB that Mac's device tree (a
 # kernel build's, or /sys/firmware/fdt). Both are read here and never copied into the tree.
-# tests/smbios_host.c runs kboot.c's dt_cpu_summary() and dt_set_smbios(), copied out of
+# tests/smbios_host.c runs kboot.c's dt_set_smbios() and dt_set_smbios_firmware() with their helpers, copied out of
 # src/kboot.c below, with aura's ADT reader (rust/src/adt.rs, built for the host) and libfdt,
 # twice (the node must come out the same), once as an Armv8 and once as an Armv9 (SME) CPU.
 set -eu
@@ -40,11 +40,17 @@ RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.89.0} rustc --edition 2021 --crate-type s
     printf '#include "libfdt/libfdt.h"\n'
     printf '#define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)\n'
     printf 'static void *dt;\n'
-    awk '/^ \* SMBIOS values for U-Boot/ { on = 1; print "/*" } on { print } on && /^static int dt_set_smbios[(]/ { body = 1 } body && /^}/ { exit }' \
+    # what the copied code takes from firmware.c, main.c and rust/src/usb4.rs
+    printf 'struct fw_version_info { const char *string; const char *iboot; };\n'
+    printf 'struct fw_version_info system_firmware = { "27.0", "mBoot-20457.1.29" };\n'
+    printf 'struct fw_version_info os_firmware = { "26.6.2", "mBoot-18000.161.10" };\n'
+    printf 'const char *const aura_version = "1.0.0b1-host";\n'
+    printf 'int rust_platform_uuid(u8 *out) { for (int i = 0; i < 16; i++) out[i] = 0x11 * i; return 0; }\n'
+    awk '/^ \* SMBIOS values for U-Boot/ { on = 1; print "/*" } on { print } on && /^static int dt_set_smbios_firmware[(]/ { body = 1 } body && /^}/ { exit }' \
         src/kboot.c
-    printf 'int host_set_smbios(void *d)\n{\n    dt = d;\n    return dt_set_smbios();\n}\n'
+    printf 'int host_set_smbios(void *d)\n{\n    dt = d;\n    return dt_set_smbios() || dt_set_smbios_firmware();\n}\n'
 } > "$tmp/src/kboot_smbios_copy.c"
-for f in dt_cpu_summary dt_set_smbios smbios_memory_type; do
+for f in dt_cpu_summary dt_set_smbios dt_set_smbios_firmware dt_l2_summary dt_dram_data_rate; do
     grep -q "$f" "$tmp/src/kboot_smbios_copy.c" || {
         echo "FAIL: $f not found in src/kboot.c"
         exit 1
