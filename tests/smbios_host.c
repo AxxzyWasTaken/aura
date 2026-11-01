@@ -136,6 +136,14 @@ int main(int argc, char **argv)
     if (!dt || fdt_open_into(dt, dt, dt_size + 65536))
         return 2;
 
+    /* The stage 1 version in /chosen, which the inventory must carry unchanged */
+    char stage1[64] = "";
+    int chosen = fdt_path_offset(dt, "/chosen"), slen;
+    const char *s1 =
+        chosen >= 0 ? fdt_getprop(dt, chosen, "asahi,m1n1-stage1-version", &slen) : NULL;
+    if (s1)
+        snprintf(stage1, sizeof(stage1), "%s", s1);
+
     if (host_set_smbios(dt)) {
         printf("FAIL dt_set_smbios\n");
         return 1;
@@ -159,6 +167,8 @@ int main(int argc, char **argv)
                "27.0 (mBoot-20457.1.29)");
     /* speed (apple,data-rate in the DT) and width (dcs_num_channels in the ADT) where given */
     expect_nonzero(dt, "/smbios/smbios/cache/l2-cache", "installed-size2");
+    if (stage1[0])
+        expect_str(dt, "/smbios/smbios/firmware-inventory/stage1", "version", stage1);
     expect_nonzero(dt, "/smbios/smbios/processor", "core-count");
     expect_nonzero(dt, "/smbios/smbios/processor", "max-speed");
     expect_nonzero(dt, "/smbios/smbios/memory-device/dram", "size");

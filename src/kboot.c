@@ -1487,10 +1487,10 @@ static int dt_set_smbios(void)
 }
 
 /* One firmware component for U-Boot's SMBIOS Firmware Inventory (type 45) */
-static int dt_smbios_firmware(int inventory, const char *id, const char *name, const char *version,
+static int dt_smbios_firmware(int *inventory, const char *id, const char *name, const char *version,
                               const char *manufacturer)
 {
-    int node = dt_smbios_node(inventory, id);
+    int node = dt_smbios_node(*inventory, id);
 
     if (node < 0)
         bail("FDT: failed to add firmware '%s' to the SMBIOS inventory\n", id);
@@ -1499,7 +1499,8 @@ static int dt_smbios_firmware(int inventory, const char *id, const char *name, c
     if (manufacturer)
         fdt_setprop_string(dt, node, "manufacturer", manufacturer);
     fdt_setprop_u32(dt, node, "state", SMBIOS_FW_STATE_ENABLED);
-    return 0;
+    *inventory = fdt_path_offset(dt, "/smbios/smbios/firmware-inventory");
+    return *inventory < 0 ? -1 : 0;
 }
 
 /*
@@ -1509,14 +1510,30 @@ static int dt_smbios_firmware(int inventory, const char *id, const char *name, c
  */
 static int dt_set_smbios_firmware(void)
 {
-    int smbios_node = fdt_path_offset(dt, "/smbios/smbios");
-    int chosen = fdt_path_offset(dt, "/chosen");
     int adt_product = adt_path_offset(adt, "/product");
     const char *manuf = "Apple Inc.";
-    char buf[96];
-    int inv, len;
+    char buf[96], stage1[64] = "", ave_text[16] = "", ave_data[16] = "";
+    int smbios_node, inv, len;
 
-    if (smbios_node < 0 || chosen < 0)
+    /*
+     * Copy what /chosen holds first: adding nodes under /smbios, which libfdt places before
+     * /chosen, moves it.
+     */
+    int chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen >= 0) {
+        const char *s1 = fdt_getprop(dt, chosen, "asahi,m1n1-stage1-version", &len);
+        if (s1 && len > 1)
+            strncpy(stage1, s1, sizeof(stage1) - 1);
+        const char *text = fdt_getprop(dt, chosen, "aurora,ave-text-crc32", &len);
+        const char *data = fdt_getprop(dt, chosen, "aurora,ave-data-crc32", NULL);
+        if (text && data) {
+            strncpy(ave_text, text, sizeof(ave_text) - 1);
+            strncpy(ave_data, data, sizeof(ave_data) - 1);
+        }
+    }
+
+    smbios_node = fdt_path_offset(dt, "/smbios/smbios");
+    if (smbios_node < 0)
         return 0;
     inv = dt_smbios_node(smbios_node, "firmware-inventory");
     if (inv < 0)
@@ -1524,26 +1541,23 @@ static int dt_set_smbios_firmware(void)
 
     if (system_firmware.string && system_firmware.iboot) {
         snprintf(buf, sizeof(buf), "%s (%s)", system_firmware.string, system_firmware.iboot);
-        if (dt_smbios_firmware(inv, "system", "Apple System Firmware", buf, manuf))
+        if (dt_smbios_firmware(&inv, "system", "Apple System Firmware", buf, manuf))
             return -1;
     }
     if (os_firmware.string && os_firmware.iboot) {
         snprintf(buf, sizeof(buf), "%s (%s)", os_firmware.string, os_firmware.iboot);
-        if (dt_smbios_firmware(inv, "os", "Apple OS Firmware", buf, manuf))
+        if (dt_smbios_firmware(&inv, "os", "Apple OS Firmware", buf, manuf))
             return -1;
     }
-    const char *s1 = fdt_getprop(dt, chosen, "asahi,m1n1-stage1-version", &len);
-    if (s1 && len > 1 && dt_smbios_firmware(inv, "stage1", "aura Stage 1", s1, "Aurora Silicon"))
+    if (stage1[0] && dt_smbios_firmware(&inv, "stage1", "aura Stage 1", stage1, "Aurora Silicon"))
         return -1;
-    if (dt_smbios_firmware(inv, "stage2", "aura Stage 2", aura_version, "Aurora Silicon"))
+    if (dt_smbios_firmware(&inv, "stage2", "aura Stage 2", aura_version, "Aurora Silicon"))
         return -1;
 
     /* The video encoder firmware aura hands Linux, identified by its CRC32s */
-    const char *ave_text = fdt_getprop(dt, chosen, "aurora,ave-text-crc32", &len);
-    const char *ave_data = fdt_getprop(dt, chosen, "aurora,ave-data-crc32", NULL);
-    if (ave_text && ave_data) {
+    if (ave_text[0]) {
         snprintf(buf, sizeof(buf), "text CRC32 %s, data CRC32 %s", ave_text, ave_data);
-        if (dt_smbios_firmware(inv, "ave", "Video Encoder Firmware", buf, manuf))
+        if (dt_smbios_firmware(&inv, "ave", "Video Encoder Firmware", buf, manuf))
             return -1;
     }
 
@@ -1555,7 +1569,7 @@ static int dt_set_smbios_firmware(void)
             snprintf(buf, sizeof(buf), "%u (bundle %u)", tcon_fw, tcon_bundle);
         else
             snprintf(buf, sizeof(buf), "%u", tcon_fw);
-        if (dt_smbios_firmware(inv, "tcon", "Display Timing Controller Firmware", buf, manuf))
+        if (dt_smbios_firmware(&inv, "tcon", "Display Timing Controller Firmware", buf, manuf))
             return -1;
     }
 
