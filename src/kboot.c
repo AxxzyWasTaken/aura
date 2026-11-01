@@ -1227,8 +1227,8 @@ static int dt_set_smbios(void)
 
     /*
      * Product Name: the device tree's model without the brand, which names the machine with its
-     * chip, e.g. "MacBook Pro (16-inch, M4 Pro, Nov 2024)", followed by the identifier, which
-     * desktops show as the model. The identifier alone is the SKU Number.
+     * chip, e.g. "MacBook Pro (16-inch, M4 Pro, Nov 2024)". The identifier ("Mac16,7") is the SKU
+     * Number.
      */
     const char *dt_model = fdt_getprop(dt, fdt_root, "model", &len);
     const char *name = NULL;
@@ -1257,12 +1257,7 @@ static int dt_set_smbios(void)
     if (node < 0)
         bail("FDT: failed to add node 'system' to  '/smbios'\n");
     fdt_setprop_string(dt, node, "manufacturer", manuf);
-    if (name) {
-        snprintf(buf, sizeof(buf), "%s - %s", name, model);
-        fdt_setprop_string(dt, node, "product", buf);
-    } else {
-        fdt_setprop_string(dt, node, "product", model);
-    }
+    fdt_setprop_string(dt, node, "product", name ? name : model);
     fdt_setprop_string(dt, node, "sku", model);
     fdt_setprop_string(dt, node, "serial", serial);
     /* Version: the regulatory model number, e.g. "A2681", the hardware revision Apple marks */
