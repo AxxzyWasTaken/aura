@@ -959,53 +959,350 @@ static int dt_set_serial_number(void)
     return 0;
 }
 
+/*
+ * SMBIOS values for U-Boot's sysinfo-smbios driver, which builds the firmware tables Linux reads
+ * (/sys/firmware/dmi, dmidecode, systemd-hostnamed, udev's memory properties). Everything comes
+ * from the ADT and the device tree, so it holds for every machine without a per-model table.
+ */
+
+/* SMBIOS 3.7 values used below */
+#define SMBIOS_PROCESSOR_TYPE_CENTRAL  0x03
+#define SMBIOS_PROCESSOR_FAMILY_EXT    0xfe
+#define SMBIOS_PROCESSOR_FAMILY2_ARMV8 0x101
+#define SMBIOS_PROCESSOR_FAMILY2_ARMV9 0x102
+#define SMBIOS_PROCESSOR_STATUS_OK     0x41 /* socket populated, CPU enabled */
+#define SMBIOS_PROCESSOR_UPGRADE_NONE  0x06
+#define SMBIOS_MA_LOCATION_BOARD       0x03
+#define SMBIOS_MA_USE_SYSTEM           0x03
+#define SMBIOS_MA_ERRCORR_NONE         0x03
+#define SMBIOS_MD_FF_ROW_OF_CHIPS      0x0b
+#define SMBIOS_MD_TD_SYNCHRONOUS       0x0080
+#define SMBIOS_MD_TECH_DRAM            0x03
+#define SMBIOS_MD_OPMC_VOLATILE        0x0008
+#define SMBIOS_BOARD_FEATURE_HOSTING   0x01
+#define SMBIOS_BOARD_TYPE_MOTHERBOARD  0x0a
+#define SMBIOS_STATE_SAFE              0x03
+#define SMBIOS_SECURITY_NONE           0x03
+#define SMBIOS_PROCESSOR_EXEC_PROTECT  0x0020
+#define SMBIOS_PROCESSOR_VIRT          0x0040
+#define SMBIOS_PROCESSOR_POWER_CONTROL 0x0080
+#define SMBIOS_CACHE_L2_CONFIG         0x0381 /* level 2, enabled, internal, mode unknown */
+#define SMBIOS_CACHE_UNKNOWN           0x02
+#define SMBIOS_CACHE_SRAM_UNKNOWN      0x0002
+#define SMBIOS_CACHE_TYPE_UNIFIED      0x05
+#define SMBIOS_FW_STATE_ENABLED        0x04
+
+/* An ADT string property, or NULL if it is absent or empty. Values may be NUL padded. */
+static const char *adt_string(int node, const char *name)
+{
+    u32 len;
+    const char *s = adt_getprop(adt, node, name, &len);
+
+    if (!s || !len || !s[0] || !memchr(s, 0, len))
+        return NULL;
+    return s;
+}
+
+static int dt_smbios_node(int parent, const char *name)
+{
+    int node = fdt_subnode_offset(dt, parent, name);
+
+    if (node >= 0)
+        return node;
+    return fdt_add_subnode(dt, parent, name);
+}
+
+/* SMBIOS Memory Device type for the ADT's /chosen dram-type */
+static u32 smbios_memory_type(const char *dram_type)
+{
+    if (!dram_type)
+        return 0x02; /* Unknown */
+    if (!strncmp(dram_type, "LPDDR5", 6))
+        return 0x23;
+    if (!strncmp(dram_type, "LPDDR4", 6))
+        return 0x1e;
+    if (!strncmp(dram_type, "LPDDR3", 6))
+        return 0x1d;
+    return 0x01; /* Other */
+}
+
+/*
+ * Cores and their highest frequency, from the CPU nodes left after dt_set_cpus() and the OPP
+ * tables they point at.
+ */
+static void dt_cpu_summary(u32 *cores, u32 *max_mhz)
+{
+    int cpus = fdt_path_offset(dt, "/cpus");
+    int node;
+    u64 max_hz = 0;
+
+    *cores = 0;
+    *max_mhz = 0;
+    if (cpus < 0)
+        return;
+
+    fdt_for_each_subnode(node, dt, cpus)
+    {
+        const char *type = fdt_getprop(dt, node, "device_type", NULL);
+        const char *status = fdt_getprop(dt, node, "status", NULL);
+        const fdt32_t *opp_ph;
+        int opp, entry;
+
+        if (!type || strcmp(type, "cpu"))
+            continue;
+        if (status && strcmp(status, "okay") && strcmp(status, "ok"))
+            continue;
+        (*cores)++;
+
+        opp_ph = fdt_getprop(dt, node, "operating-points-v2", NULL);
+        if (!opp_ph)
+            continue;
+        opp = fdt_node_offset_by_phandle(dt, fdt32_ld(opp_ph));
+        if (opp < 0)
+            continue;
+        fdt_for_each_subnode(entry, dt, opp)
+        {
+            int len;
+            const fdt32_t *hz = fdt_getprop(dt, entry, "opp-hz", &len);
+            u64 val;
+
+            if (!hz || len < 4)
+                continue;
+            val = len >= 8 ? fdt64_ld((const fdt64_t *)hz) : fdt32_ld(hz);
+            if (val > max_hz)
+                max_hz = val;
+        }
+    }
+
+    *max_mhz = max_hz / 1000000;
+}
+
+/* An ADT property holding a NUL padded string of known size, copied into buf */
+static const char *adt_padded_string(int node, const char *name, char *buf, size_t size)
+{
+    u32 len;
+    const char *s = adt_getprop(adt, node, name, &len);
+    size_t n;
+
+    if (!s || !len)
+        return NULL;
+    n = strnlen(s, min((size_t)len, size - 1));
+    if (!n)
+        return NULL;
+    memcpy(buf, s, n);
+    buf[n] = 0;
+    return buf;
+}
+
+/* The highest data rate of the DRAM's operating points (apple,data-rate), in MT/s */
+static u32 dt_dram_data_rate(void)
+{
+    int opp = fdt_node_offset_by_compatible(dt, -1, "operating-points-v2-apple-dram");
+    int entry;
+    u64 max_rate = 0;
+
+    if (opp < 0)
+        return 0;
+    fdt_for_each_subnode(entry, dt, opp)
+    {
+        int len;
+        const fdt64_t *rate = fdt_getprop(dt, entry, "apple,data-rate", &len);
+
+        if (rate && len == 8 && fdt64_ld(rate) > max_rate)
+            max_rate = fdt64_ld(rate);
+    }
+    return (max_rate + 500000) / 1000000;
+}
+
+/*
+ * The CPUs' L2 caches from the device tree: their total size in KiB, and a description of the
+ * instances, e.g. "L2 Cache (2x 16 MiB, 1x 4 MiB)". The caches of the clusters differ, and an
+ * SMBIOS processor links one L2 structure, so it describes them together.
+ */
+static u32 dt_l2_summary(char *desc, size_t size)
+{
+    int cpus = fdt_path_offset(dt, "/cpus");
+    u32 phandles[16], sizes[16], n = 0, total = 0;
+    int node;
+
+    if (cpus < 0)
+        return 0;
+    fdt_for_each_subnode(node, dt, cpus)
+    {
+        const char *type = fdt_getprop(dt, node, "device_type", NULL);
+        const fdt32_t *next = fdt_getprop(dt, node, "next-level-cache", NULL);
+        int cache, len;
+        u32 ph, i;
+
+        if (!type || strcmp(type, "cpu") || !next)
+            continue;
+        ph = fdt32_ld(next);
+        for (i = 0; i < n && phandles[i] != ph; i++)
+            ;
+        if (i < n || n == ARRAY_SIZE(phandles))
+            continue;
+        cache = fdt_node_offset_by_phandle(dt, ph);
+        if (cache < 0)
+            continue;
+        const fdt32_t *level = fdt_getprop(dt, cache, "cache-level", &len);
+        const fdt32_t *bytes = fdt_getprop(dt, cache, "cache-size", &len);
+        if (!level || fdt32_ld(level) != 2 || !bytes)
+            continue;
+        phandles[n] = ph;
+        sizes[n++] = fdt32_ld(bytes) >> 10;
+        total += fdt32_ld(bytes) >> 10;
+    }
+    if (!total)
+        return 0;
+
+    /* Group equal sizes, largest first */
+    size_t pos = snprintf(desc, size, "L2 Cache (");
+    for (u32 done = 0; done < n;) {
+        u32 big = 0, count = 0;
+        for (u32 i = 0; i < n; i++)
+            if (sizes[i] > big)
+                big = sizes[i];
+        for (u32 i = 0; i < n; i++)
+            if (sizes[i] == big) {
+                sizes[i] = 0;
+                count++;
+            }
+        done += count;
+        if (pos < size)
+            pos += snprintf(desc + pos, size - pos, "%s%ux %u %s", pos > 10 ? ", " : "", count,
+                            big >= 1024 ? big / 1024 : big, big >= 1024 ? "MiB" : "KiB");
+    }
+    if (pos < size)
+        snprintf(desc + pos, size - pos, ")");
+    return total;
+}
+
+/* An SMBIOS cache size word: KiB, or 64 KiB units with bit 15 set when that does not fit */
+static u32 smbios_cache_size16(u32 kib)
+{
+    if (kib < 0x8000)
+        return kib;
+    if (kib / 64 < 0x8000)
+        return 0x8000 | (kib / 64);
+    return 0xffff;
+}
+
 static int dt_set_smbios(void)
 {
     int fdt_root = fdt_path_offset(dt, "/");
     int adt_root = adt_path_offset(adt, "/");
+    int adt_product = adt_path_offset(adt, "/product");
+    int adt_chosen = adt_path_offset(adt, "/chosen");
     int len, node, smbios_node;
+    char buf[160];
 
     if (fdt_root < 0)
         bail("FDT: could not open a handle to FDT root.\n");
     if (adt_root < 0)
         bail("ADT: could not open a handle to ADT root.\n");
 
-    node = fdt_add_subnode(dt, fdt_root, "smbios");
+    node = dt_smbios_node(fdt_root, "smbios");
     if (node < 0)
         bail("FDT: failed to add node 'smbios' to  '/'\n");
     fdt_setprop_string(dt, node, "compatible", "u-boot,sysinfo-smbios");
 
-    smbios_node = fdt_add_subnode(dt, node, "smbios");
+    smbios_node = dt_smbios_node(node, "smbios");
     if (smbios_node < 0)
         bail("FDT: failed to add node 'smbios' to  '/smbios'\n");
 
-    node = fdt_add_subnode(dt, smbios_node, "system");
-    if (node < 0)
-        bail("FDT: failed to add node 'system' to  '/smbios'\n");
-
-    const char *manuf = adt_getprop(adt, adt_root, "manufacturer", NULL);
+    const char *manuf = adt_string(adt_root, "manufacturer");
     if (!manuf)
         bail("ADT: failed to get manufacturer property\n");
-    fdt_setprop_string(dt, node, "manufacturer", manuf);
-    const char *model = adt_getprop(adt, adt_root, "model", NULL);
+    /* The identifier, e.g. "Mac16,7" */
+    const char *model = adt_string(adt_root, "model");
     if (!model)
         bail("ADT: failed to get model property\n");
-    fdt_setprop_string(dt, node, "product", model);
-    const char *serial = adt_getprop(adt, adt_root, "serial-number", NULL);
+    const char *serial = adt_string(adt_root, "serial-number");
     if (!serial)
         bail("ADT: failed to get serial-number property\n");
-    fdt_setprop_string(dt, node, "serial", serial);
+    /* Apple's name for the product, e.g. "MacBook Pro (16-inch, 2024)" */
+    const char *product_name = adt_product >= 0 ? adt_string(adt_product, "product-name") : NULL;
+    /* The chip, e.g. "Apple M4 Pro" */
+    const char *soc_name = adt_product >= 0 ? adt_string(adt_product, "product-soc-name") : NULL;
 
-    node = fdt_add_subnode(dt, smbios_node, "baseboard");
+    /*
+     * Product Name: the device tree's model without the brand, which names the machine with its
+     * chip, e.g. "MacBook Pro (16-inch, M4 Pro, Nov 2024)". The identifier ("Mac16,7") is the SKU
+     * Number.
+     */
+    const char *dt_model = fdt_getprop(dt, fdt_root, "model", &len);
+    const char *name = NULL;
+    if (dt_model && len > 1 && memchr(dt_model, 0, len)) {
+        const char *space = strchr(manuf, ' ');
+        size_t brand = space ? (size_t)(space - manuf) : strlen(manuf);
+        name = dt_model;
+        if (!strncmp(name, manuf, brand) && name[brand] == ' ')
+            name += brand + 1;
+    } else if (product_name) {
+        name = product_name;
+    }
+
+    /*
+     * Platform firmware: aura and U-Boot together. U-Boot appends its own version to this one
+     * ("aura <version> / U-Boot <version>").
+     */
+    node = dt_smbios_node(smbios_node, "bios");
+    if (node < 0)
+        bail("FDT: failed to add node 'bios' to  '/smbios'\n");
+    fdt_setprop_string(dt, node, "vendor", "Aurora Silicon");
+    snprintf(buf, sizeof(buf), "aura %s", aura_version);
+    fdt_setprop_string(dt, node, "version", buf);
+
+    node = dt_smbios_node(smbios_node, "system");
+    if (node < 0)
+        bail("FDT: failed to add node 'system' to  '/smbios'\n");
+    fdt_setprop_string(dt, node, "manufacturer", manuf);
+    fdt_setprop_string(dt, node, "product", name ? name : model);
+    fdt_setprop_string(dt, node, "sku", model);
+    fdt_setprop_string(dt, node, "serial", serial);
+    /* Version: the regulatory model number, e.g. "A2681", the hardware revision Apple marks */
+    char regulatory[16];
+    if (adt_padded_string(adt_root, "regulatory-model-number", regulatory, sizeof(regulatory)))
+        fdt_setprop_string(dt, node, "version", regulatory);
+    else
+        regulatory[0] = 0;
+    /* UUID: the platform UUID macOS shows as the Hardware UUID */
+    u8 uuid[16];
+    if (!rust_platform_uuid(uuid)) {
+        snprintf(buf, sizeof(buf),
+                 "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", uuid[0],
+                 uuid[1], uuid[2], uuid[3], uuid[4], uuid[5], uuid[6], uuid[7], uuid[8], uuid[9],
+                 uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15]);
+        fdt_setprop_string(dt, node, "uuid", buf);
+    }
+    /* Family: the product line, Apple's product name up to its details, e.g. "MacBook Pro" */
+    if (product_name) {
+        const char *paren = strchr(product_name, '(');
+        size_t n = paren ? (size_t)(paren - product_name) : strlen(product_name);
+        while (n && product_name[n - 1] == ' ')
+            n--;
+        if (n && n < sizeof(buf)) {
+            memcpy(buf, product_name, n);
+            buf[n] = 0;
+            fdt_setprop_string(dt, node, "family", buf);
+        }
+    }
+
+    node = dt_smbios_node(smbios_node, "baseboard");
     if (node < 0)
         bail("FDT: failed to add node 'baseboard' to  '/smbios'\n");
     fdt_setprop_string(dt, node, "manufacturer", manuf);
-    const char *target_type = adt_getprop(adt, 0, "target-type", NULL);
+    const char *target_type = adt_string(adt_root, "target-type");
     if (!target_type)
         bail("ADT: failed to get target-type property\n");
     fdt_setprop_string(dt, node, "product", target_type);
+    const char *mlb_serial = adt_string(adt_root, "mlb-serial-number");
+    if (mlb_serial)
+        fdt_setprop_string(dt, node, "serial", mlb_serial);
+    fdt_setprop_u32(dt, node, "feature-flags", SMBIOS_BOARD_FEATURE_HOSTING);
+    fdt_setprop_u32(dt, node, "board-type", SMBIOS_BOARD_TYPE_MOTHERBOARD);
 
-    node = fdt_add_subnode(dt, smbios_node, "chassis");
+    node = dt_smbios_node(smbios_node, "chassis");
     if (node < 0)
         bail("FDT: failed to add node 'chassis' to  '/smbios'\n");
     fdt_setprop_string(dt, node, "manufacturer", manuf);
@@ -1022,6 +1319,259 @@ static int dt_set_smbios(void)
             enclosure = 0x11;
     }
     fdt_setprop_u32(dt, node, "chassis-type", enclosure);
+    if (regulatory[0])
+        fdt_setprop_string(dt, node, "version", regulatory);
+    fdt_setprop_string(dt, node, "serial", serial);
+    /* SKU Number: the part number Apple sells the machine as, e.g. "MLY13X/A" */
+    char part[16], region[8];
+    if (adt_padded_string(adt_root, "model-number", part, sizeof(part))) {
+        if (adt_padded_string(adt_root, "region-info", region, sizeof(region)))
+            snprintf(buf, sizeof(buf), "%s%s", part, region);
+        else
+            snprintf(buf, sizeof(buf), "%s", part);
+        fdt_setprop_string(dt, node, "sku", buf);
+    }
+    /* It booted, and nothing in a Mac reports a chassis intrusion or lock */
+    fdt_setprop_u32(dt, node, "bootup-state", SMBIOS_STATE_SAFE);
+    fdt_setprop_u32(dt, node, "security-status", SMBIOS_SECURITY_NONE);
+
+    /* Processor: the SoC as one package, with all of its cores */
+    u32 cores, max_mhz;
+    dt_cpu_summary(&cores, &max_mhz);
+
+    node = dt_smbios_node(smbios_node, "processor");
+    if (node < 0)
+        bail("FDT: failed to add node 'processor' to  '/smbios'\n");
+    fdt_setprop_string(dt, node, "socket-design", "SoC");
+    fdt_setprop_u32(dt, node, "processor-type", SMBIOS_PROCESSOR_TYPE_CENTRAL);
+    fdt_setprop_u32(dt, node, "family", SMBIOS_PROCESSOR_FAMILY_EXT);
+    /* SME is an Armv9 feature: M4 and later implement Armv9, earlier chips Armv8 */
+    fdt_setprop_u32(dt, node, "family2",
+                    FIELD_GET(ID_AA64PFR1_SME, mrs(SYS_ID_AA64PFR1_EL1))
+                        ? SMBIOS_PROCESSOR_FAMILY2_ARMV9
+                        : SMBIOS_PROCESSOR_FAMILY2_ARMV8);
+    fdt_setprop_string(dt, node, "manufacturer", manuf);
+    if (soc_name)
+        fdt_setprop_string(dt, node, "version", soc_name);
+    fdt_setprop_u32(dt, node, "processor-status", SMBIOS_PROCESSOR_STATUS_OK);
+    fdt_setprop_u32(dt, node, "upgrade", SMBIOS_PROCESSOR_UPGRADE_NONE);
+    if (max_mhz) {
+        fdt_setprop_u32(dt, node, "max-speed", max_mhz);
+        fdt_setprop_u32(dt, node, "current-speed", max_mhz);
+    }
+    if (cores) {
+        fdt_setprop_u32(dt, node, "core-count", cores);
+        fdt_setprop_u32(dt, node, "core-enabled", cores);
+        fdt_setprop_u32(dt, node, "thread-count", cores);
+        fdt_setprop_u32(dt, node, "thread-enabled", cores);
+    }
+    /* The SoC's reference clock */
+    int refclk = fdt_path_offset(dt, "/clock-ref");
+    const fdt32_t *refhz = refclk >= 0 ? fdt_getprop(dt, refclk, "clock-frequency", &len) : NULL;
+    if (refhz && len == 4)
+        fdt_setprop_u32(dt, node, "external-clock", fdt32_ld(refhz) / 1000000);
+    /* Part Number: the SoC, e.g. "T6040" */
+    char platform[16];
+    if (adt_padded_string(adt_root, "platform-name", platform, sizeof(platform))) {
+        for (char *c = platform; *c; c++)
+            if (*c >= 'a' && *c <= 'z')
+                *c -= 'a' - 'A';
+        fdt_setprop_string(dt, node, "part-number", platform);
+    }
+    /*
+     * Added to what U-Boot reads from the CPU: execute protection (Armv8 XN), hardware
+     * virtualization when aura runs at EL2, and frequency control when the CPUs have OPPs.
+     */
+    fdt_setprop_u32(dt, node, "characteristics",
+                    SMBIOS_PROCESSOR_EXEC_PROTECT | (in_el2() ? SMBIOS_PROCESSOR_VIRT : 0) |
+                        (max_mhz ? SMBIOS_PROCESSOR_POWER_CONTROL : 0));
+
+    /* Caches: the L2s the device tree describes (the cores do not report their geometry) */
+    char l2_desc[64];
+    u32 l2_kib = dt_l2_summary(l2_desc, sizeof(l2_desc));
+    if (l2_kib) {
+        int cache = dt_smbios_node(smbios_node, "cache");
+        if (cache < 0 || (node = dt_smbios_node(cache, "l2-cache")) < 0)
+            bail("FDT: failed to add node 'cache' to  '/smbios'\n");
+        fdt_setprop_string(dt, node, "socket-design", l2_desc);
+        fdt_setprop_u32(dt, node, "config", SMBIOS_CACHE_L2_CONFIG);
+        fdt_setprop_u32(dt, node, "max-size", smbios_cache_size16(l2_kib));
+        fdt_setprop_u32(dt, node, "installed-size", smbios_cache_size16(l2_kib));
+        fdt_setprop_u32(dt, node, "max-size2", l2_kib);
+        fdt_setprop_u32(dt, node, "installed-size2", l2_kib);
+        fdt_setprop_u32(dt, node, "supported-sram-type", SMBIOS_CACHE_SRAM_UNKNOWN);
+        fdt_setprop_u32(dt, node, "current-sram-type", SMBIOS_CACHE_SRAM_UNKNOWN);
+        fdt_setprop_u32(dt, node, "error-correction-type", SMBIOS_CACHE_UNKNOWN);
+        fdt_setprop_u32(dt, node, "system-cache-type", SMBIOS_CACHE_TYPE_UNIFIED);
+        fdt_setprop_u32(dt, node, "associativity", SMBIOS_CACHE_UNKNOWN);
+    }
+
+    /* No expansion slots: the PCIe links go to built-in devices */
+    if (dt_smbios_node(smbios_node, "system-slot") < 0)
+        bail("FDT: failed to add node 'system-slot' to  '/smbios'\n");
+
+    /*
+     * Memory: the installed DRAM as the ADT gives it, before any carve-out, as one array with
+     * one device, since it sits on the SoC package.
+     */
+    u64 dram_base, dram_size;
+    if (adt_chosen < 0 || ADT_GETPROP(adt, adt_chosen, "dram-base", &dram_base) != sizeof(u64) ||
+        ADT_GETPROP(adt, adt_chosen, "dram-size", &dram_size) != sizeof(u64) || !dram_size) {
+        printf("ADT: no DRAM size, leaving SMBIOS memory out\n");
+        return 0;
+    }
+    const char *dram_type = adt_string(adt_chosen, "dram-type");
+    const char *dram_vendor = adt_string(adt_chosen, "dram-vendor");
+    u64 dram_kib = dram_size >> 10, dram_mib = dram_size >> 20;
+
+    int mem = dt_smbios_node(smbios_node, "memory-array");
+    if (mem < 0 || (node = dt_smbios_node(mem, "dram")) < 0)
+        bail("FDT: failed to add node 'memory-array' to  '/smbios'\n");
+    fdt_setprop_u32(dt, node, "location", SMBIOS_MA_LOCATION_BOARD);
+    fdt_setprop_u32(dt, node, "use", SMBIOS_MA_USE_SYSTEM);
+    fdt_setprop_u32(dt, node, "memory-error-correction", SMBIOS_MA_ERRCORR_NONE);
+    if (dram_kib < 0x80000000) {
+        fdt_setprop_u32(dt, node, "maximum-capacity", dram_kib);
+    } else {
+        fdt_setprop_u32(dt, node, "maximum-capacity", 0x80000000);
+        fdt_setprop_u64(dt, node, "extended-maximum-capacity", dram_size);
+    }
+    fdt_setprop_u32(dt, node, "number-of-memory-devices", 1);
+
+    mem = dt_smbios_node(smbios_node, "memory-device");
+    if (mem < 0 || (node = dt_smbios_node(mem, "dram")) < 0)
+        bail("FDT: failed to add node 'memory-device' to  '/smbios'\n");
+    if (dram_mib < 0x7fff) {
+        fdt_setprop_u32(dt, node, "size", dram_mib);
+    } else {
+        fdt_setprop_u32(dt, node, "size", 0x7fff);
+        fdt_setprop_u32(dt, node, "extended-size", dram_mib);
+    }
+    fdt_setprop_u32(dt, node, "form-factor", SMBIOS_MD_FF_ROW_OF_CHIPS);
+    fdt_setprop_u32(dt, node, "memory-type", smbios_memory_type(dram_type));
+    fdt_setprop_u32(dt, node, "type-detail", SMBIOS_MD_TD_SYNCHRONOUS);
+    fdt_setprop_string(dt, node, "device-locator", "SoC");
+    if (dram_vendor)
+        fdt_setprop_string(dt, node, "manufacturer", dram_vendor);
+    fdt_setprop_u32(dt, node, "memory-technology", SMBIOS_MD_TECH_DRAM);
+    fdt_setprop_u32(dt, node, "memory-operating-mode-capability", SMBIOS_MD_OPMC_VOLATILE);
+    fdt_setprop_u64(dt, node, "volatile-size", dram_size);
+    /* Speed: the highest data rate of the DRAM operating points */
+    u32 rate = dt_dram_data_rate();
+    if (rate && rate < 0xffff) {
+        fdt_setprop_u32(dt, node, "speed", rate);
+        fdt_setprop_u32(dt, node, "configured-memory-speed", rate);
+    }
+    /* Width: the DRAM controller's channels, 16 bits each on LPDDR4 and LPDDR5 */
+    int mcc = adt_path_offset(adt, "/arm-io/mcc");
+    u32 channels = 0;
+    if (mcc >= 0 && dram_type && !strncmp(dram_type, "LPDDR", 5) &&
+        (dram_type[5] == '4' || dram_type[5] == '5') &&
+        ADT_GETPROP(adt, mcc, "dcs_num_channels", &channels) > 0 && channels) {
+        fdt_setprop_u32(dt, node, "data-width", channels * 16);
+        fdt_setprop_u32(dt, node, "total-width", channels * 16);
+    }
+
+    mem = dt_smbios_node(smbios_node, "memory-array-mapped-address");
+    if (mem < 0 || (node = dt_smbios_node(mem, "dram")) < 0)
+        bail("FDT: failed to add node 'memory-array-mapped-address' to  '/smbios'\n");
+    fdt_setprop_u32(dt, node, "starting-address", 0xffffffff);
+    fdt_setprop_u32(dt, node, "ending-address", 0xffffffff);
+    fdt_setprop_u64(dt, node, "extended-starting-address", dram_base);
+    fdt_setprop_u64(dt, node, "extended-ending-address", dram_base + dram_size - 1);
+
+    printf("FDT: SMBIOS %s, %s, %u cores up to %u MHz, %lu MiB %s\n", name ? name : model,
+           soc_name ? soc_name : "unnamed SoC", cores, max_mhz, (unsigned long)dram_mib,
+           dram_type ? dram_type : "DRAM");
+    return 0;
+}
+
+/* One firmware component for U-Boot's SMBIOS Firmware Inventory (type 45) */
+static int dt_smbios_firmware(int *inventory, const char *id, const char *name, const char *version,
+                              const char *manufacturer)
+{
+    int node = dt_smbios_node(*inventory, id);
+
+    if (node < 0)
+        bail("FDT: failed to add firmware '%s' to the SMBIOS inventory\n", id);
+    fdt_setprop_string(dt, node, "component-name", name);
+    fdt_setprop_string(dt, node, "version", version);
+    if (manufacturer)
+        fdt_setprop_string(dt, node, "manufacturer", manufacturer);
+    fdt_setprop_u32(dt, node, "state", SMBIOS_FW_STATE_ENABLED);
+    *inventory = fdt_path_offset(dt, "/smbios/smbios/firmware-inventory");
+    return *inventory < 0 ? -1 : 0;
+}
+
+/*
+ * The firmware components that run before or beside U-Boot, for its SMBIOS Firmware Inventory:
+ * Apple's system and OS-paired firmware, both aura stages and the firmware versions aura reads
+ * for the OS. U-Boot adds itself. Run last, once the versions are in /chosen.
+ */
+static int dt_set_smbios_firmware(void)
+{
+    int adt_product = adt_path_offset(adt, "/product");
+    const char *manuf = "Apple Inc.";
+    char buf[96], stage1[64] = "", ave_text[16] = "", ave_data[16] = "";
+    int smbios_node, inv, len;
+
+    /*
+     * Copy what /chosen holds first: adding nodes under /smbios, which libfdt places before
+     * /chosen, moves it.
+     */
+    int chosen = fdt_path_offset(dt, "/chosen");
+    if (chosen >= 0) {
+        const char *s1 = fdt_getprop(dt, chosen, "asahi,m1n1-stage1-version", &len);
+        if (s1 && len > 1)
+            strncpy(stage1, s1, sizeof(stage1) - 1);
+        const char *text = fdt_getprop(dt, chosen, "aurora,ave-text-crc32", &len);
+        const char *data = fdt_getprop(dt, chosen, "aurora,ave-data-crc32", NULL);
+        if (text && data) {
+            strncpy(ave_text, text, sizeof(ave_text) - 1);
+            strncpy(ave_data, data, sizeof(ave_data) - 1);
+        }
+    }
+
+    smbios_node = fdt_path_offset(dt, "/smbios/smbios");
+    if (smbios_node < 0)
+        return 0;
+    inv = dt_smbios_node(smbios_node, "firmware-inventory");
+    if (inv < 0)
+        bail("FDT: failed to add node 'firmware-inventory' to  '/smbios'\n");
+
+    if (system_firmware.string && system_firmware.iboot) {
+        snprintf(buf, sizeof(buf), "%s (%s)", system_firmware.string, system_firmware.iboot);
+        if (dt_smbios_firmware(&inv, "system", "Apple System Firmware", buf, manuf))
+            return -1;
+    }
+    if (os_firmware.string && os_firmware.iboot) {
+        snprintf(buf, sizeof(buf), "%s (%s)", os_firmware.string, os_firmware.iboot);
+        if (dt_smbios_firmware(&inv, "os", "Apple OS Firmware", buf, manuf))
+            return -1;
+    }
+    if (stage1[0] && dt_smbios_firmware(&inv, "stage1", "aura Stage 1", stage1, "Aurora Silicon"))
+        return -1;
+    if (dt_smbios_firmware(&inv, "stage2", "aura Stage 2", aura_version, "Aurora Silicon"))
+        return -1;
+
+    /* The video encoder firmware aura hands Linux, identified by its CRC32s */
+    if (ave_text[0]) {
+        snprintf(buf, sizeof(buf), "text CRC32 %s, data CRC32 %s", ave_text, ave_data);
+        if (dt_smbios_firmware(&inv, "ave", "Video Encoder Firmware", buf, manuf))
+            return -1;
+    }
+
+    /* The panel's timing controller firmware, where the ADT reports it */
+    u32 tcon_fw, tcon_bundle;
+    if (adt_product >= 0 &&
+        ADT_GETPROP(adt, adt_product, "dp855-tcon-firmware-ver", &tcon_fw) > 0) {
+        if (ADT_GETPROP(adt, adt_product, "dp855-tcon-bundle-ver", &tcon_bundle) > 0)
+            snprintf(buf, sizeof(buf), "%u (bundle %u)", tcon_fw, tcon_bundle);
+        else
+            snprintf(buf, sizeof(buf), "%u", tcon_fw);
+        if (dt_smbios_firmware(&inv, "tcon", "Display Timing Controller Firmware", buf, manuf))
+            return -1;
+    }
 
     return 0;
 }
@@ -7208,6 +7758,7 @@ int kboot_prepare_dt(void *fdt)
     assert(dt_bufsize);
 
     dt_bufsize += 6 * SZ_16K; // Add 96K of buffer for modifications
+    dt_bufsize += SZ_16K;     // and the SMBIOS description U-Boot builds its tables from (about 6K)
     // A T6030 or T8122 also takes its PMP values
     if (chip_id == T6030 || chip_id == T8122)
         dt_bufsize += 2 * SZ_16K;
@@ -7424,9 +7975,9 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_serial_number())
         return -1;
-    if (dt_set_smbios())
-        return -1;
     if (dt_set_cpus())
+        return -1;
+    if (dt_set_smbios())
         return -1;
     if (dt_set_mac_addresses())
         return -1;
@@ -7498,6 +8049,8 @@ int kboot_prepare_dt(void *fdt)
      * for the usable memory span to make it into the devicetree.
      */
     if (dt_set_memory())
+        return -1;
+    if (dt_set_smbios_firmware())
         return -1;
 
     /* Last, so that its 15K never takes room the steps above need. */

@@ -11,7 +11,9 @@ const DROM_UUID_SALT: [u8; 16] = [
     0x06, 0xbf, 0x07, 0x64, 0x05, 0x78, 0x4a, 0xaa, 0x85, 0xb4, 0x79, 0x08, 0x34, 0x8e, 0xe3, 0x43,
 ];
 
-fn usb4_router_uuid() -> Result<u64, AdtError> {
+/// The platform UUID macOS reports as the Hardware UUID (IOPlatformUUID): a
+/// name-based (version 5) UUID of the chip's unique and type IDs.
+fn platform_uuid() -> Result<[u8; 16], AdtError> {
     let node = ADTNode::from_path("/chosen")?;
     let unique_chip_id = node.named_prop("unique-chip-id")?.u64()?;
     let chip_id = node.named_prop("chip-id")?.u32()?;
@@ -27,6 +29,12 @@ fn usb4_router_uuid() -> Result<u64, AdtError> {
 
     uuid[6] = 0x50 | (uuid[6] & 0xf);
     uuid[8] = 0x80 | (uuid[8] & 0x3f);
+
+    Ok(uuid)
+}
+
+fn usb4_router_uuid() -> Result<u64, AdtError> {
+    let uuid = platform_uuid()?;
 
     // println!(
     //     "IOPlatformUUID: \
@@ -70,5 +78,18 @@ pub unsafe extern "C" fn rust_usb4_router_uuid() -> u64 {
     match usb4_router_uuid() {
         Ok(uuid) => uuid,
         Err(_) => 0,
+    }
+}
+
+/// Writes the platform UUID to `out` (16 bytes, in RFC 4122 byte order);
+/// returns 0, or -1 if the ADT lacks the chip IDs.
+#[no_mangle]
+pub unsafe extern "C" fn rust_platform_uuid(out: *mut u8) -> i32 {
+    match platform_uuid() {
+        Ok(uuid) => {
+            unsafe { core::ptr::copy_nonoverlapping(uuid.as_ptr(), out, 16) };
+            0
+        }
+        Err(_) => -1,
     }
 }
