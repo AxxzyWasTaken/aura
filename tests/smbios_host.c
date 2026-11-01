@@ -28,6 +28,7 @@ u32 adt_get_size(void)
 }
 
 int host_set_smbios(void *dt);
+void host_product_name(const char *in, const char *chip, char *out, size_t size);
 
 u64 host_sysreg(const char *name)
 {
@@ -120,6 +121,43 @@ static void expect_nonzero(void *dt, const char *path, const char *prop)
     }
 }
 
+/* Product names lose the release date; Apple's names take the chip in its place */
+static void test_product_names(void)
+{
+    static const struct {
+        const char *in, *chip, *want;
+    } cases[] = {
+        {"MacBook Pro (16-inch, M4 Pro, Nov 2024)", NULL, "MacBook Pro (16-inch, M4 Pro)"},
+        {"MacBook Pro (14-inch, M3 Max, 14 CPU cores, Nov 2023)", NULL,
+         "MacBook Pro (14-inch, M3 Max, 14 CPU cores)"},
+        {"MacBook Pro (16-inch, M1 Pro, 2021)", NULL, "MacBook Pro (16-inch, M1 Pro)"},
+        {"MacBook Air (13-inch, M2, 2022)", NULL, "MacBook Air (13-inch, M2)"},
+        {"MacBook Air (M1, 2020)", NULL, "MacBook Air (M1)"},
+        {"iMac (24-inch, 2x USB-C, M4, 2024)", NULL, "iMac (24-inch, 2x USB-C, M4)"},
+        {"Mac Studio (M3 Ultra, 2025)", NULL, "Mac Studio (M3 Ultra)"},
+        {"Mac mini (M6)", NULL, "Mac mini (M6)"},
+        {"MacBook Neo", NULL, "MacBook Neo"},
+        {"TV 4K (1st Generation)", NULL, "TV 4K (1st Generation)"},
+        {"MacBook Pro (16-inch, 2021)", "M1 Pro", "MacBook Pro (16-inch, M1 Pro)"},
+        {"MacBook Air (M2, 2022)", "M2", "MacBook Air (M2)"},
+        {"Mac mini (2023)", "M2 Pro", "Mac mini (M2 Pro)"},
+        {"Mac mini (2023)", NULL, "Mac mini"},
+        {"MacBook Neo", "A18 Pro", "MacBook Neo"},
+    };
+    char out[96];
+
+    for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+        host_product_name(cases[i].in, cases[i].chip, out, sizeof(out));
+        if (strcmp(out, cases[i].want)) {
+            printf("FAIL product name \"%s\" (%s): \"%s\", want \"%s\"\n", cases[i].in,
+                   cases[i].chip ? cases[i].chip : "-", out, cases[i].want);
+            fails++;
+        } else {
+            printf("ok product name \"%s\"\n", out);
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     size_t dt_size;
@@ -155,6 +193,7 @@ int main(int argc, char **argv)
     }
 
     dump(dt, fdt_path_offset(dt, "/smbios"), "/smbios");
+    test_product_names();
 
     expect_str(dt, "/smbios/smbios/system", "product", NULL);
     expect_str(dt, "/smbios/smbios/system", "sku", NULL);
