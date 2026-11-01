@@ -49,8 +49,10 @@ RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.89.0} rustc --edition 2021 --crate-type s
     awk '/^ \* SMBIOS values for U-Boot/ { on = 1; print "/*" } on { print } on && /^static int dt_set_smbios_firmware[(]/ { body = 1 } body && /^}/ { exit }' \
         src/kboot.c
     printf 'int host_set_smbios(void *d)\n{\n    dt = d;\n    return dt_set_smbios() || dt_set_smbios_firmware();\n}\n'
+    printf 'void host_product_name(const char *in, const char *chip, char *out, size_t size)\n'
+    printf '{\n    smbios_product_name(in, chip, out, size);\n}\n'
 } > "$tmp/src/kboot_smbios_copy.c"
-for f in dt_cpu_summary dt_set_smbios dt_set_smbios_firmware dt_l2_summary dt_dram_data_rate; do
+for f in dt_cpu_summary dt_set_smbios dt_set_smbios_firmware dt_l2_summary dt_dram_data_rate smbios_product_name; do
     grep -q "$f" "$tmp/src/kboot_smbios_copy.c" || {
         echo "FAIL: $f not found in src/kboot.c"
         exit 1

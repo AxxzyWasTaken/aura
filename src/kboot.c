@@ -1187,6 +1187,73 @@ static u32 smbios_cache_size16(u32 kib)
     return 0xffff;
 }
 
+/* "2024" or "Nov 2024": the release date Apple and the device trees end a product name with */
+static bool smbios_is_date(const char *s, size_t n)
+{
+    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+
+    if (n == 8 && s[3] == ' ') {
+        bool month = false;
+        for (size_t i = 0; i < 36; i += 3)
+            if (!strncmp(s, months + i, 3))
+                month = true;
+        if (!month)
+            return false;
+        s += 4;
+        n = 4;
+    }
+    if (n != 4)
+        return false;
+    for (size_t i = 0; i < 4; i++)
+        if (s[i] < '0' || s[i] > '9')
+            return false;
+    return true;
+}
+
+/*
+ * The product name without its release date: "MacBook Pro (16-inch, M4 Pro, Nov 2024)" becomes
+ * "MacBook Pro (16-inch, M4 Pro)", "Mac mini (2023)" becomes "Mac mini". When chip is given and a
+ * date went, the chip takes its place, for names that carry a year instead of the chip:
+ * "MacBook Pro (16-inch, 2021)" with "M1 Pro" becomes "MacBook Pro (16-inch, M1 Pro)".
+ */
+static void smbios_product_name(const char *in, const char *chip, char *out, size_t size)
+{
+    size_t len = strlen(in);
+    const char *open = strrchr(in, '(');
+
+    snprintf(out, size, "%s", in);
+    if (!len || in[len - 1] != ')' || !open)
+        return;
+
+    /* The last item in the parentheses */
+    const char *item = open + 1;
+    for (const char *c = open + 1; c < in + len - 1; c++)
+        if (c[0] == ',' && c[1] == ' ')
+            item = c + 2;
+    if (!smbios_is_date(item, in + len - 1 - item))
+        return;
+    /* A name that already carries the chip does not take it twice */
+    if (chip && strstr(in, chip) && strstr(in, chip) < item)
+        chip = NULL;
+
+    if (item == open + 1) {
+        /* Only the date in the parentheses: drop them and the space before */
+        size_t keep = open - in;
+        while (keep && in[keep - 1] == ' ')
+            keep--;
+        if (chip)
+            snprintf(out, size, "%.*s (%s)", (int)keep, in, chip);
+        else
+            snprintf(out, size, "%.*s", (int)keep, in);
+    } else {
+        size_t keep = item - 2 - in;
+        if (chip)
+            snprintf(out, size, "%.*s, %s)", (int)keep, in, chip);
+        else
+            snprintf(out, size, "%.*s)", (int)keep, in);
+    }
+}
+
 static int dt_set_smbios(void)
 {
     int fdt_root = fdt_path_offset(dt, "/");
@@ -1226,20 +1293,28 @@ static int dt_set_smbios(void)
     const char *soc_name = adt_product >= 0 ? adt_string(adt_product, "product-soc-name") : NULL;
 
     /*
-     * Product Name: the device tree's model without the brand, which names the machine with its
-     * chip, e.g. "MacBook Pro (16-inch, M4 Pro, Nov 2024)". The identifier ("Mac16,7") is the SKU
+     * Product Name: the device tree's model without the brand and the release date, which names
+     * the machine with its chip, e.g. "MacBook Pro (16-inch, M4 Pro)". Without a model, Apple's
+     * product name with the chip in place of the year. The identifier ("Mac16,7") is the SKU
      * Number.
      */
     const char *dt_model = fdt_getprop(dt, fdt_root, "model", &len);
+    char name_buf[96];
     const char *name = NULL;
     if (dt_model && len > 1 && memchr(dt_model, 0, len)) {
         const char *space = strchr(manuf, ' ');
         size_t brand = space ? (size_t)(space - manuf) : strlen(manuf);
-        name = dt_model;
-        if (!strncmp(name, manuf, brand) && name[brand] == ' ')
-            name += brand + 1;
+        const char *model_name = dt_model;
+        if (!strncmp(model_name, manuf, brand) && model_name[brand] == ' ')
+            model_name += brand + 1;
+        smbios_product_name(model_name, NULL, name_buf, sizeof(name_buf));
+        name = name_buf;
     } else if (product_name) {
-        name = product_name;
+        const char *chip = soc_name;
+        if (chip && !strncmp(chip, "Apple ", 6))
+            chip += 6;
+        smbios_product_name(product_name, chip, name_buf, sizeof(name_buf));
+        name = name_buf;
     }
 
     /*
